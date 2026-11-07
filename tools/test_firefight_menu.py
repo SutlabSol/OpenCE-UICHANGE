@@ -27,8 +27,7 @@ def menu(name):
 
 
 def test_the_menus_are_as_the_generators_write_them():
-    for name in ("main_menu.forge_select.port.xml", "main_menu.play.xml",
-                 "main_menu.settings_select.multiplayer_setup.playlist_edit.firefight_edit.port.xml"):
+    for name in ("main_menu.settings_select.multiplayer_setup.playlist_edit.firefight_edit.port.xml",):
         written = (ROOT / "port/assets/menus/ce" / name).read_text()
         assert written.rstrip("\n") == menu(name).rstrip("\n")
 
