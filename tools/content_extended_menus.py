@@ -420,7 +420,7 @@ FORGE_WIDGETS = [('main_menu/multiplayer_type_select/header_standard',
   [('controller', '1'),
    ('left', '35'),
    ('top', '11'),
-   ('width', '363'),
+   ('width', '512'),
    ('height', '59'),
    ('bitmap', 'main_menu/multiplayer_type_select/header_standard')],
   []),
@@ -428,7 +428,7 @@ FORGE_WIDGETS = [('main_menu/multiplayer_type_select/header_standard',
   [('controller', '1'),
    ('left', '35'),
    ('top', '11'),
-   ('width', '363'),
+   ('width', '512'),
    ('height', '59'),
    ('bitmap', 'main_menu/multiplayer_type_select/header_firefight')],
   []),
@@ -436,7 +436,7 @@ FORGE_WIDGETS = [('main_menu/multiplayer_type_select/header_standard',
   [('controller', '1'),
    ('left', '35'),
    ('top', '11'),
-   ('width', '363'),
+   ('width', '512'),
    ('height', '59'),
    ('bitmap', 'main_menu/multiplayer_type_select/header_forge')],
   []),
@@ -477,9 +477,9 @@ FORGE_WIDGETS = [('main_menu/multiplayer_type_select/header_standard',
    ('height', '480'),
    ('flags', 'pass_unhandled_to_focused_child up_down_tabs_items')],
   [('on', [('event', 'created'), ('run', 'gamemode menu init')]),
-   ('child', [('widget', 'main_menu/forge_select/forge_item_single_player'), ('x', '160'), ('y', '208')]),
+   ('child', [('widget', 'main_menu/forge_select/forge_item_single_player'), ('x', '192'), ('y', '208')]),
    ('child', [('widget', 'main_menu/forge_select/forge_item_multiplayer'), ('x', '192'), ('y', '240')]),
-   ('child', [('widget', 'main_menu/forge_select/forge_item_tag_injector'), ('x', '160'), ('y', '272')]),
+   ('child', [('widget', 'main_menu/forge_select/forge_item_tag_injector'), ('x', '192'), ('y', '272')]),
    ('child', [('widget', 'main_menu/campaign_select/menu_item_back'), ('x', '192'), ('y', '304')])]),
  ('main_menu/forge_select/forge_menu',
   [('width', '640'), ('height', '480'), ('flags', 'pass_unhandled_to_focused_child')],
@@ -778,17 +778,17 @@ def firefight_menu() -> list:
     lines += _menu_item("firefight_item_multiplayer", "main_menu/menu_multiplayer", 256, _opens(MULTIPLAYER_SCREEN))
     lines += _menu_item("firefight_item_variants", "main_menu/menu_firefight_variants", 384, _opens(VARIANTS_SCREEN))
     # (each centred, as Campaign's rows are: its places)
-    items = [("firefight_item_create_local", 192), ("firefight_item_multiplayer", 192), ("firefight_item_variants", 128)]
+    items = [("firefight_item_create_local", 192), ("firefight_item_multiplayer", 192), ("firefight_item_variants", 192)]
     lines += widget(f"{FIREFIGHT_SELECT}/firefight_menu_select_list",
                     [("type", "column_list"), ("width", 640), ("height", 480),
                      ("flags", "pass_unhandled_to_focused_child up_down_tabs_items")],
-                    [*[f'<child widget="{FIREFIGHT_SELECT}/{item}" x="{x}" y="{283 + 36 * index}"/>'
+                    [*[f'<child widget="{FIREFIGHT_SELECT}/{item}" x="{x}" y="{208 + 32 * index}"/>'
                        for index, (item, x) in enumerate(items)],
-                     '<child widget="main_menu/campaign_select/menu_item_back" x="192" y="391"/>'])
+                     '<child widget="main_menu/campaign_select/menu_item_back" x="192" y="304"/>'])
     lines += widget(f"{FIREFIGHT_SELECT}/firefight_menu",
                     [("width", 640), ("height", 480), ("flags", "pass_unhandled_to_focused_child")],
                     ['<on event="created" run="mp type menu initialize"/>', '<on event="b" back="true"/>',
-                     '<on event="back" back="true"/>', '<child widget="main_menu/halo_logo" y="28"/>',
+                     '<on event="back" back="true"/>', '<child widget="main_menu/halo_logo" y="-44"/>',
                      f'<child widget="{FIREFIGHT_SELECT}/firefight_menu_select_list"/>'])
     return lines
 

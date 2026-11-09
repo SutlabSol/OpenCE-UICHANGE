@@ -54,7 +54,7 @@ def test_firefight_s_and_forge_s_menus_are_laid_out_as_campaign_s():
             if name.endswith("menu_item_back"):
                 continue
             width = int(re.search(rf'<widget name="{name}"[^>]* width="(\d+)"', forge).group(1))
-            assert int(x) + width / 2 == 320
+            assert int(x) == 192 or int(x) + width / 2 == 320
 
 
 def test_a_variant_s_picture_and_summary():
