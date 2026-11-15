@@ -37,6 +37,8 @@ Implements:
 #include "memory/data.h"
 #include "networking/network_game_globals.h"
 #include "objects/damage.h"
+#include "objects/object_definitions.h"
+#include "physics/collision_model_definitions.h"
 #include "objects/objects.h"
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
@@ -47,6 +49,7 @@ Implements:
 #include "units/units.h"
 
 #include "halo_firefight.h"
+#include "halo_port_limits.h"
 #include "bots.h"
 #include "halo_skulls.h"
 #include "campaign_score.h"
@@ -658,7 +661,8 @@ static void firefight_give_player_weapon(
 	if (unit_index == NONE || !weapon_tag_path)
 		return;
 	weap_def = tag_loaded(WEAPON_DEFINITION_TAG, weapon_tag_path);
-	if (weap_def == NONE)
+	/* (a flag or a ball, whatever its name: none in a loadout) */
+	if (weap_def == NONE || firefight_weapon_is_objective(weap_def, weapon_tag_path))
 		return;
 	object_placement_data_new(&placement, weap_def, NONE);
 	object_get_origin(unit_index, &placement.position);
@@ -704,7 +708,9 @@ static char const *firefight_resolve_loadout_weapon_path(byte weapon_choice, sho
 			return map_weapon;
 		for (index = 0; index < (short)NUMBEROF(s_ff_loadout_weapon_paths); index++)
 		{
-			if (tag_loaded(WEAPON_DEFINITION_TAG, s_ff_loadout_weapon_paths[index]) != NONE &&
+			long tag = tag_loaded(WEAPON_DEFINITION_TAG, s_ff_loadout_weapon_paths[index]);
+
+			if (tag != NONE && !firefight_weapon_is_objective(tag, s_ff_loadout_weapon_paths[index]) &&
 				(!other || strcmp(other, s_ff_loadout_weapon_paths[index]) != 0))
 			{
 				pool[count++] = s_ff_loadout_weapon_paths[index];
@@ -773,6 +779,23 @@ void firefight_apply_player_spawn_traits(
 		}
 	}
 	player->speed_multiplier = speed_mult;
+	/* (MAP CONTENT's SHIELDS, the host's for this map: OFF none at all; ON
+	the stock player's on a map whose player has none, a shield given as
+	Tilt's are, damage.c's object_shield_given) */
+	switch (firefight_health_rule(_firefight_health_rule_shields))
+	{
+	case _firefight_health_rule_off:
+		unit->object.maximum_shield_vitality = 0.0f;
+		shield_mult = 0.0f;
+		break;
+	case _firefight_health_rule_on:
+		if (unit->object.maximum_shield_vitality <= 0.0f)
+		{
+			unit->object.maximum_shield_vitality = FIREFIGHT_GIVEN_SHIELD_VITALITY;
+			unit->object.shield_vitality = 1.0f;
+		}
+		break;
+	}
 	if (shield_mult <= 0.0f)
 		unit->object.shield_vitality = 0.0f;
 	else if (shield_mult > 1.0f)
@@ -853,6 +876,18 @@ void firefight_apply_player_spawn_traits(
 		default:
 			break;
 		}
+	}
+
+	/* (MAP CONTENT's PLAYER LOADOUT, the host's for this map: the map's
+	weapons in the slots it sets; a slot not set keeps the game's) */
+	{
+		char const *map_primary = firefight_map_loadout_override(0);
+		char const *map_secondary = firefight_map_loadout_override(1);
+
+		if (map_primary)
+			pri_weap = map_primary;
+		if (map_secondary)
+			sec_weap = map_secondary;
 	}
 
 	unit_delete_all_weapons(unit_index);
@@ -1687,6 +1722,63 @@ static void firefight_player_killed_player(
 	}
 }
 
+/* MAP CONTENT's SHIELD REGEN for a Firefight player's unit (damage.c's
+recharge): -1 the engine's own, 0 none, 1 Halo's own (at the stock rate
+where the map's player has none). A shield SHIELDS gave recharges unless
+SHIELD REGEN is OFF */
+short firefight_player_shield_regen(long object_index)
+{
+	struct unit_datum *unit;
+	struct object_definition *definition;
+	byte rule;
+
+	if (!firefight_active() || object_index == NONE)
+		return -1;
+	unit = (struct unit_datum *)object_try_and_get_and_verify_type(object_index, _object_mask_unit);
+	if (!unit || unit->unit.player_index == NONE)
+		return -1;
+	rule = firefight_health_rule(_firefight_health_rule_shield_regen);
+	if (rule == _firefight_health_rule_off)
+		return 0;
+	if (rule == _firefight_health_rule_on)
+		return 1;
+	definition = object_definition_get(unit->definition_index);
+	if (unit->object.maximum_shield_vitality > 0.0f && definition &&
+		definition->object.collision_model.index != NONE &&
+		collision_model_definition_get(definition->object.collision_model.index)->resistance.maximum_shield_vitality <= 0.0f)
+	{
+		return 1;
+	}
+	return -1;
+}
+
+/* MAP CONTENT's HEALTH REGEN (the host's): a player's health coming back
+as a shield does, after FIREFIGHT_HEALTH_REGEN_DELAY seconds unhurt, full
+in FIREFIGHT_HEALTH_REGEN_SECONDS */
+#define FIREFIGHT_HEALTH_REGEN_DELAY 5
+#define FIREFIGHT_HEALTH_REGEN_SECONDS 5
+static void firefight_health_regen_update(long player_absolute, struct unit_datum *unit)
+{
+	static real last_body[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
+	static short quiet_ticks[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
+
+	if (player_absolute < 0 || player_absolute >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
+		return;
+	if (TEST_FLAG(unit->object.damage_flags, _object_dead_bit) ||
+		unit->object.body_vitality < last_body[player_absolute] - 0.0001f)
+	{
+		quiet_ticks[player_absolute] = 0;
+	}
+	else if (quiet_ticks[player_absolute] < FIREFIGHT_HEALTH_REGEN_DELAY * TICKS_PER_SECOND)
+		quiet_ticks[player_absolute]++;
+	else if (unit->object.body_vitality < 1.0f && unit->object.body_vitality > 0.0f)
+	{
+		unit->object.body_vitality = MIN(1.0f,
+			unit->object.body_vitality + 1.0f / (real)(FIREFIGHT_HEALTH_REGEN_SECONDS * TICKS_PER_SECOND));
+	}
+	last_body[player_absolute] = unit->object.body_vitality;
+}
+
 static void firefight_apply_tick_player_traits(
 	void)
 {
@@ -1715,6 +1807,8 @@ static void firefight_apply_tick_player_traits(
 			continue;
 		if (unit->object.owner_team_index != _game_team_player)
 			unit->object.owner_team_index = _game_team_player;
+		if (firefight_health_rule(_firefight_health_rule_health_regen) == _firefight_health_rule_on)
+			firefight_health_regen_update(iter.absolute_index, unit);
 
 		if (ammo_mode != _firefight_ammo_normal && (game_time_get() % 15) == 0)
 		{

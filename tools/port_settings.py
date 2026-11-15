@@ -4027,7 +4027,8 @@ SERVER_SETUP_SECTIONS = [
     # vehicles of its own: menu_functions.c's server_settings_map_content_update)
     ("map_content", "MAP CONTENT", "Play the map's own enemies, weapons and vehicles\\nin this game, beside the game's or alone.",
      ["ff_map_content", "ff_mc_enemies", "ff_mc_enemies_list", "ff_mc_weapons", "ff_mc_weapons_list",
-      "ff_mc_vehicles", "ff_mc_vehicles_list"]),
+      "ff_mc_vehicles", "ff_mc_vehicles_list", "ff_mc_loadout", "ff_mc_shields", "ff_mc_shield_regen",
+      "ff_mc_health_regen"]),
     ("fork_settings", "FORK SETTINGS", "This fork's own: game modes' settings, the tag\\nprofile, the randomizer and skulls.",
      ["floodfection_options", "tag_profile", "randomizer", "skulls"]),
 ]
@@ -4067,12 +4068,29 @@ FIREFIGHT_SETUP_ROWS = [
      "Turn each of the map's weapons on or off. Kept for\\nthis map for the next games."),
     ("ff_mc_vehicles_list", "CHOOSE VEHICLES", None,
      "Turn each of the map's vehicles on or off. Kept for\\nthis map for the next games."),
+    # (no choices: the map's weapons the players spawn with, in place of the
+    # game's loadout, whatever USE CONTENT is; the same list, A choosing
+    # PRIMARY or SECONDARY: menu_functions.c's "ss map content loadout",
+    # FF_MAP_CONTENT_HELP + 7)
+    ("ff_mc_loadout", "PLAYER LOADOUT", None,
+     "Spawn with the map's own weapons in place of the\\ngame's loadout. Kept for this map."),
+    # HEALTH RULES (a map whose player has no shields, or shields that never
+    # come back: firefight_spawner.c's firefight_map_health_detect): the
+    # players' SHIELDS and SHIELD REGEN (MAP'S first) and HEALTH REGEN (Halo
+    # has none: OFF first), kept for the map; FF_MAP_CONTENT_HELP + 8..10
+    ("ff_mc_shields", "SHIELDS", ["MAP'S", "ON", "OFF"],
+     "This map's players have their own shield rules. ON\\ngives shields, OFF takes them. Kept for this map."),
+    ("ff_mc_shield_regen", "SHIELD REGEN", ["MAP'S", "ON", "OFF"],
+     "ON: shields come back as in Halo. OFF: never (only\\nthe map's pickups). Kept for this map."),
+    ("ff_mc_health_regen", "HEALTH REGEN", ["OFF", "ON"],
+     "ON: health comes back after 5 seconds unhurt, as a\\nshield does. Kept for this map."),
 ]
 # (the rows of no choices: what A runs, and the screen it opens, if any)
 FIREFIGHT_SETUP_RUNS = {
     "ff_start_skulls": ("ss firefight skulls", None),
     **{f"ff_mc_{kind}_list": (f"ss map content {kind}", f"{MT}/server_settings/map_content/map_content_tags_screen")
        for kind in ("enemies", "weapons", "vehicles")},
+    "ff_mc_loadout": ("ss map content loadout", f"{MT}/server_settings/map_content/map_content_tags_screen"),
 }
 # Server Setup's TAG PROFILE (port/linux/game/tag_multiplayer.c, the setting
 # game.multiplayer_tag_profile), a multiplayer game's on one of the game's own

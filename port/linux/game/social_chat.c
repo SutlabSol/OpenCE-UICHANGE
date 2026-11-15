@@ -1456,6 +1456,17 @@ static short social_chat_channel_usable(
 	return channel;
 }
 
+/* the channel T (and the other "everyone" openings) opens to: the private
+talk last open where it still can be (the box reopened as it was left, not
+moved to GLOBAL), else `fallback` */
+short social_chat_everyone_channel(
+	short fallback)
+{
+	if (social_chat.channel == _social_chat_private && social_chat_private_heard())
+		return _social_chat_private;
+	return fallback;
+}
+
 void social_chat_open(
 	short channel,
 	short port)
@@ -2388,7 +2399,8 @@ static void social_chat_open_keys(
 	pressed = held & ~social_chat.keys_held;
 	social_chat.keys_held = held;
 	if (pressed && !social_chat.open && !console_is_active())
-		social_chat_open(TEST_FLAG(pressed, HALO_KEYBOARD_CHAT) ? _social_chat_global : _social_chat_team, NONE);
+		social_chat_open(TEST_FLAG(pressed, HALO_KEYBOARD_CHAT) ? social_chat_everyone_channel(_social_chat_global) :
+			_social_chat_team, NONE);
 }
 
 void social_chat_update(
@@ -2436,7 +2448,8 @@ void social_chat_update(
 		if (social_chat.open && now - social_chat.opened_at > SOCIAL_CHAT_TOGGLE_MILLISECONDS)
 			social_chat_close();
 		else if (!console_is_active())
-			social_chat_open(social_chat_network_game() ? _social_chat_match : _social_chat_global, port);
+			social_chat_open(social_chat_everyone_channel(social_chat_network_game() ? _social_chat_match :
+				_social_chat_global), port);
 	}
 	social_chat_open_keys();
 	if (!social_chat.open || console_is_active())

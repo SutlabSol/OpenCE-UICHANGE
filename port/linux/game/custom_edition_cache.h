@@ -86,6 +86,9 @@ boolean custom_edition_level_name(
 /* Each tag of the Custom Edition map `map_name` (a level name or a file
 name), read from its file without loading it: its group and name to `visit`,
 which returns 0 to stop. FALSE for no such map, or none read. */
+/* the map's multiplayer player's body, shield, shield stun time and shield
+recharge time (cache_file_formats.h's custom_edition_cache_player_shields) */
+boolean custom_edition_map_player_shields(char const *map_name, float out[4]);
 boolean custom_edition_map_tag_names_walk(
 	char const *map_name,
 	int (*visit)(void *context, unsigned long group_tag, char const *name),

@@ -2237,7 +2237,7 @@ void network_chat_update(
 		(requested_port != NONE || (TEST_FLAG(pad_pressed, HALO_CHAT_PAD_UP) && !network_replay_playing())) &&
 		!chat_hidden() && !console_is_active() && !overlay_menu_open())
 	{
-		social_chat_open(_social_chat_global, requested_port != NONE ? requested_port : 0);
+		social_chat_open(social_chat_everyone_channel(_social_chat_global), requested_port != NONE ? requested_port : 0);
 	}
 	if (!chat_network_game() || !game_in_progress() || chat_speaker(TRUE) == NONE || !chat_shown() || chat_hidden() ||
 		(chat_input.active && chat_input.physical && !controller_remap_connected(chat_input.controller)))
@@ -2266,9 +2266,9 @@ void network_chat_update(
 			{
 				if (!social_chat_typing())
 				{
-					social_chat_open(pressed ? (TEST_FLAG(pressed, HALO_KEYBOARD_CHAT) ? _social_chat_match :
+					social_chat_open(pressed ? (TEST_FLAG(pressed, HALO_KEYBOARD_CHAT) ? social_chat_everyone_channel(_social_chat_match) :
 						_social_chat_team) : requested_port != NONE && requested_channel != _chat_channel_everyone ?
-						_social_chat_team : _social_chat_match, pressed ? NONE : requested_port != NONE ? requested_port : 0);
+						_social_chat_team : social_chat_everyone_channel(_social_chat_match), pressed ? NONE : requested_port != NONE ? requested_port : 0);
 				}
 			}
 			/* (no typing where the host has the chat off: it says so, once a

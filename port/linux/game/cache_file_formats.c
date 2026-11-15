@@ -2967,6 +2967,98 @@ int custom_edition_cache_tag_names_walk(
 	return walked;
 }
 
+/* (custom_edition_cache_player_shields': bytes of the tag data at a tag
+cache address, from the file) */
+static int tag_data_read(
+	struct cache_file_source *source,
+	struct cache_file_identity const *identity,
+	uint32_t address,
+	uint32_t bytes,
+	void *out)
+{
+	uint32_t offset = address - (uint32_t)CUSTOM_EDITION_TAG_CACHE_ADDRESS;
+
+	return address >= (uint32_t)CUSTOM_EDITION_TAG_CACHE_ADDRESS &&
+		range_fits(offset, bytes, identity->tag_data_size) &&
+		source->read(source->context, identity->tag_data_offset + offset, bytes, out);
+}
+
+/* (the tag a handle names: its instance's group and data address) */
+static int tag_instance_read(
+	struct cache_file_source *source,
+	struct cache_file_identity const *identity,
+	uint32_t instances_address,
+	int32_t tag_count,
+	uint32_t handle,
+	uint32_t *group,
+	uint32_t *address)
+{
+	uint8_t instance[TAG_INSTANCE_BYTES];
+	uint32_t absolute = handle & ABSOLUTE_INDEX_MASK;
+
+	if (handle == 0xFFFFFFFFUL || (int32_t)absolute >= tag_count ||
+		!tag_data_read(source, identity, instances_address + absolute * TAG_INSTANCE_BYTES, TAG_INSTANCE_BYTES, instance))
+	{
+		return 0;
+	}
+	*group = read_u32(instance + TAG_INSTANCE_GROUP_OFFSET);
+	*address = read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET);
+	return 1;
+}
+
+int custom_edition_cache_player_shields(
+	struct cache_file_source *source,
+	float out[4])
+{
+	struct cache_file_identity identity;
+	uint8_t index[TAG_INDEX_BYTES];
+	uint8_t bytes[0x1C4];
+	uint32_t instances_address;
+	uint32_t group;
+	uint32_t address;
+	int32_t tag_count;
+	int32_t tag_index;
+	int found = 0;
+
+	if (!source || cache_file_identify(source, &identity) != _cache_file_status_ok ||
+		identity.format != _cache_file_format_custom_edition_cache || identity.tag_data_size < TAG_INDEX_BYTES ||
+		!source->read(source->context, identity.tag_data_offset, TAG_INDEX_BYTES, index))
+	{
+		return 0;
+	}
+	tag_count = read_s32(index + TAG_INDEX_COUNT_OFFSET);
+	instances_address = read_u32(index + TAG_INDEX_INSTANCES_OFFSET);
+	if (tag_count <= 0 || (uint32_t)tag_count > ABSOLUTE_INDEX_MASK + 1)
+		return 0;
+	/* (the globals: the first 'matg') */
+	for (tag_index = 0; tag_index < tag_count && !found; tag_index++)
+	{
+		if (tag_instance_read(source, &identity, instances_address, tag_count, (uint32_t)tag_index, &group, &address) &&
+			group == 0x6D617467UL)
+		{
+			found = 1;
+		}
+	}
+	/* (its multiplayer information's unit, that unit's collision model, and
+	the model's damage resistance: game_globals.h, object_definitions.h,
+	damage_resistances.h) */
+	if (!found || !tag_data_read(source, &identity, address + 0x164, 12, bytes) || read_s32(bytes) <= 0 ||
+		!tag_data_read(source, &identity, read_u32(bytes + 4), 0x20, bytes) ||
+		!tag_instance_read(source, &identity, instances_address, tag_count, read_u32(bytes + 0x1C), &group, &address) ||
+		!tag_data_read(source, &identity, address + 0x70, 16, bytes) ||
+		!tag_instance_read(source, &identity, instances_address, tag_count, read_u32(bytes + 12), &group, &address) ||
+		group != 0x636F6C6CUL ||
+		!tag_data_read(source, &identity, address, sizeof(bytes), bytes))
+	{
+		return 0;
+	}
+	memcpy(&out[0], bytes + 0x08, 4);
+	memcpy(&out[1], bytes + 0xCC, 4);
+	memcpy(&out[2], bytes + 0x10C, 4);
+	memcpy(&out[3], bytes + 0x110, 4);
+	return 1;
+}
+
 char const *custom_edition_cache_tag_name(
 	uint8_t *tag_cache,
 	uint32_t loaded_bytes,

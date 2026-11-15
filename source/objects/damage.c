@@ -1075,8 +1075,14 @@ static void object_damage_shield(
 	if (shield_damage >= damage_resistance->minimum_shield_stun_damage ||
 		object->object.shield_vitality == 0.f)
 	{
+		real stun_time = damage_resistance->shield_stun_time;
+
+		/* port: Firefight's SHIELD REGEN ON, on a map whose player's
+		shield waits for no stun (port/linux/game/firefight.c) */
+		if (stun_time < 1.f && firefight_player_shield_regen(object_index) == 1)
+			stun_time = FIREFIGHT_STOCK_SHIELD_STUN_SECONDS;
 		object->object.shield_stun_ticks =
-			(short)(damage_resistance->shield_stun_time * TICKS_PER_SECOND);
+			(short)(stun_time * TICKS_PER_SECOND);
 	}
 
 	*shield_damage_reference = shield_damage;
@@ -2278,18 +2284,31 @@ void object_damage_update(
 		}
 		/* port: skull: Rip & Tear, a player's shield recharging into an
 		overshield (port/linux/game/skulls_custom.c) */
-		else if (object->object.shield_vitality < skulls_shield_cap(object_index))
+		/* port: Firefight's SHIELD REGEN OFF, no recharge at all
+		(port/linux/game/firefight.c) */
+		else if (object->object.shield_vitality < skulls_shield_cap(object_index) &&
+			firefight_player_shield_regen(object_index) != 0)
 		{
+			short firefight_regen = firefight_player_shield_regen(object_index);
+
 			/* port: skull: Black Eye, a player's shield only a punch fills;
 			and Protected's shield never comes back (the model it was given
 			to has no recharge of its own, which may be at once) */
 			if (object->object.shield_stun_ticks == 0 &&
 				!((skull_active(_skull_black_eye) || skull_active(_skull_streaking)) &&
 					skulls_unit_is_player(object_index)) &&
-				!object_shield_given(object))
+				(!object_shield_given(object) || firefight_regen == 1))
 			{
 				real shield_recharge =
 					collision_model->resistance.runtime_shield_recharge_velocity;
+
+				/* port: Firefight's SHIELD REGEN ON, at the stock rate where
+				the map's player's shield has none (or none of its own) */
+				if (firefight_regen == 1 &&
+					(shield_recharge < 0.001f || collision_model->resistance.maximum_shield_vitality <= 0.f))
+				{
+					shield_recharge = 1.f / (FIREFIGHT_STOCK_SHIELD_RECHARGE_SECONDS * TICKS_PER_SECOND);
+				}
 
 				/* port: a firing range dummy's recharge, a multiplayer
 				player's */

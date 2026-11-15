@@ -1071,6 +1071,21 @@ boolean custom_edition_map_tag_names_walk(
 	return walked > 0;
 }
 
+boolean custom_edition_map_player_shields(
+	char const *map_name,
+	float out[4])
+{
+	struct custom_edition_file file;
+	char path[256];
+	int read;
+
+	if (!map_name || !custom_edition_map_file_path(map_name, path) || !custom_edition_file_open(&file, path))
+		return FALSE;
+	read = custom_edition_cache_player_shields(&file.source, out);
+	custom_edition_file_close(&file);
+	return read != 0;
+}
+
 boolean custom_edition_level_name(
 	char const *level_name)
 {

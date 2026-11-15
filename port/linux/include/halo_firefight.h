@@ -936,6 +936,8 @@ byte firefight_map_content_kinds(char const *map_name);
 /* a random loadout weapon's (Fiesta's) tag path of the map's own, by MAP
 CONTENT, or NULL for one of the game's */
 char const *firefight_map_loadout_weapon(char const *other);
+/* a flag's or a ball's (must be readied): never handed out by Firefight */
+boolean firefight_weapon_is_objective(long weapon_tag, char const *use);
 /* CUSTOM's lists (a map's own of a kind, as firefight_map_content_kinds
 finds them: tag names), and the host's choices of them, kept per map in
 d:\\firefight_map_content.txt with the map's MAP CONTENT byte last set */
@@ -943,6 +945,42 @@ short firefight_map_content_tag_count(char const *map_name, short kind);
 char const *firefight_map_content_tag_name(char const *map_name, short kind, short index);
 boolean firefight_map_content_tag_on(char const *map_name, short kind, char const *tag_name);
 void firefight_map_content_tag_set(char const *map_name, short kind, char const *tag_name, boolean on);
+/* MAP CONTENT's PLAYER LOADOUT (the host's, kept for the map): slot 0 the
+primary, 1 the secondary; the map's weapon's name, or NULL for the game's */
+char const *firefight_map_loadout_get(char const *map_name, short slot);
+void firefight_map_loadout_set(char const *map_name, short slot, char const *tag_name);
+char const *firefight_map_loadout_override(short slot);
+/* MAP CONTENT's HEALTH RULES: what a map's player has (its file read, once
+for each map asked of): */
+#define FIREFIGHT_MAP_HEALTH_NO_SHIELDS 0x01
+#define FIREFIGHT_MAP_HEALTH_NO_SHIELD_REGEN 0x02
+byte firefight_map_health_detect(char const *map_name);
+/* ... and the host's choices for it, kept for the map: SHIELDS and SHIELD
+REGEN 0 the map's, 1 on, 2 off; HEALTH REGEN 0 off, 1 on */
+enum
+{
+	_firefight_health_rule_shields = 0,
+	_firefight_health_rule_shield_regen,
+	_firefight_health_rule_health_regen,
+	NUMBER_OF_FIREFIGHT_HEALTH_RULES
+};
+enum
+{
+	_firefight_health_rule_maps = 0,
+	_firefight_health_rule_on,
+	_firefight_health_rule_off
+};
+void firefight_map_health_rules_get(char const *map_name, byte rules[NUMBER_OF_FIREFIGHT_HEALTH_RULES]);
+void firefight_map_health_rules_set(char const *map_name, byte const rules[NUMBER_OF_FIREFIGHT_HEALTH_RULES]);
+byte firefight_health_rule(short rule);
+/* (damage.c's: a Firefight player's shield regen by the rules, -1 the
+engine's own, 0 none, 1 Halo's, at the stock rate where the map has none;
+and the stock stun and recharge times that go with it) */
+#define FIREFIGHT_STOCK_SHIELD_STUN_SECONDS 6.0f
+#define FIREFIGHT_STOCK_SHIELD_RECHARGE_SECONDS 4.0f
+/* (SHIELDS ON's, on a map whose player has none: the stock player's) */
+#define FIREFIGHT_GIVEN_SHIELD_VITALITY 75.0f
+short firefight_player_shield_regen(long object_index);
 /* the menu's check of a map's own (its tags opened for their previews): a
 tag found not usable (a weapon a vehicle's, or missing what a player needs)
 is off unless turned on by hand; and whether one was found usable (TRUE

@@ -61,6 +61,7 @@ Friendly AI Reinforcements, and Round-Scheduled Player Vehicles.
 #include "bots.h"
 #include "custom_edition_cache.h"
 #include "mcc_cache.h"
+#include <stdint.h>
 #include "halo_firefight.h"
 #include "halo_firefight_route.h"
 #include "opence_features.h"
@@ -1556,6 +1557,38 @@ boolean firefight_select_player_spawn_point(
 	return FALSE;
 }
 
+/* whether a weapon is a game's objective, a flag or a ball, by the bit the
+engine knows them by (weapons.c's weapon_is_flag: "must be readied"), not by
+its name: a map's own may be named anything. Never a loadout's, a pod's nor
+an enemy's: `use` names what asked for it (a loadout's: the name it
+looked up), logged once for each of the first few */
+boolean firefight_weapon_is_objective(long weapon_tag, char const *use)
+{
+	static long s_logged[8];
+	static short s_logged_count;
+	struct weapon_definition *definition;
+	short index;
+
+	if (weapon_tag == NONE || !tag_index_is_group(weapon_tag, WEAPON_DEFINITION_TAG))
+		return FALSE;
+	definition = weapon_definition_get(weapon_tag);
+	if (!definition || !((definition->weapon.flags >> 3) & 1))
+		return FALSE;
+	if (use)
+	{
+		for (index = 0; index < s_logged_count && s_logged[index] != weapon_tag; index++)
+			;
+		if (index == s_logged_count)
+		{
+			if (s_logged_count < (short)NUMBEROF(s_logged))
+				s_logged[s_logged_count++] = weapon_tag;
+			error(_error_silent, "firefight: %s left out %s (a flag or a ball: must be readied)", use,
+				tag_get_name(weapon_tag) ? tag_get_name(weapon_tag) : "?");
+		}
+	}
+	return TRUE;
+}
+
 static void scan_ordnance_weapon_and_equipment_tags(void)
 {
 	struct tag_iterator iter;
@@ -1579,7 +1612,8 @@ static void scan_ordnance_weapon_and_equipment_tags(void)
 		/* Exclude vehicle turrets, flags, oddballs, gravity rifle, and AI-only unpickable weapons */
 		if (strstr(name, "vehicles\\") || strstr(name, "flag") || strstr(name, "ball") ||
 			strstr(name, "gravity") || strstr(name, "energy sword") || strstr(name, "sentinel") ||
-			strstr(name, "gun turret") || strstr(name, "needler\\needler"))
+			strstr(name, "gun turret") || strstr(name, "needler\\needler") ||
+			firefight_weapon_is_objective(tag_index, "the game's ordnance"))
 		{
 			continue;
 		}
@@ -1659,6 +1693,8 @@ static void scan_custom_tags(void)
 		count = randomizer_firefight_tags(WEAPON_DEFINITION_TAG, found, MAX_ROSTER_VARIANTS);
 		for (index = 0; index < count; index++)
 		{
+			if (firefight_weapon_is_objective(found[index], "the variant's profile"))
+				continue;
 			ff_custom_weapon_tags[ff_custom_weapon_count] = found[index];
 			ff_custom_weapon_power[ff_custom_weapon_count++] = randomizer_firefight_weapon_power(found[index]);
 		}
@@ -3407,6 +3443,8 @@ static void firefight_give_enemy_weapon(long unit_index, long definition)
 	struct object_placement_data placement;
 	long weapon_index;
 
+	if (firefight_weapon_is_objective(definition, "an enemy's weapon"))
+		return;
 	object_placement_data_new(&placement, definition, NONE);
 	object_get_origin(unit_index, &placement.position);
 	weapon_index = object_new(&placement);
@@ -5234,7 +5272,7 @@ static void ordnance_pool_add(long *pool, short *count, long tag)
 {
 	short index;
 
-	if (tag == NONE || *count >= FF_ORDNANCE_BAG_SIZE)
+	if (tag == NONE || *count >= FF_ORDNANCE_BAG_SIZE || firefight_weapon_is_objective(tag, "an ordnance pool"))
 		return;
 	for (index = 0; index < *count; index++)
 	{
@@ -5846,8 +5884,11 @@ static boolean ordnance_pod_spot(
 
 static void pod_contents_add(long tag_index)
 {
-	if (tag_index == NONE || g_pod_content_count >= FF_POD_MAX_CONTENTS)
+	if (tag_index == NONE || g_pod_content_count >= FF_POD_MAX_CONTENTS ||
+		firefight_weapon_is_objective(tag_index, "an ordnance pod"))
+	{
 		return;
+	}
 	g_pod_contents[g_pod_content_count++] = tag_index;
 }
 
@@ -6904,7 +6945,7 @@ static void scan_map_content(void)
 		lowercase_copy(tag_get_name(tag_index), lowered, sizeof(lowered));
 		/* (one that is not usable alone where CUSTOM has it turned on by hand;
 		those of vehicles and the like are kept for them all the same) */
-		if (!map_weapon_name_usable(lowered) ||
+		if (!map_weapon_name_usable(lowered) || firefight_weapon_is_objective(tag_index, "MAP CONTENT") ||
 			(!map_weapon_usable(tag_index, lowered) &&
 				!map_content_custom_on_by_hand(FIREFIGHT_MAP_CONTENT_WEAPONS_CUSTOM, _firefight_map_content_kind_weapons,
 					tag_index)) ||
@@ -7288,6 +7329,251 @@ void firefight_map_content_tag_set(char const *map_name, short kind, char const 
 		snprintf(g_mc_saved.names[g_mc_saved.count++], FF_MC_NAME_SIZE, "%s", tag_name);
 	}
 	map_content_saved_write();
+}
+
+/* MAP CONTENT's PLAYER LOADOUT: the map's weapons the players spawn with,
+in place of the game's, its primary ('p') and secondary ('s') each a line of
+the map's section; none set, the game's loadout */
+static char const ff_mc_loadout_letters[2] = { 'p', 's' };
+
+static short map_loadout_saved_find(short slot)
+{
+	short index;
+
+	for (index = 0; index < g_mc_saved.count; index++)
+	{
+		if (g_mc_saved.kinds[index] == ff_mc_loadout_letters[slot])
+			return index;
+	}
+	return NONE;
+}
+
+static void map_content_saved_remove(short found)
+{
+	memmove(&g_mc_saved.kinds[found], &g_mc_saved.kinds[found + 1], (size_t)(g_mc_saved.count - found - 1));
+	memmove(g_mc_saved.names[found], g_mc_saved.names[found + 1], (size_t)(g_mc_saved.count - found - 1) * FF_MC_NAME_SIZE);
+	g_mc_saved.count--;
+}
+
+char const *firefight_map_loadout_get(char const *map_name, short slot)
+{
+	short found;
+
+	if (slot < 0 || slot > 1 || !map_name || !map_name[0])
+		return NULL;
+	map_content_saved_read(map_name);
+	found = map_loadout_saved_find(slot);
+	return found == NONE ? NULL : g_mc_saved.names[found];
+}
+
+/* (a weapon in one slot alone: set as one, it leaves the other; NULL
+clears the slot) */
+void firefight_map_loadout_set(char const *map_name, short slot, char const *tag_name)
+{
+	short other;
+	short found;
+
+	if (slot < 0 || slot > 1 || !map_name || !map_name[0])
+		return;
+	map_content_saved_read(map_name);
+	if (!g_mc_saved.map[0])
+		return;
+	if ((found = map_loadout_saved_find(slot)) != NONE)
+		map_content_saved_remove(found);
+	other = (short)(1 - slot);
+	if (tag_name && (found = map_loadout_saved_find(other)) != NONE && !strcmp(g_mc_saved.names[found], tag_name))
+		map_content_saved_remove(found);
+	if (tag_name && tag_name[0] && g_mc_saved.count < FF_MC_SAVED_MAX)
+	{
+		g_mc_saved.kinds[g_mc_saved.count] = ff_mc_loadout_letters[slot];
+		snprintf(g_mc_saved.names[g_mc_saved.count++], FF_MC_NAME_SIZE, "%s", tag_name);
+	}
+	map_content_saved_write();
+}
+
+/* (in the game, the host's: the map played's choice for a slot, a weapon
+the level has that a player can hold, else NULL for the game's) */
+char const *firefight_map_loadout_override(short slot)
+{
+	char const *loaded = cache_file_loaded_map_name();
+	char const *name = loaded && loaded[0] ? firefight_map_loadout_get(loaded, slot) : NULL;
+	long tag;
+
+	if (!name)
+		return NULL;
+	tag = tag_loaded(WEAPON_DEFINITION_TAG, name);
+	if (tag == NONE || firefight_weapon_is_objective(tag, "PLAYER LOADOUT"))
+	{
+		error(_error_silent, "firefight: PLAYER LOADOUT's %s is not in %s: the game's loadout", name, loaded);
+		return NULL;
+	}
+	return name;
+}
+
+/* ---- MAP CONTENT's HEALTH RULES: a map whose player has no shields (GTA)
+or shields that never come back (Aerowalk's, health and armour picked up),
+read from its file (its globals' multiplayer unit's collision model), and
+the host's choices for it: SHIELDS and SHIELD REGEN (MAP'S, ON, OFF), HEALTH
+REGEN (OFF, ON), an 'h' line of the map's section */
+
+/* (a recharge this long or longer is none: Aerowalk's is 900 s) */
+#define FF_HEALTH_NO_REGEN_SECONDS 60.0f
+
+static struct
+{
+	char map[128];
+	byte rules;
+	boolean read;
+	float values[4];
+} g_mc_health;
+
+/* (an MCC map's, from its file as it is: the same walk as Custom
+Edition's, cache_file_formats.c's custom_edition_cache_player_shields) */
+static boolean map_health_read_mcc(char const *map_name, float out[4])
+{
+	struct mcc_raw_map *map = mcc_cache_raw_open(map_name);
+	unsigned long count = mcc_cache_raw_tag_count(map);
+	unsigned long index;
+	unsigned char *entry = NULL;
+	unsigned char const *globals;
+	unsigned char const *information;
+	unsigned char const *unit;
+	unsigned char const *resistance;
+	unsigned long handle;
+	boolean read = FALSE;
+
+	for (index = 0; map && index < count && !entry; index++)
+	{
+		unsigned char *candidate = mcc_cache_raw_entry(map, index);
+
+		if (candidate && *(uint32_t const *)candidate == 'matg')
+			entry = candidate;
+	}
+	globals = entry ? mcc_cache_raw_pointer(map, *(uint32_t const *)(entry + 20), 0x170) : NULL;
+	information = globals && *(int32_t const *)(globals + 0x164) > 0 ?
+		mcc_cache_raw_pointer(map, *(uint32_t const *)(globals + 0x168), 0x20) : NULL;
+	handle = information ? *(uint32_t const *)(information + 0x1C) : 0xFFFFFFFFUL;
+	entry = handle != 0xFFFFFFFFUL ? mcc_cache_raw_entry(map, handle & 0xFFFF) : NULL;
+	unit = entry ? mcc_cache_raw_pointer(map, *(uint32_t const *)(entry + 20), 0x80) : NULL;
+	handle = unit ? *(uint32_t const *)(unit + 0x7C) : 0xFFFFFFFFUL;
+	entry = handle != 0xFFFFFFFFUL ? mcc_cache_raw_entry(map, handle & 0xFFFF) : NULL;
+	resistance = entry && *(uint32_t const *)entry == 'coll' ?
+		mcc_cache_raw_pointer(map, *(uint32_t const *)(entry + 20), 0x1C4) : NULL;
+	if (resistance)
+	{
+		memcpy(&out[0], resistance + 0x08, 4);
+		memcpy(&out[1], resistance + 0xCC, 4);
+		memcpy(&out[2], resistance + 0x10C, 4);
+		memcpy(&out[3], resistance + 0x110, 4);
+		read = TRUE;
+	}
+	if (map)
+		mcc_cache_raw_close(map);
+	return read;
+}
+
+byte firefight_map_health_detect(char const *map_name)
+{
+	char const *stem;
+
+	if (!map_name || !map_name[0])
+		return 0;
+	if (!strcmp(g_mc_health.map, map_name))
+		return g_mc_health.rules;
+	snprintf(g_mc_health.map, sizeof(g_mc_health.map), "%s", map_name);
+	g_mc_health.rules = 0;
+	stem = tag_name_strip_path(map_name);
+	g_mc_health.read = (custom_edition_level_name(map_name) && !is_stock_map_stem(stem) &&
+			custom_edition_map_player_shields(map_name, g_mc_health.values)) ||
+		(mcc_level_name(map_name) && map_health_read_mcc(map_name, g_mc_health.values));
+	if (g_mc_health.read)
+	{
+		if (g_mc_health.values[1] <= 0.0f)
+			g_mc_health.rules |= FIREFIGHT_MAP_HEALTH_NO_SHIELDS;
+		else if (g_mc_health.values[3] >= FF_HEALTH_NO_REGEN_SECONDS || g_mc_health.values[2] >= FF_HEALTH_NO_REGEN_SECONDS)
+			g_mc_health.rules |= FIREFIGHT_MAP_HEALTH_NO_SHIELD_REGEN;
+		error(_error_silent, "firefight: %s's player: body %.0f, shields %.0f, stun %.1f s, recharge %.1f s%s%s", map_name,
+			g_mc_health.values[0], g_mc_health.values[1], g_mc_health.values[2], g_mc_health.values[3],
+			(g_mc_health.rules & FIREFIGHT_MAP_HEALTH_NO_SHIELDS) ? ": no shields" : "",
+			(g_mc_health.rules & FIREFIGHT_MAP_HEALTH_NO_SHIELD_REGEN) ? ": no shield regen" : "");
+	}
+	return g_mc_health.rules;
+}
+
+/* (the rules' changes, for the game's copy of them) */
+static unsigned long g_health_rules_serial = 1;
+
+static short map_health_saved_find(void)
+{
+	short index;
+
+	for (index = 0; index < g_mc_saved.count; index++)
+	{
+		if (g_mc_saved.kinds[index] == 'h')
+			return index;
+	}
+	return NONE;
+}
+
+void firefight_map_health_rules_get(char const *map_name, byte rules[NUMBER_OF_FIREFIGHT_HEALTH_RULES])
+{
+	short found;
+	short rule;
+
+	memset(rules, 0, NUMBER_OF_FIREFIGHT_HEALTH_RULES);
+	if (!map_name || !map_name[0])
+		return;
+	map_content_saved_read(map_name);
+	if ((found = map_health_saved_find()) == NONE)
+		return;
+	for (rule = 0; rule < NUMBER_OF_FIREFIGHT_HEALTH_RULES; rule++)
+	{
+		char const *value = g_mc_saved.names[found] + rule * 2;
+
+		if (strlen(g_mc_saved.names[found]) > (size_t)(rule * 2) && *value >= '0' && *value <= '2')
+			rules[rule] = (byte)(*value - '0');
+	}
+}
+
+void firefight_map_health_rules_set(char const *map_name, byte const rules[NUMBER_OF_FIREFIGHT_HEALTH_RULES])
+{
+	byte now[NUMBER_OF_FIREFIGHT_HEALTH_RULES];
+	short found;
+
+	if (!map_name || !map_name[0])
+		return;
+	firefight_map_health_rules_get(map_name, now);
+	if (!memcmp(now, rules, NUMBER_OF_FIREFIGHT_HEALTH_RULES) || !g_mc_saved.map[0])
+		return;
+	if ((found = map_health_saved_find()) != NONE)
+		map_content_saved_remove(found);
+	if ((rules[0] || rules[1] || rules[2]) && g_mc_saved.count < FF_MC_SAVED_MAX)
+	{
+		g_mc_saved.kinds[g_mc_saved.count] = 'h';
+		snprintf(g_mc_saved.names[g_mc_saved.count++], FF_MC_NAME_SIZE, "%u %u %u", (unsigned)rules[0],
+			(unsigned)rules[1], (unsigned)rules[2]);
+	}
+	g_health_rules_serial++;
+	map_content_saved_write();
+}
+
+/* (in the game: the map played's, read again when they change) */
+byte firefight_health_rule(short rule)
+{
+	static char map[128];
+	static unsigned long serial;
+	static byte rules[NUMBER_OF_FIREFIGHT_HEALTH_RULES];
+	char const *loaded = cache_file_loaded_map_name();
+
+	if (rule < 0 || rule >= NUMBER_OF_FIREFIGHT_HEALTH_RULES || !loaded || !loaded[0])
+		return 0;
+	if (serial != g_health_rules_serial || strcmp(map, loaded))
+	{
+		serial = g_health_rules_serial;
+		snprintf(map, sizeof(map), "%s", loaded);
+		firefight_map_health_rules_get(loaded, rules);
+	}
+	return rules[rule];
 }
 
 /* (in the game: whether CUSTOM leaves a tag of the map's out, the host's

@@ -344,8 +344,27 @@ def test_map_content_is_a_server_setup_section_not_a_variant_rule():
     assert keys.index("map_content") == keys.index("game_settings") + 1
     members = dict((section[0], section[3]) for section in port_settings.SERVER_SETUP_SECTIONS)["map_content"]
     assert members == ["ff_map_content", "ff_mc_enemies", "ff_mc_enemies_list", "ff_mc_weapons", "ff_mc_weapons_list",
-                       "ff_mc_vehicles", "ff_mc_vehicles_list"]
+                       "ff_mc_vehicles", "ff_mc_vehicles_list", "ff_mc_loadout", "ff_mc_shields",
+                       "ff_mc_shield_regen", "ff_mc_health_regen"]
     rows = dict((row[0], row[2]) for row in port_settings.FIREFIGHT_SETUP_ROWS)
+    # (PLAYER LOADOUT: a row of no choices opening the same list, its help
+    # FF_MAP_CONTENT_HELP + 7, the spawn's override in firefight.c)
+    assert rows["ff_mc_loadout"] is None
+    assert port_settings.FIREFIGHT_SETUP_RUNS["ff_mc_loadout"][0] == "ss map content loadout"
+    keys = [row[0] for row in port_settings.FIREFIGHT_SETUP_ROWS]
+    assert keys.index("ff_mc_loadout") == keys.index("ff_map_content") + 7
+    assert "firefight_map_loadout_override(0)" in (ROOT / "port/linux/game/firefight.c").read_text()
+    # (HEALTH RULES: their spinners in the rules' values, MAP'S first;
+    # HEALTH REGEN OFF first; helps FF_MAP_CONTENT_HELP + 8 + the rule)
+    assert rows["ff_mc_shields"] == rows["ff_mc_shield_regen"] == ["MAP'S", "ON", "OFF"]
+    assert rows["ff_mc_health_regen"] == ["OFF", "ON"]
+    assert [keys.index(key) - keys.index("ff_map_content") for key in
+            ("ff_mc_shields", "ff_mc_shield_regen", "ff_mc_health_regen")] == [8, 9, 10]
+    assert "FF_MAP_CONTENT_HELP + 8 + rule" in MENU_C
+    assert "static short const map_health_choices[NUMBER_OF_FIREFIGHT_HEALTH_RULES] = { 3, 3, 2 };" in MENU_C
+    damage = (ROOT / "source/objects/damage.c").read_text()
+    assert "firefight_player_shield_regen(object_index) != 0" in damage
+    assert "(!object_shield_given(object) || firefight_regen == 1)" in damage
     assert rows["ff_map_content"] == ["VANILLA ONLY", "INCLUDE MAP", "ONLY MAP"]
     assert rows["ff_mc_enemies"] == rows["ff_mc_weapons"] == rows["ff_mc_vehicles"] == ["ALL ON", "CUSTOM", "OFF"]
     assert '"op_lobby_settings", "op_game_settings", "op_map_content", "op_fork_settings"' in MENU_C

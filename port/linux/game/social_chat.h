@@ -39,6 +39,7 @@ boolean social_chat_dock_shown(void);
 to a channel (_social_chat_*), by a controller's port (NONE: the keyboard,
 which types) */
 void social_chat_open(short channel, short port);
+short social_chat_everyone_channel(short fallback);
 /* (social_menu.c's SEND MESSAGE) the box opened to PRIVATE, to the account
 of this code (its name as shown), typed on the keyboard or the on-screen
 one as the player last used */

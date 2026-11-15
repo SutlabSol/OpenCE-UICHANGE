@@ -397,7 +397,8 @@ static char const *const port_function_names[] =
 	"mp profile init firefight rules", "mp profile set firefight rules",
 	"mp edit game options", "firefight skulls open", "ss firefight skulls", "firefight tag profile open",
 	/* (Server Setup's MAP CONTENT: CUSTOM's lists) */
-	"ss map content enemies", "ss map content weapons", "ss map content vehicles", "map content tags init",
+	"ss map content enemies", "ss map content weapons", "ss map content vehicles", "ss map content loadout",
+	"map content tags init",
 	"map content tag toggle", "map content tags all on", "map content tags all off", "map content tags close",
 	"gamemode menu init", "gamemode select standard", "gamemode select ranked", "gamemode select firefight",
 	"gamemode select forge", "gamemode select theater", "gamemode select creation hub", "gamemode select dedi server",

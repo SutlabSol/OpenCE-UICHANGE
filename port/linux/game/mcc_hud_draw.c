@@ -1,6 +1,7 @@
 /* The MCC canvas is 960p, while native UI/HUD coordinates are 480p.
  * Keep full-resolution texture samples and convert only screen geometry. */
 #include "cseries.h"
+#include "cseries/errors.h"
 #include "bitmaps/bitmap_group.h"
 #include "bitmaps/bitmaps.h"
 #include "game/players.h"
@@ -234,12 +235,36 @@ void mcc_hud_foreign_begin(void const *definition)
     mcc_hud_foreign=mcc_cache_tags_loaded() && definition && !mcc_cache_contains(definition,4);
 }
 
+/* Diagnostics (debug.txt, "mcc hud scale:"): each bitmap a weapon HUD
+ * draws on an MCC map, once, with whose it is and the size it gets, to find
+ * an element drawn at the wrong size. */
+static void mcc_hud_scale_report(struct hud_placement_definition const *placement,
+    struct bitmap_data const *bitmap, real foreign_scale)
+{
+    static struct bitmap_data const *seen[128];
+    static long seen_count;
+    long i;
+    boolean own=mcc_cache_contains(bitmap,sizeof(*bitmap));
+    char const *name=bitmap->tag_index!=NONE ? tag_get_name(bitmap->tag_index) : NULL;
+    for (i=0;i<seen_count;i++) if (seen[i]==bitmap) return;
+    if (seen_count>=(long)NUMBEROF(seen)) return;
+    seen[seen_count++]=bitmap;
+    error(_error_silent,"mcc hud scale: %s (%dx%d, %s%s) hud %s, placement scale %.3f x %.3f, flags %d, extra %.3f",
+        name ? name : "?",bitmap->width,bitmap->height,own ? "map's" : "imported",
+        own && bitmap->tag_index!=NONE && mcc_hud_bitmap_scale(bitmap->tag_index)<0.5f ? ", half-scale flag" : "",
+        mcc_hud_foreign ? "imported" : "map's",
+        placement ? placement->scale.i : 0.0f,placement ? placement->scale.j : 0.0f,
+        placement ? placement->multiplayer_scaling_flags : 0,foreign_scale);
+}
+
 real mcc_hud_foreign_bitmap_scale(void const *placement, struct bitmap_data const *bitmap)
 {
-    (void)placement;
-    if (!mcc_hud_foreign || !mcc_cache_tags_loaded() || !bitmap) return 1.0f;
-    if (!mcc_cache_contains(bitmap,sizeof(*bitmap)) || bitmap->tag_index==NONE) return 1.0f;
-    return mcc_hud_bitmap_scale(bitmap->tag_index);
+    real scale=1.0f;
+    if (!mcc_cache_tags_loaded() || !bitmap) return 1.0f;
+    if (mcc_hud_foreign && mcc_cache_contains(bitmap,sizeof(*bitmap)) && bitmap->tag_index!=NONE)
+        scale=mcc_hud_bitmap_scale(bitmap->tag_index);
+    mcc_hud_scale_report(placement,bitmap,scale);
+    return scale;
 }
 
 /* The digits of an MCC map's own number bitmaps are drawn on its canvas;

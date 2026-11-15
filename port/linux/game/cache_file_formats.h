@@ -464,6 +464,14 @@ int custom_edition_cache_tag_names_walk(
 	custom_edition_tag_name_proc visit,
 	void *context);
 
+/* A Custom Edition cache's multiplayer player (its globals' unit): its
+collision model's maximum body and shield vitality, shield stun time and
+shield recharge time, read from the file without loading it. 0 when it
+cannot be read. */
+int custom_edition_cache_player_shields(
+	struct cache_file_source *source,
+	float out[4]);
+
 /* The definition of the tag `handle` names in a tag cache
 custom_edition_cache_load filled, or NULL unless that is a tag of group
 `group_tag` whose definition of `definition_bytes` bytes lies within the tag

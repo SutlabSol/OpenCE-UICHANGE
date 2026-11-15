@@ -53,6 +53,7 @@ may peek at a map (tag_import_peek), from its pack or else the map itself.
 #include "tag_import.h"
 #include "tag_pack.h"
 #include "tag_schema.h"
+#include "mcc_cache.h"
 
 #include <xtl.h>
 /* the port's zlib, the same one that unpacks a map while precaching it
@@ -383,6 +384,18 @@ static int leave_group(long group)
 
 static void want(struct tag_import_donor *donor, long datum);
 
+/* whether a tag of the level's of a copy's name is kept apart from the copy:
+on an MCC map, a HUD bitmap of ui\hud\ of its own (MCC's art, at another
+size and in another sprite layout) is not what a copied-in HUD (Firefight's
+sniper rifle's, a campaign weapon's) drew with. That HUD gets its own copy, of
+the same name, its pixels from the campaign map (donor_extras_fill); the
+level's own HUDs keep the level's, which the name finds first */
+static int level_tag_kept_apart(long group, char const *name, long existing)
+{
+	return group == 'bitm' && existing != NONE && name && !_strnicmp(name, "ui\\hud\\", 7) &&
+		mcc_cache_tags_loaded() && mcc_cache_contains(tag_get('bitm', existing), 4);
+}
+
 /* a field whose declared bytes run past the element is skipped: the schema
 can name an offset the donor tag does not have */
 /* whether a walk of this schema can reach a tag reference. Geometry,
@@ -560,7 +573,7 @@ static void want(struct tag_import_donor *donor, long datum)
 		return;
 	}
 	existing = name ? tag_loaded(instance->group_tag, name) : NONE;
-	if (existing != NONE)
+	if (existing != NONE && !level_tag_kept_apart(instance->group_tag, name, existing))
 	{
 		donor->datum_of[absolute] = existing;
 		return;
@@ -808,6 +821,13 @@ static void retarget_fields(struct tag_import_donor *donor, void *element, struc
 				long index = reference->name && reference->name[0] ?
 					tag_loaded(reference->group_tag, reference->name) : NONE;
 
+				/* (a level's tag kept apart: the copy, which its name does
+				not find) */
+				if (index != NONE && level_tag_kept_apart((long)reference->group_tag, reference->name, index) &&
+					retarget_datum(donor, old) != NONE)
+				{
+					index = retarget_datum(donor, old);
+				}
 				if (index == NONE)
 					index = retarget_datum(donor, old);
 				reference->index = index;
@@ -2089,7 +2109,8 @@ static void import_wanted(void)
 			platform_log("tag import: left out %s, which has no schema", name);
 			continue;
 		}
-		if (tag_loaded(source->group_tag, name) != NONE)
+		if (tag_loaded(source->group_tag, name) != NONE &&
+			!level_tag_kept_apart(source->group_tag, name, tag_loaded(source->group_tag, name)))
 		{
 			donor->datum_of[entry->absolute] = tag_loaded(source->group_tag, name);
 			continue;
