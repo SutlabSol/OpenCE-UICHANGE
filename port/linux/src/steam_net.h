@@ -20,6 +20,10 @@ servers (Steam refuses other sites' pages): steam_net_available says so.
 /* whether this build can reach Steam at all */
 int steam_net_available(void);
 
+/* memory zeroed in a way the compiler keeps (a password, a refresh token, a
+channel's keys, before their memory goes back to the heap) */
+void steam_wipe(void *memory, size_t size);
+
 /* a GET of an https:// url, at most maximum bytes of its body (malloc'd,
 NUL terminated past its size: the caller frees it); 1 with the status,
 else 0 and why in error */

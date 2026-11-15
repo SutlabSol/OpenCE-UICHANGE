@@ -412,6 +412,7 @@ symbols in this file:
 #include "custom_edition_cache.h" /* port: custom_edition_level_name */
 #include "mcc_cache.h" /* port: port/linux/game/mcc_cache.h */
 #include "mcc_main.h" /* port: port/linux/game/mcc_main.h */
+#include "custom_edition_maps.h" /* port: main_script_map_name, a Custom Edition campaign's maps */
 #include "view_fov.h" /* port: display.fov, before the projection and culling */
 
 #if defined(HALO_WINDOWS) || defined(HALO_ANDROID) || defined(__linux__)
@@ -943,6 +944,89 @@ void main_won_map(
 	campaign_score_level_won();
 	main_globals.saving_map = FALSE;
 	main_globals.won_map = TRUE;
+	return;
+}
+
+/* port: the level a campaign map's own script named with map_name, which
+main_won_map_private takes next; empty for none */
+static char main_script_next_level[64];
+
+/* port: the level the scripts name in the same campaign as `current`: a
+mission of the same MCC package, else a Custom Edition campaign map; FALSE
+for any other. The name may have a path and an extension (".map"); only its
+last part counts */
+static boolean main_script_level_resolve(
+	char const *current,
+	char const *requested,
+	char *next,
+	size_t size)
+{
+	char const *leaf = requested;
+	char const *cursor;
+	char candidate[160];
+	size_t length;
+
+	if (!current || !current[0] || !requested)
+		return FALSE;
+	/* port: package mission identities and lookup belong to mcc_main.c. */
+	if (mcc_level_name(current))
+		return mcc_main_script_level_resolve(current, requested, next, size);
+	for (cursor = requested; *cursor; cursor++)
+	{
+		if (*cursor == '\\' || *cursor == '/')
+			leaf = cursor + 1;
+	}
+	length = strlen(leaf);
+	if (length > 4 && !_stricmp(leaf + length - 4, ".map"))
+		length -= 4;
+	if (!length || length > 64)
+		return FALSE;
+	if (custom_edition_level_name(current))
+	{
+		snprintf(candidate, sizeof(candidate), "%s%.*s", CUSTOM_EDITION_LEVEL_NAME_PREFIX, (int)length, leaf);
+		if (!custom_edition_maps_level_campaign(candidate) || strlen(candidate) >= size)
+			return FALSE;
+		csstrncpy(next, candidate, size - 1);
+		next[size - 1] = 0;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+/* port: H1A and Custom Edition campaigns end a level by naming the next with
+map_name in its scripts, where the Xbox's game_won takes it to the next of
+its own levels. A campaign map's script that does so ends the level as a won
+one, with the level it names next (main_won_map_private): alone, it loads; in
+network co-op the host takes every machine there, and a dedicated server
+plays its rotation's next, as after any won level. Only a level of the same
+campaign is taken; any other name does nothing, and the map's other scripts
+run on (no map's script may switch to any map: hs.c) */
+void main_script_map_name(
+	char const *map_name)
+{
+	struct network_game *game = game_connection() == _game_connection_network_server ?
+		network_game_get_game() : NULL;
+	char const *current = game ? game->map.name : main_globals.soloplayer_map_name;
+	char next[NUMBEROF(main_script_next_level)];
+
+	if (!main_script_level_resolve(current, map_name, next, sizeof(next)))
+	{
+		/* port: a Custom Edition map whose next level is no campaign one
+		goes on to a map in its own folder (main_script_set_map_name) */
+		if (custom_edition_cache_tags_loaded() && !game)
+		{
+			main_script_set_map_name(map_name);
+			return;
+		}
+		error(_error_silent, "the scripts' map_name %s is no level of %s's campaign: nothing happens",
+			map_name ? map_name : "", current);
+		return;
+	}
+	error(_error_silent, "the scripts end %s, with %s next", current, next);
+	csstrncpy(main_script_next_level, next, sizeof(main_script_next_level) - 1);
+	main_script_next_level[sizeof(main_script_next_level) - 1] = 0;
+	main_won_map();
 	return;
 }
 
@@ -2518,11 +2602,18 @@ static void main_won_map_private(
 {
 	short level;
 	short local_player_index;
+	/* port: the level the scripts named with map_name (main_script_map_name),
+	if they did */
+	char next[NUMBEROF(main_script_next_level)];
+
+	csstrncpy(next, main_script_next_level, sizeof(next) - 1);
+	next[sizeof(next) - 1] = 0;
 
 	/* port: explicit MCC campaigns own their mission order and host decision.
 	 * The Xbox/CE level table below cannot represent package mission identities. */
-	if (mcc_main_campaign_won())
+	if (mcc_main_campaign_won(next[0] ? next : NULL))
 	{
+		main_script_next_level[0] = 0;
 		main_globals.won_map = FALSE;
 		return;
 	}
@@ -2530,9 +2621,11 @@ static void main_won_map_private(
 	/* port: the level's score (display.campaign_score) is shown over the level
 	just won, until A or B is pressed, before anything else of the win is
 	done: this runs each frame until then (a network co-op game's clients
-	show theirs as they are told the level is won) */
+	show theirs as they are told the level is won), the scripts' next level
+	kept for it */
 	if (campaign_score_postgame_wait())
 		return;
+	main_script_next_level[0] = 0;
 	/* port: the skulls found in the level and not lost are kept, before the
 	next level's start forgets them (port/linux/game/skulls.c) */
 	{
@@ -2542,8 +2635,8 @@ static void main_won_map_private(
 	}
 	/* port: when a network co-op level is won, the round ends for everyone as
 	in multiplayer, back to the lobby, and the next round is the campaign's
-	next level (The Maw's: The Pillar of Autumn). A level not in the campaign
-	repeats. */
+	next level (The Maw's: The Pillar of Autumn), or the one the scripts named.
+	A level not in the campaign repeats. */
 	/* port: a daily challenge's level won ends its game: back to the lobby,
 	which plays it again, or to the menus, never on to the next level, and
 	the campaign's progress not kept, its settings the challenge's
@@ -2574,7 +2667,7 @@ static void main_won_map_private(
 		main_globals.won_map = FALSE;
 		level = game ? main_get_solo_level_from_name(game->map.name) : NONE;
 		player_profile_save_level_completed(0);
-		network_game_server_port_cooperative_won(level != NONE ?
+		network_game_server_port_cooperative_won(next[0] ? next : level != NONE ?
 			main_get_solo_level_name((level + 1) % NUMBER_OF_SINGLE_PLAYER_LEVELS) : NULL);
 		return;
 	}
@@ -2588,6 +2681,14 @@ static void main_won_map_private(
 		level = NONE;
 	for (local_player_index = 0; local_player_index < player_spawn_count; local_player_index++)
 		player_profile_save_level_completed(local_player_index);
+	/* port: a Custom Edition campaign's next level, as its scripts named it,
+	begun anew as ui_set_next_level begins one (no saved game taken) */
+	if (next[0])
+	{
+		main_set_map_name(next);
+		main_disallow_persistent_storage();
+		return;
+	}
 	ui_set_next_level(level);
 	return;
 }

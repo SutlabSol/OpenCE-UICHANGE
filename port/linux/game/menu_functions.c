@@ -19672,8 +19672,8 @@ static struct gametype_option const gametype_options[] =
 	/* map sharing's (Server Setup's MAP SHARING: tools/port_settings.py's
 	MAP_SHARE_SETUP; map_share.c) */
 	{ "map_share_spinner", _option_setting, 0, 0, 2, { 0 }, "network.map_share", { "true", "false" } },
-	{ "map_share_upload_spinner", _option_setting, 0, 0, 8, { 0 }, "network.map_share_upload",
-		{ "256", "512", "1024", "2048", "4096", "8192", "16384", "20480" } },
+	{ "map_share_upload_spinner", _option_setting, 0, 0, 11, { 0 }, "network.map_share_upload",
+		{ "256", "512", "1024", "2048", "4096", "8192", "16384", "20480", "51200", "102400", "256000" } },
 	/* the bots' (Server Setup's BOTS, any game hosted here: tools/port_settings.py's
 	BOTS_SETUP; bots.c, which the lobby's bots follow as they change) */
 	{ "bots_enabled_spinner", _option_setting, 0, 0, 2, { 0 }, "bots.enabled", { "true", "false" } },

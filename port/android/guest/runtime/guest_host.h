@@ -248,4 +248,22 @@ unsigned int host_replay_store_read(unsigned int offset, unsigned int destinatio
 /* the kept replay let go */
 void host_replay_store_free(void);
 
+/* an MCC package's fingerprint (SHA-256 and CRC32) on the host's threads, with the CPU's
+instructions, and kept on the card (port/android/host/host_mcc_hash.c, which says what each
+does; the guest's side is port/linux/game/mcc_resource_check.inl's) */
+int host_mcc_hash_start(unsigned int request);
+int host_mcc_hash_wait(int id, int milliseconds, unsigned int result);
+void host_mcc_hash_cancel(int id);
+/* a file's plain SHA-256 and size, on the host's threads (an MCC package a host offers) */
+int host_sha256_start(unsigned int path);
+int host_sha256_poll(int id, unsigned int digest, unsigned int size);
+void host_sha256_cancel(int id);
+/* the Steam sign-in's seal (port/android/host/host_steam_seal.c, which says what each does; the
+Steam client is the guest's, port/linux/src/steam_downloads.c): the app's private folder for its
+session file, and its refresh token sealed and opened with a key of the Android Keystore */
+int host_steam_private_folder(char *folder, int size);
+int host_steam_seal(const char *text, char *out, int out_size);
+int host_steam_unseal(const char *sealed, char *out, int out_size);
+void host_steam_seal_forget(void);
+
 #endif

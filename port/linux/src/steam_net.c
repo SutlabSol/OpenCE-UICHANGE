@@ -22,6 +22,15 @@ int steam_net_available(void)
 #endif
 }
 
+void steam_wipe(void *memory, size_t size)
+{
+	/* (through a volatile pointer: a store the compiler may not drop as dead) */
+	volatile unsigned char *at = memory;
+
+	while (size--)
+		*at++ = 0;
+}
+
 #if defined(HALO_WEB)
 int steam_https_get(char const *url, unsigned long maximum, unsigned char **body, unsigned long *size, int *status,
 	char *error, int error_size)
@@ -248,6 +257,29 @@ static int header_has(char const *headers, char const *name, char const *value)
 	return 0;
 }
 
+/* a chunked body's part length (the hex digits from text to line_end, an
+extension after ';' ignored): 1 with *length at most left, 0 malformed or
+longer (OpenCE's fix: a length near ULONG_MAX wrapped the bounds checks) */
+static int chunk_length(char const *text, char const *line_end, size_t left, unsigned long *length)
+{
+	unsigned long value = 0;
+	int digits = 0;
+
+	for (; text < line_end && *text != ';'; text++)
+	{
+		int digit = *text >= '0' && *text <= '9' ? *text - '0' : *text >= 'a' && *text <= 'f' ? *text - 'a' + 10 :
+			*text >= 'A' && *text <= 'F' ? *text - 'A' + 10 : -1;
+
+		/* (value * 16 is at most left here, which is far from overflowing) */
+		if (digit < 0 || value > left / 16 || value * 16 + (unsigned long)digit > left)
+			return 0;
+		value = value * 16 + (unsigned long)digit;
+		digits++;
+	}
+	*length = value;
+	return digits > 0;
+}
+
 /* one request on the open connection: 1 answered, 0 failed (the
 connection then closed) */
 static int http_exchange(struct steam_http *http, char const *path, unsigned long maximum, unsigned char **body,
@@ -354,19 +386,22 @@ static int http_exchange(struct steam_http *http, char const *path, unsigned lon
 			line_end = strstr(stream + at, "\r\n");
 			if (line_end)
 			{
-				part = strtoul(stream + at, NULL, 16);
+				size_t part_start = (size_t)(line_end + 2 - stream);
+
+				/* (the length's hex digits alone, and never more than is left
+				of maximum: a length near ULONG_MAX would wrap the sums below) */
+				if (!chunk_length(stream + at, line_end, maximum - out, &part))
+					break;
 				if (!part)
 				{
 					done = 1;
 					break;
 				}
-				if (out + part > maximum)
-					break;
-				if (stream_have >= (size_t)(line_end + 2 - stream) + part + 2)
+				if (stream_have - part_start >= part + 2)
 				{
 					memcpy(data + out, line_end + 2, part);
 					out += part;
-					at = (size_t)(line_end + 2 - stream) + part + 2;
+					at = part_start + part + 2;
 					continue;
 				}
 			}
@@ -445,8 +480,12 @@ int steam_http_get(struct steam_http *http, char const *host, char const *path, 
 
 /* ---------- protocol buffers */
 
+/* (a message can hold a password's ciphertext or a refresh token: its
+bytes are wiped before they go back to the heap) */
 void steam_pb_free(struct steam_pb *pb)
 {
+	if (pb->bytes)
+		steam_wipe(pb->bytes, pb->capacity);
 	free(pb->bytes);
 	memset(pb, 0, sizeof(*pb));
 }
@@ -462,11 +501,18 @@ static void pb_put(struct steam_pb *pb, void const *data, size_t size)
 
 		while (capacity < pb->size + size)
 			capacity *= 2;
-		bytes = realloc(pb->bytes, capacity);
+		/* (not realloc: the old block is wiped before it is let go) */
+		bytes = malloc(capacity);
 		if (!bytes)
 		{
 			pb->failed = 1;
 			return;
+		}
+		if (pb->bytes)
+		{
+			memcpy(bytes, pb->bytes, pb->size);
+			steam_wipe(pb->bytes, pb->capacity);
+			free(pb->bytes);
 		}
 		pb->bytes = bytes;
 		pb->capacity = capacity;

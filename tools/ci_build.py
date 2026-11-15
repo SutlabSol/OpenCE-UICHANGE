@@ -123,6 +123,10 @@ def copy_notices(platform, dist):
     shutil.copy2(ROOT / "port/third_party/expat/COPYING", dist / "expat-COPYING.txt")
     # MCC's texture decoder is distributed under bcdec's MIT option.
     shutil.copy2(ROOT / "port/third_party/bcdec/LICENSE", dist / "bcdec-LICENSE.txt")
+    # the Steam Workshop screen's Steam client (port/linux/src/steam_*.c), in
+    # every build: Zstandard's decoder, whose BSD license asks binaries to
+    # carry its notice (the LZMA SDK's decoder is public domain)
+    shutil.copy2(ROOT / "port/third_party/zstd/LICENSE", dist / "zstd-LICENSE.txt")
     # voice chat's codec (port/third_party/opus), in every build, whose BSD
     # license asks binaries to carry its notice
     shutil.copy2(ROOT / "port/third_party/opus/COPYING", dist / "opus-COPYING.txt")
@@ -170,11 +174,11 @@ def copy_notices(platform, dist):
     # its buttons, port/assets/buttons/platforms), CC0: not required, but
     # credited (the PS5's release has it in licenses/: tools/ps5_build.py)
     shutil.copy2(ROOT / "port/assets/buttons/platforms/Kenney-LICENSE.txt", dist / "Kenney-LICENSE.txt")
+    # the QR codes (port/third_party/qrcodegen, Project Nayuki's: the Steam
+    # Workshop's sign-in in every build, the Switch's link page), whose MIT
+    # license asks copies to carry its notice
+    shutil.copy2(ROOT / "port/third_party/qrcodegen/LICENSE", dist / "qrcodegen-LICENSE.txt")
     if platform == "switch":
-        # the link page's QR code (port/third_party/qrcodegen, Project
-        # Nayuki's, in the Switch's build alone), whose MIT license asks
-        # copies to carry its notice
-        shutil.copy2(ROOT / "port/third_party/qrcodegen/LICENSE", dist / "qrcodegen-LICENSE.txt")
         # and the Switch's menus' title font (port/switch/host/host_ui.c),
         # under the same license
         shutil.copy2(ROOT / "port/assets/fonts/OpenCE-OFL.txt", dist / "OpenCE-OFL.txt")

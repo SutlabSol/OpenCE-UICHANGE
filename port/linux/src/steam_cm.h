@@ -91,6 +91,9 @@ identity, steam_cm_machine_id's); the EResult (STEAM_RESULT_OK) */
 int steam_cm_logon_token(struct steam_cm *cm, char const *token, char const *machine_name,
 	unsigned char const *machine_id, size_t machine_id_size);
 int steam_cm_logon_anonymous(struct steam_cm *cm);
+/* the token (a signed-in session's own) revoked: Steam takes it no more, from
+this device or any copy of it. The EResult */
+int steam_cm_revoke_token(struct steam_cm *cm, char const *token);
 /* the ClientLogon machine_id of an install, from its random seed bytes */
 size_t steam_cm_machine_id(unsigned char const seed[16], unsigned char *out, size_t capacity);
 uint64_t steam_cm_steam_id(struct steam_cm const *cm);

@@ -3,7 +3,9 @@ STEAM_DOWNLOADS.H
 
 The Steam Workshop screen's model (Settings > STEAM WORKSHOP: tools/port_settings.py's _steam_workshop, menu_functions.c's
 "port steam" functions): signing in with Steam (a QR code the Steam mobile
-app scans; the refresh token kept in steam/session.txt of the data root),
+app scans, or the account's name and password; the refresh token kept in
+steam/session.txt, sealed with the Android Keystore's key in the app's
+private storage on Android: steam_downloads.c; revoked with Steam at LOG OUT),
 then a hub of three lists: MANAGE ACCOUNT (the account, LOG OUT), MCC FILE
 STATUS (the shared sets, and the Workshop packages in mcc_maps: updated or
 removed) and BROWSE WORKSHOP (the Halo 1 Workshop by sort and type, a page
@@ -82,6 +84,37 @@ or when the screen next signs in) */
 void steam_downloads_want_item(char const *id, char const *title);
 /* whether this build can reach Steam (not the web build's) */
 int steam_downloads_supported(void);
+
+/* ---------- a joiner's MCC package from the Workshop (mcc_share.c: a
+signed-in player joining a game on a Workshop item it lacks installs it from
+Steam, then checks it against the host's identity, instead of waiting on the
+host's upload). Each call's only memory, but the asks' few file looks */
+
+/* MCC's shared sets (the base resources no host sends), queued when
+missing: 0 here already, 1 queued, -1 no Steam sign-in to fetch them with */
+int steam_downloads_shared_fetch(void);
+/* the same, without queueing: 1 while being fetched, -1 when they could not
+be, else 0 */
+int steam_downloads_shared_state(void);
+
+enum
+{
+	STEAM_INSTALL_FAILED = -1,
+	STEAM_INSTALL_UNDER_WAY = 0,
+	STEAM_INSTALL_DONE = 1
+};
+/* a whole Workshop item installed in mcc_maps/<id> for a joiner, first in
+the download queue: 1 begun, 0 when there is no Steam sign-in */
+int steam_downloads_install_start(unsigned long long id);
+/* how it is going: STEAM_INSTALL_* */
+int steam_downloads_install_status(void);
+/* its progress, in KB: done, of all (0 not yet known), and a second (0 not
+yet measured) */
+void steam_downloads_install_progress(unsigned long progress[3]);
+/* nonzero once when files were put in mcc_maps since the last ask (the
+screen's downloads, a joiner's install, the shared sets): the caller
+rescans the MCC catalog (mcc_maps_rescan), the screen open or not */
+int steam_downloads_take_rescan(void);
 
 /* (for the tests) the community server's lists' text (cut up) read into
 MAXIMUM_LISTS-like arrays of the model's own: the lists' count, -1 when it

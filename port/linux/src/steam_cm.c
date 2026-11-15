@@ -112,11 +112,20 @@ static void cm_fail(struct steam_cm *cm, char const *format, char const *detail)
 	platform_log("steam: %s", cm->error);
 }
 
+/* (the bytes a message held wiped as they go: a sign-in's answer has the
+refresh token) */
+static void wipe_free(void *memory, size_t size)
+{
+	if (memory)
+		steam_wipe(memory, size);
+	free(memory);
+}
+
 static void message_free(struct cm_message *message)
 {
 	if (message)
 	{
-		free(message->body);
+		wipe_free(message->body, message->body_size + 1);
 		free(message);
 	}
 }
@@ -378,13 +387,13 @@ static struct cm_message *cm_parse(struct steam_cm *cm, unsigned char *bytes, si
 
 	if (size < 4)
 	{
-		free(bytes);
+		wipe_free(bytes, size);
 		return NULL;
 	}
 	message = calloc(1, sizeof(*message));
 	if (!message)
 	{
-		free(bytes);
+		wipe_free(bytes, size);
 		return NULL;
 	}
 	raw = read32(bytes);
@@ -402,7 +411,7 @@ static struct cm_message *cm_parse(struct steam_cm *cm, unsigned char *bytes, si
 
 		if (size < 8 || (header_size = read32(bytes + 4)) > size - 8)
 		{
-			free(bytes);
+			wipe_free(bytes, size);
 			free(message);
 			return NULL;
 		}
@@ -426,7 +435,7 @@ static struct cm_message *cm_parse(struct steam_cm *cm, unsigned char *bytes, si
 		/* (the old header: EMsg, target job, source job) */
 		if (size < 20)
 		{
-			free(bytes);
+			wipe_free(bytes, size);
 			free(message);
 			return NULL;
 		}
@@ -436,7 +445,7 @@ static struct cm_message *cm_parse(struct steam_cm *cm, unsigned char *bytes, si
 		if (message->body)
 			memcpy(message->body, bytes + 20, message->body_size);
 	}
-	free(bytes);
+	wipe_free(bytes, size);
 	if (!message->body)
 	{
 		free(message);
@@ -490,7 +499,7 @@ static struct cm_message *cm_parse(struct steam_cm *cm, unsigned char *bytes, si
 				queue_add(cm, part);
 			at += 4 + length;
 		}
-		free(expanded);
+		wipe_free(expanded, expanded ? inner_size : 0);
 		message_free(message);
 		return NULL;
 	}
@@ -730,13 +739,22 @@ static int cm_handshake(struct steam_cm *cm)
 	write32(response + 20, 1);
 	write32(response + 24, 128);
 	if (!steam_rsa_encrypt_public_universe(blob, sizeof(blob), response + 28))
+	{
+		steam_wipe(session_key, sizeof(session_key));
+		steam_wipe(blob, sizeof(blob));
 		return 0;
+	}
+	steam_wipe(blob, sizeof(blob));
 	write32(response + 28 + 128, steam_crc32(response + 28, 128));
 	write32(response + 28 + 128 + 4, 0);
 	if (!cm_send_packet(cm, response, sizeof(response)))
+	{
+		steam_wipe(session_key, sizeof(session_key));
 		return 0;
+	}
 	steam_aes_key(&cm->aes, session_key);
 	memcpy(cm->hmac_key, session_key, 16);
+	steam_wipe(session_key, sizeof(session_key));
 	if (cm_receive_packet(cm, ANSWER_MILLISECONDS, &bytes, &size) <= 0)
 		return 0;
 	result = cm_parse(cm, bytes, size, 0);
@@ -794,7 +812,7 @@ struct steam_cm *steam_cm_open(char *error, int error_size)
 		return cm;
 	}
 	snprintf(error, (size_t)error_size, "%s", cm->error[0] ? cm->error : "no Steam server could be reached");
-	free(cm);
+	wipe_free(cm, sizeof(*cm));
 	return NULL;
 }
 
@@ -810,7 +828,8 @@ void steam_cm_close(struct steam_cm *cm)
 		message_free(cm->queued);
 		cm->queued = next;
 	}
-	free(cm);
+	/* (the channel's key with it) */
+	wipe_free(cm, sizeof(*cm));
 }
 
 int steam_cm_connected(struct steam_cm const *cm)
@@ -1195,6 +1214,27 @@ int steam_cm_logon_token(struct steam_cm *cm, char const *token, char const *mac
 	result = cm_logon(cm, &logon);
 	steam_pb_free(&logon);
 	steam_pb_free(&address);
+	return result;
+}
+
+int steam_cm_revoke_token(struct steam_cm *cm, char const *token)
+{
+	struct steam_pb request;
+	struct cm_message *answer;
+	int result;
+
+	/* (CAuthentication_Token_Revoke_Request: the token, and
+	k_EAuthTokenRevokePermanent; Steam then refuses it, wherever a copy of
+	it is) */
+	memset(&request, 0, sizeof(request));
+	steam_pb_string(&request, 1, token);
+	steam_pb_varint(&request, 2, 1);
+	answer = cm_call(cm, "Authentication.RevokeToken#1", &request);
+	steam_pb_free(&request);
+	if (!answer)
+		return STEAM_RESULT_FAIL;
+	result = answer->eresult;
+	message_free(answer);
 	return result;
 }
 
