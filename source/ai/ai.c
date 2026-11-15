@@ -532,6 +532,12 @@ void ai_dispose(
 void ai_dispose_from_old_map(
 	void)
 {
+	/* port: the level's count of AI falls (port/linux/game/ai_falls.c) */
+	{
+		extern void ai_falls_level_end(void);
+
+		ai_falls_level_end();
+	}
 	ai_communication_dispose_from_old_map();
 	ai_script_dispose_from_old_map();
 	encounters_dispose_from_old_map();

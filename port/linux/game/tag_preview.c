@@ -38,6 +38,7 @@ fill the widget's shape whichever way it has turned.
 #include "bitmaps/bitmap_group.h"
 #include "rasterizer/xbox/rasterizer_xbox_hardware_bitmaps.h"
 #include "custom_edition_cache.h"
+#include "mcc_tag_preview.h"
 #include "tag_injector.h"
 #include "tag_preview.h"
 
@@ -107,7 +108,12 @@ enum
 	_tag_preview_none,
 	_tag_preview_map_tag,
 	_tag_preview_profile_tag,
+	/* (an MCC map's tag: mcc_tag_preview.c, its group in first, its name in
+	tag_preview_mcc_name) */
+	_tag_preview_mcc_tag,
 };
+
+static char tag_preview_mcc_name[256];
 
 /* ---------- structures */
 
@@ -483,6 +489,13 @@ static void tag_preview_read(
 		tag_preview.readable = tag_injector_profile_tag_preview(tag_preview.first, tag_preview.second,
 			&tag_preview.mesh, &tag_preview.needs);
 	}
+	else if (tag_preview.kind == _tag_preview_mcc_tag)
+	{
+		/* (no needs: mcc_tag_preview.c reads a model alone) */
+		memset(&tag_preview.needs, 0, sizeof(tag_preview.needs));
+		tag_preview.readable = mcc_tag_preview_mesh((unsigned long)tag_preview.first, tag_preview_mcc_name,
+			&tag_preview.mesh);
+	}
 	if (tag_preview.mesh.triangle_count <= 0)
 		return;
 	for (index = 0; index < tag_preview.mesh.texture_count; index++)
@@ -855,6 +868,24 @@ void tag_preview_profile_tag(
 	snprintf(key, sizeof(key), "profile %s %lu %s", port_tag_profiles_folder(profile),
 		port_tag_profiles_tag_group(profile, tag), port_tag_profiles_tag_name(profile, tag));
 	tag_preview_choose(key, _tag_preview_profile_tag, profile, tag);
+}
+
+void tag_preview_mcc_tag(
+	unsigned long group,
+	char const *tag_name)
+{
+	char key[TAG_PREVIEW_KEY_LENGTH];
+
+	if (!tag_name || !mcc_tag_preview_opened())
+	{
+		tag_preview_none();
+		return;
+	}
+	snprintf(key, sizeof(key), "mcc %lu %s", group, tag_name);
+	/* (the name a new choice reads, kept while it is chosen) */
+	if (strcmp(key, tag_preview.key))
+		snprintf(tag_preview_mcc_name, sizeof(tag_preview_mcc_name), "%s", tag_name);
+	tag_preview_choose(key, _tag_preview_mcc_tag, (long)group, NONE);
 }
 
 void tag_preview_none(

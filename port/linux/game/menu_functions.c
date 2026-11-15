@@ -165,6 +165,7 @@ their handlers open opens.
 #include "mcc_share.h"
 #include "mcc_share_menu.h"
 #include "mcc_cache.h"
+#include "mcc_tag_preview.h"
 #include "mcc_ui_network.h"
 #include "game_modes.h"
 #include "infection.h"
@@ -13269,6 +13270,8 @@ static struct
 	short first;
 	/* (the map open for its tags' models: tag_injector_map_open's) */
 	boolean previewing;
+	/* (the map an MCC map's, previewed by mcc_tag_preview.c) */
+	boolean previewing_mcc;
 } map_content_menu;
 static boolean map_content_list_open(short kind);
 static boolean map_content_tags_initialize(struct widget_instance *list);
@@ -20650,6 +20653,14 @@ static boolean map_content_tags_initialize(struct widget_instance *list)
 	map_content_menu.first = 0;
 	focus_row(list, 0);
 	tag_preview_dispose();
+	/* (an MCC map's file is read as it is: mcc_tag_preview.c) */
+	map_content_menu.previewing_mcc = mcc_level_name(server_settings_map_name()) &&
+		mcc_tag_preview_open(server_settings_map_name());
+	if (map_content_menu.previewing_mcc)
+	{
+		map_content_menu.previewing = TRUE;
+		return TRUE;
+	}
 	map = tag_injector_maps_available(reason, sizeof(reason)) ? tag_injector_map_named(server_settings_map_name()) : NONE;
 	if (map != NONE && tag_injector_map_opened() != map && !tag_injector_map_open(map))
 		map = NONE;
@@ -20659,9 +20670,12 @@ static boolean map_content_tags_initialize(struct widget_instance *list)
 
 static boolean map_content_tags_close(void)
 {
-	if (map_content_menu.previewing)
+	if (map_content_menu.previewing_mcc)
+		mcc_tag_preview_close();
+	else if (map_content_menu.previewing)
 		tag_injector_map_close();
 	map_content_menu.previewing = FALSE;
+	map_content_menu.previewing_mcc = FALSE;
 	tag_preview_dispose();
 	return TRUE;
 }
@@ -20677,6 +20691,11 @@ static void map_content_tag_preview(short kind, char const *tag_name)
 	if (!map_content_menu.previewing || !tag_name)
 	{
 		tag_preview_none();
+		return;
+	}
+	if (map_content_menu.previewing_mcc)
+	{
+		tag_preview_mcc_tag(tag_injector_category_group(category), tag_name);
 		return;
 	}
 	count = tag_injector_category_count(category);

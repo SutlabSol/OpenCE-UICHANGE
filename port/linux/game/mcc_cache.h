@@ -29,4 +29,16 @@ short mcc_cache_part_palette(void const *buffer, byte const **nodes);
 boolean mcc_cache_bitmap_valid(struct bitmap_data *bitmap);
 void const *mcc_cache_bitmap_pixels(struct bitmap_data const *bitmap, unsigned long *bytes, int *coverage);
 
+/* A map's tags read without loading it (mcc_cache.c's menus' readers). */
+boolean mcc_cache_tag_names_walk(char const *name,
+    int (*visit)(void *context, unsigned long group_tag, char const *tag_name), void *context);
+struct mcc_raw_map;
+struct mcc_raw_map *mcc_cache_raw_open(char const *name);
+void mcc_cache_raw_close(struct mcc_raw_map *map);
+void *mcc_cache_raw_pointer(struct mcc_raw_map *map, unsigned long address, unsigned long bytes);
+unsigned long mcc_cache_raw_tag_count(struct mcc_raw_map const *map);
+unsigned char *mcc_cache_raw_entry(struct mcc_raw_map *map, unsigned long index);
+boolean mcc_cache_raw_model_read(struct mcc_raw_map *map, boolean strip, unsigned long offset,
+    unsigned long bytes, void *out);
+
 #endif

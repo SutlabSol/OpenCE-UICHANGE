@@ -145,6 +145,69 @@ static void prepare(const char *folder)
 	}
 }
 
+/* The game reads its data files beside config.toml (config_folder: the
+props, Firefight's ordnance capsule; the rank icons; Forge's markers; the
+brokers and master servers), and the app ships them in its Resources
+(tools/macos_build.py), which is not where config.toml is inside the app.
+Each start copies those missing or out of date into the settings folder,
+as Android's host does from its APK (port/android/host/host_main.c). */
+static void copy_shipped_files(const char *resources, const char *folder)
+{
+	static const char *const shipped[] =
+	{
+		"brokers.txt", "masters.txt", "rank_icons.bin", "forge_markers.bin", "tag_props.bin",
+	};
+	size_t index;
+
+	for (index = 0; index < sizeof(shipped) / sizeof(shipped[0]); index++)
+	{
+		char source[1100], target[1100], partial[1120];
+		struct stat from, to;
+		FILE *input, *output;
+		char buffer[65536];
+		size_t part;
+		int failed = 0;
+
+		snprintf(source, sizeof(source), "%s%s", resources, shipped[index]);
+		snprintf(target, sizeof(target), "%s/%s", folder, shipped[index]);
+		if (stat(source, &from) != 0)
+		{
+			host_logf(HOST_LOG_WARN, "shipped file %s is not in the app", shipped[index]);
+			continue;
+		}
+		if (stat(target, &to) == 0 && to.st_size == from.st_size && to.st_mtime >= from.st_mtime)
+			continue;
+		snprintf(partial, sizeof(partial), "%s.partial", target);
+		input = fopen(source, "rb");
+		output = input ? fopen(partial, "wb") : NULL;
+		if (!input || !output)
+		{
+			host_logf(HOST_LOG_ERROR, "cannot copy %s to %s (%s)", source, target, strerror(errno));
+			if (input)
+				fclose(input);
+			continue;
+		}
+		while ((part = fread(buffer, 1, sizeof(buffer), input)) > 0)
+		{
+			if (fwrite(buffer, 1, part, output) != part)
+			{
+				failed = 1;
+				break;
+			}
+		}
+		failed |= ferror(input) != 0;
+		fclose(input);
+		failed |= fclose(output) != 0;
+		if (failed || rename(partial, target) != 0)
+		{
+			host_logf(HOST_LOG_ERROR, "cannot copy %s to %s (%s)", source, target, strerror(errno));
+			unlink(partial);
+			continue;
+		}
+		host_logf(HOST_LOG_INFO, "copied %s beside config.toml", shipped[index]);
+	}
+}
+
 void host_macos_game_folder(void)
 {
 	const char *environment = getenv("HALO_DATA_ROOT");
@@ -165,6 +228,20 @@ void host_macos_game_folder(void)
 		snprintf(path, sizeof(path), "%s/saves", settings_folder);
 		make_folder(path);
 		setenv("HALO_SAVE_ROOT", path, 0);
+		/* (beside the config.toml the game reads: a HALO_CONFIG_FILE set
+		before the app started names its own folder) */
+		{
+			const char *base = SDL_GetBasePath();
+			char config_folder[1024];
+			char *slash;
+
+			snprintf(config_folder, sizeof(config_folder), "%s", getenv("HALO_CONFIG_FILE"));
+			slash = strrchr(config_folder, '/');
+			if (slash)
+				*slash = 0;
+			if (base && slash)
+				copy_shipped_files(base, config_folder);
+		}
 	}
 	else
 	{

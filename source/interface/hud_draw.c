@@ -1538,6 +1538,13 @@ void hud_draw_static_element(
 				clip = &default_clip;
 
 			xy_scale = static_element->placement.scale;
+			/* port: an imported HUD drawing an MCC map's own bitmap (mcc_hud_draw.c) */
+			{
+				real foreign_scale = mcc_hud_foreign_bitmap_scale(&static_element->placement, bitmap);
+
+				xy_scale.i *= foreign_scale;
+				xy_scale.j *= foreign_scale;
+			}
 
 			hud_calculate_point(
 				render.local_player_index,
@@ -1702,6 +1709,13 @@ static void hud_draw_bitmap_with_meter(
 
 	xy_scale.i = placement->scale.i*scale;
 	xy_scale.j = placement->scale.j*scale;
+	/* port: an imported HUD drawing an MCC map's own bitmap (mcc_hud_draw.c) */
+	{
+		real foreign_scale = mcc_hud_foreign_bitmap_scale(placement, bitmap);
+
+		xy_scale.i *= foreign_scale;
+		xy_scale.j *= foreign_scale;
+	}
 
 	hud_calculate_point(
 		render.local_player_index,
@@ -2130,8 +2144,9 @@ void hud_draw_numbers(
 			digit_scale = TEST_FLAG(numbers->placement.multiplayer_scaling_flags, _hud_use_high_resolution_scale_bit) ||
 				TEST_FLAG(bitmap_group->flags, _bitmap_group_half_hud_scale_bit) ?
 				scale*0.5f : scale;
-			/* port: an MCC map's HUD canvas (mcc_hud.c) */
-			if (mcc_cache_tags_loaded())
+			/* port: an MCC map's HUD canvas (mcc_hud.c), for its own digits
+			(copied-in ones, Firefight's weapons', keep their native size) */
+			if (mcc_hud_digits_on_canvas(bitmap_group))
 				digit_scale *= mcc_hud_canvas_scale();
 
 			if (TEST_FLAG(numbers->number_flags, _hud_number_show_trailing_m_bit))

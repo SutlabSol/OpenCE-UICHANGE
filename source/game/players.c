@@ -5003,6 +5003,13 @@ void players_update_before_game(
 		/* port: the controls of a local game's bots this tick
 		(port/linux/game/bots.c), in place of what their queues held */
 		bots_update_actions(actions);
+		/* port: the trails of AI that fall or walk into death volumes
+		(port/linux/game/ai_falls.c) */
+		{
+			extern void ai_falls_update(void);
+
+			ai_falls_update();
+		}
 		data_iterator_new(&iterator, player_data);
 		while (player = data_iterator_next(&iterator))
 		{

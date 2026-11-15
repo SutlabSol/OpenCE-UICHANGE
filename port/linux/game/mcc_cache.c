@@ -576,3 +576,140 @@ void const *mcc_cache_bitmap_pixels(struct bitmap_data const *bitmap,unsigned lo
     if (bytes) *bytes=size;
     return pixels;
 }
+
+/* ---------- a map's tags read without loading it (the menus')
+
+mcc_cache_tag_names_walk: each tag's group and name from the map's tag index
+and its names alone (Firefight's MAP CONTENT lists, firefight_spawner.c).
+mcc_cache_raw_open: the map's tags as the file has them (no conversion, at
+no linked address: mcc_cache_pointer finds what an address names), and its
+file kept open for its models' vertices and strips (Firefight's MAP CONTENT
+preview, mcc_tag_preview.c). */
+
+#define MCC_NAMES_MAXIMUM_BYTES (8u * 1024u * 1024u)
+
+static uint32_t mcc_wire_u32(unsigned char const *p)
+{
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+boolean mcc_cache_tag_names_walk(char const *name,
+    int (*visit)(void *context, unsigned long group_tag, char const *tag_name), void *context)
+{
+    struct mcc_cache_identity identity;
+    struct mcc_cache_source source;
+    unsigned char header[0x28];
+    unsigned char *index = NULL, *names = NULL;
+    uint32_t base, count, i, low = UINT32_MAX, high = 0, names_bytes;
+    FILE *stream;
+    boolean walked = FALSE;
+
+    if (!name || !visit) return FALSE;
+    stream = mcc_open(mcc_identity_local_name(name), &source, &identity);
+    if (!stream) return FALSE;
+    if (identity.tag_data_size < sizeof(header) ||
+        !mcc_file_read(stream, identity.tag_data_offset, sizeof(header), header) ||
+        mcc_wire_u32(header) < 0x28 || mcc_wire_u32(header + 0x24) != (uint32_t)'tags')
+        goto done;
+    base = mcc_wire_u32(header) - 0x28;
+    count = mcc_wire_u32(header + 0xC);
+    if (!count || count > 65535 || 0x28 + (uint64_t)count * 0x20 > identity.tag_data_size) goto done;
+    index = malloc(count * 0x20);
+    if (!index || !mcc_file_read(stream, identity.tag_data_offset + 0x28, count * 0x20, index)) goto done;
+    /* (the names lie together after the index: read them at once) */
+    for (i = 0; i < count; i++) {
+        uint32_t address = mcc_wire_u32(index + i * 0x20 + 0x10);
+        if (address < base || address - base >= identity.tag_data_size) continue;
+        if (address - base < low) low = address - base;
+        if (address - base > high) high = address - base;
+    }
+    if (low > high) goto done;
+    names_bytes = high - low + 256;
+    if (names_bytes > identity.tag_data_size - low) names_bytes = identity.tag_data_size - low;
+    if (names_bytes > MCC_NAMES_MAXIMUM_BYTES) {
+        error(_error_silent, "mcc: %s's tag names span %lu bytes; not read", name, (unsigned long)names_bytes);
+        goto done;
+    }
+    names = malloc(names_bytes + 1);
+    if (!names || !mcc_file_read(stream, identity.tag_data_offset + low, names_bytes, names)) goto done;
+    names[names_bytes] = 0;
+    walked = TRUE;
+    for (i = 0; i < count; i++) {
+        unsigned char const *entry = index + i * 0x20;
+        uint32_t address = mcc_wire_u32(entry + 0x10);
+        if (address < base + low || address - base - low >= names_bytes) continue;
+        if (!visit(context, (unsigned long)mcc_wire_u32(entry), (char const *)names + (address - base - low))) break;
+    }
+done:
+    if (index) free(index);
+    if (names) free(names);
+    fclose(stream);
+    return walked;
+}
+
+struct mcc_raw_map {
+    FILE *stream;
+    struct mcc_cache_source source;
+    struct mcc_cache_identity identity;
+    struct mcc_cache_report report;
+    unsigned char *tags;
+};
+
+struct mcc_raw_map *mcc_cache_raw_open(char const *name)
+{
+    struct mcc_raw_map *map = calloc(1, sizeof(*map));
+    enum mcc_cache_status status;
+
+    if (!map) return NULL;
+    map->stream = mcc_open(mcc_identity_local_name(name), &map->source, &map->identity);
+    if (!map->stream) {
+        free(map);
+        return NULL;
+    }
+    map->tags = malloc(map->identity.tag_data_size ? map->identity.tag_data_size : 1);
+    status = map->tags ? mcc_cache_load(&map->source, map->tags, map->identity.tag_data_size, &map->report) :
+        MCC_CACHE_NO_MEMORY;
+    if (status != MCC_CACHE_OK) {
+        error(_error_silent, "mcc: %s's tags not read for a preview: %s", name, mcc_cache_status_string(status));
+        mcc_cache_raw_close(map);
+        return NULL;
+    }
+    return map;
+}
+
+void mcc_cache_raw_close(struct mcc_raw_map *map)
+{
+    if (!map) return;
+    if (map->tags) free(map->tags);
+    if (map->stream) fclose(map->stream);
+    free(map);
+}
+
+void *mcc_cache_raw_pointer(struct mcc_raw_map *map, unsigned long address, unsigned long bytes)
+{
+    return map ? mcc_cache_pointer(map->tags, &map->report, (uint32_t)address, (uint32_t)bytes) : NULL;
+}
+
+unsigned long mcc_cache_raw_tag_count(struct mcc_raw_map const *map)
+{
+    return map ? map->report.tag_count : 0;
+}
+
+/* the index entry of a tag (32 bytes: group, ..., handle +12, name +16, data +20) */
+unsigned char *mcc_cache_raw_entry(struct mcc_raw_map *map, unsigned long index)
+{
+    return map && index < map->report.tag_count ? map->tags + 0x28 + index * 0x20 : NULL;
+}
+
+/* `bytes` of a model's vertices (strip FALSE) or strips at an offset of them */
+boolean mcc_cache_raw_model_read(struct mcc_raw_map *map, boolean strip, unsigned long offset,
+    unsigned long bytes, void *out)
+{
+    uint32_t start, end;
+
+    if (!map) return FALSE;
+    start = strip ? map->report.model_vertex_bytes : 0;
+    end = strip ? map->report.model_bytes : map->report.model_vertex_bytes;
+    if (start > end || offset > end - start || bytes > end - start - offset) return FALSE;
+    return mcc_file_read(map->stream, map->report.model_file_offset + start + (uint32_t)offset, (uint32_t)bytes, out);
+}

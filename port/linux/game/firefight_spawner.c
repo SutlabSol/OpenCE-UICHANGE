@@ -39,6 +39,7 @@ Friendly AI Reinforcements, and Round-Scheduled Player Vehicles.
 #include "objects/damage.h"
 #include "objects/objects.h"
 #include "models/model_definitions.h"
+#include "physics/collision_bsp_definitions.h"
 #include "physics/collisions.h"
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
@@ -380,10 +381,6 @@ byte firefight_map_content(void)
 	struct game_variant_options const *opts = game_variant_options_get();
 	byte mode = opts ? (byte)(opts->firefight_map_content & FIREFIGHT_MAP_CONTENT_MODE_MASK) : 0;
 
-	/* (an MCC map's Firefight is vanilla: none of its own enemies, weapons
-	or vehicles, whatever a setting carried from another map says) */
-	if (mcc_cache_tags_loaded())
-		return _firefight_map_content_vanilla;
 	if (mode != _firefight_map_content_include_map && mode != _firefight_map_content_only_map)
 		return _firefight_map_content_vanilla;
 	return mode;
@@ -897,6 +894,337 @@ static short count_valid_in_bsp_spawn_points(void)
 	return count;
 }
 
+/* ---------- where enemies may stand: ground under a point, and the ground
+the players can walk to
+
+A map's netgame flags and equipment include spots the players never come to:
+an MCC map's other gametypes' items in a sealed staging room, flags behind a
+wall, out past the map's edge (Promenade's). A point inside the structure's
+cluster passes point_is_in_valid_bsp all the same, so the waves' spots are
+also asked for ground under them and for that ground to be walkable from the
+players' starting locations (or a teleporter's ends):
+
+- the walkable surfaces (the structure's pathfinding flags, as bots_routes.c
+  reads them) are joined across the edges they share, and across a step's
+  riser (a surface between two walkable ones no taller than FF_REACH_STEP),
+  as stairs are built;
+- the ground surfaces under the starting locations and teleporters make the
+  groups that count; a point on walkable ground of no such group is dropped;
+- a point whose ground is not walkable (a steep slope, a crate's top: the
+  structure's surface under it) is kept, as is the whole list when the map
+  has no walkable surfaces or the filter would leave fewer than
+  FF_REACH_LEAST points (a map of jumps and lifts: its spots as they were).
+
+halo.log has what was dropped and why ("firefight: spawn points"). */
+
+void platform_log(char const *format, ...);
+
+#define FF_PATHFINDING_WALKABLE_BIT 6
+#define FF_REACH_CORNERS 16
+#define FF_REACH_STEP 0.8f
+#define FF_REACH_GROUND_DEPTH 6.0f
+#define FF_REACH_LEAST 4
+
+static struct
+{
+	struct structure_bsp const *structure;
+	long surface_count;
+	long *parent;
+} g_reach;
+
+static struct collision_bsp const *reach_collision_bsp(void)
+{
+	struct structure_bsp const *structure = g_reach.structure;
+
+	if (!structure || structure->collision_bsp.count <= 0)
+		return NULL;
+	return TAG_BLOCK_GET_ELEMENT(&structure->collision_bsp, 0, struct collision_bsp);
+}
+
+static boolean reach_walkable(long surface_index)
+{
+	byte const *flags;
+
+	if (surface_index < 0 || surface_index >= g_reach.surface_count)
+		return FALSE;
+	flags = (byte const *)g_reach.structure->pathfinding_surfaces.address;
+	return TEST_FLAG(flags[surface_index], FF_PATHFINDING_WALKABLE_BIT);
+}
+
+/* the surface's corners and the surface across each edge (bots_routes_corners') */
+static long reach_corners(struct collision_bsp const *bsp, long surface_index, real_point3d *corners, long *neighbours)
+{
+	struct collision_surface const *surface;
+	long edge_index, count = 0;
+
+	if (surface_index < 0 || surface_index >= bsp->surfaces.count)
+		return 0;
+	surface = TAG_BLOCK_GET_ELEMENT(&bsp->surfaces, surface_index, struct collision_surface);
+	edge_index = surface->first_edge_index;
+	do
+	{
+		struct collision_edge const *edge;
+		boolean right;
+
+		if (edge_index < 0 || edge_index >= bsp->edges.count)
+			return 0;
+		edge = TAG_BLOCK_GET_ELEMENT(&bsp->edges, edge_index, struct collision_edge);
+		right = edge->surface_indices[1] == surface_index;
+		if (!VALID_INDEX(edge->vertex_indices[right], bsp->vertices.count))
+			return 0;
+		corners[count] = TAG_BLOCK_GET_ELEMENT(&bsp->vertices, edge->vertex_indices[right], struct collision_vertex)->point;
+		neighbours[count] = edge->surface_indices[!right];
+		count++;
+		edge_index = edge->edge_indices[right];
+	} while (edge_index != surface->first_edge_index && count < FF_REACH_CORNERS);
+	return count;
+}
+
+static long reach_root(long surface_index)
+{
+	long root = surface_index;
+
+	while (g_reach.parent[root] != root)
+		root = g_reach.parent[root];
+	while (g_reach.parent[surface_index] != root)
+	{
+		long next = g_reach.parent[surface_index];
+
+		g_reach.parent[surface_index] = root;
+		surface_index = next;
+	}
+	return root;
+}
+
+static void reach_join(long a, long b)
+{
+	long root_a = reach_root(a), root_b = reach_root(b);
+
+	if (root_a != root_b)
+		g_reach.parent[root_b] = root_a;
+}
+
+static void reach_release(void)
+{
+	/* (the game's free, debug_memory.c's, takes no NULL) */
+	if (g_reach.parent)
+		free(g_reach.parent);
+	g_reach.parent = NULL;
+	g_reach.structure = NULL;
+	g_reach.surface_count = 0;
+}
+
+/* the groups of walkable surfaces, of the structure as it is now; FALSE for
+a structure with none */
+static boolean reach_build(void)
+{
+	struct structure_bsp const *structure = global_structure_bsp_get();
+	struct collision_bsp const *bsp;
+	long index;
+
+	reach_release();
+	if (!structure || structure->collision_bsp.count <= 0 || structure->pathfinding_surfaces.count <= 0)
+		return FALSE;
+	g_reach.structure = structure;
+	bsp = reach_collision_bsp();
+	g_reach.surface_count = MIN((long)bsp->surfaces.count, (long)structure->pathfinding_surfaces.count);
+	g_reach.parent = (long *)malloc(sizeof(long) * (size_t)MAX(g_reach.surface_count, 1));
+	if (!g_reach.parent)
+	{
+		reach_release();
+		return FALSE;
+	}
+	for (index = 0; index < g_reach.surface_count; index++)
+		g_reach.parent[index] = index;
+	for (index = 0; index < g_reach.surface_count; index++)
+	{
+		real_point3d corners[FF_REACH_CORNERS];
+		long neighbours[FF_REACH_CORNERS];
+		long count, corner;
+
+		if (!reach_walkable(index))
+			continue;
+		count = reach_corners(bsp, index, corners, neighbours);
+		for (corner = 0; corner < count; corner++)
+		{
+			long other = neighbours[corner];
+			real_point3d riser_corners[FF_REACH_CORNERS];
+			long riser_neighbours[FF_REACH_CORNERS];
+			long riser_count, k;
+			real low = REAL_MAX, high = -REAL_MAX;
+
+			if (other < 0 || other >= g_reach.surface_count)
+				continue;
+			if (reach_walkable(other))
+			{
+				reach_join(index, other);
+				continue;
+			}
+			/* (a step's riser: what is across it joins this one) */
+			riser_count = reach_corners(bsp, other, riser_corners, riser_neighbours);
+			for (k = 0; k < riser_count; k++)
+			{
+				low = MIN(low, riser_corners[k].z);
+				high = MAX(high, riser_corners[k].z);
+			}
+			if (riser_count < 3 || high - low > FF_REACH_STEP)
+				continue;
+			for (k = 0; k < riser_count; k++)
+			{
+				if (reach_walkable(riser_neighbours[k]))
+					reach_join(index, riser_neighbours[k]);
+			}
+		}
+	}
+	return TRUE;
+}
+
+/* the structure's surface under a point (NONE: no ground within
+FF_REACH_GROUND_DEPTH), and where */
+static long reach_ground(real_point3d const *point, real_point3d *ground)
+{
+	struct collision_result collision;
+	real_point3d start = *point;
+	real_vector3d down = { 0.0f, 0.0f, -FF_REACH_GROUND_DEPTH };
+
+	start.z += 0.4f;
+	if (collision_test_vector(FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
+		&start, &down, NONE, &collision) && collision.type == _collision_result_structure)
+	{
+		if (ground)
+			*ground = collision.point;
+		return collision.surface_index;
+	}
+	return NONE;
+}
+
+/* the walkable group of the ground under a point: NONE for ground that is
+not walkable or none */
+static long reach_group_at(real_point3d const *point)
+{
+	long surface_index = reach_ground(point, NULL);
+
+	if (!g_reach.parent || !reach_walkable(surface_index))
+		return NONE;
+	return reach_root(surface_index);
+}
+
+/* whether a spot a unit is put at stays this side of the structure from
+where it was meant to be, with ground under it */
+static boolean spot_reachable_from(real_point3d const *from, real_point3d const *to)
+{
+	struct collision_result collision;
+	real_point3d start = *from, end = *to;
+	real_vector3d along;
+
+	start.z += 0.5f;
+	end.z += 0.5f;
+	vector_from_points3d(&start, &end, &along);
+	if (collision_test_vector(FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
+		&start, &along, NONE, &collision))
+	{
+		return FALSE;
+	}
+	return reach_ground(to, NULL) != NONE;
+}
+
+/* the spawn points left with ground under them and on ground the players can
+walk to (above) */
+static void filter_unreachable_spawn_points(void)
+{
+	struct scenario *scen = global_scenario_get();
+	long seeds[64];
+	short seed_count = 0, i, no_ground = 0, cut_off = 0, kept = 0;
+	boolean grounded[MAX_SPAWN_POINTS];
+	boolean reachable[MAX_SPAWN_POINTS];
+	boolean filter_groups;
+
+	if (!scen || g_spawn_point_count <= 0)
+		return;
+	filter_groups = reach_build();
+	if (filter_groups)
+	{
+		for (i = 0; i < scen->players.count && seed_count < (short)NUMBEROF(seeds); i++)
+		{
+			struct player_starting_location *loc = TAG_BLOCK_GET_ELEMENT(
+				&scen->players, i, struct player_starting_location);
+			long group = loc ? reach_group_at(&loc->position) : NONE;
+
+			if (group != NONE)
+				seeds[seed_count++] = group;
+		}
+		for (i = 0; i < scen->netgame_flags.count && seed_count < (short)NUMBEROF(seeds); i++)
+		{
+			struct scenario_netgame_flag *flag = TAG_BLOCK_GET_ELEMENT(
+				&scen->netgame_flags, i, struct scenario_netgame_flag);
+			long group;
+
+			if (!flag || (flag->type != _netgame_flag_teleporter_source && flag->type != _netgame_flag_teleporter_target))
+				continue;
+			group = reach_group_at(&flag->position);
+			if (group != NONE)
+				seeds[seed_count++] = group;
+		}
+		if (seed_count == 0)
+			filter_groups = FALSE;
+	}
+
+	for (i = 0; i < g_spawn_point_count; i++)
+	{
+		long surface_index = reach_ground(&g_spawn_points[i], NULL);
+		short s;
+
+		grounded[i] = surface_index != NONE;
+		reachable[i] = grounded[i];
+		if (!grounded[i])
+		{
+			no_ground++;
+			continue;
+		}
+		if (!filter_groups || !reach_walkable(surface_index))
+			continue;
+		{
+			long group = reach_root(surface_index);
+
+			for (s = 0; s < seed_count && seeds[s] != group; s++)
+				;
+			if (s == seed_count)
+			{
+				reachable[i] = FALSE;
+				cut_off++;
+			}
+		}
+	}
+	for (i = 0; i < g_spawn_point_count; i++)
+		kept += reachable[i] ? 1 : 0;
+	platform_log("firefight: spawn points: %d, %d with no ground under them, %d on ground the players cannot "
+		"walk to (%s, %d starting groups)", g_spawn_point_count, no_ground, cut_off,
+		filter_groups ? "walkable groups" : "no walkable groups", seed_count);
+	if (kept < FF_REACH_LEAST)
+	{
+		/* (too few: the grounded ones, else all as they were) */
+		short grounded_count = 0;
+
+		for (i = 0; i < g_spawn_point_count; i++)
+			grounded_count += grounded[i] ? 1 : 0;
+		platform_log("firefight: spawn points: only %d would be left: keeping %s", kept,
+			grounded_count >= FF_REACH_LEAST ? "those with ground" : "them all");
+		for (i = 0; i < g_spawn_point_count; i++)
+			reachable[i] = grounded_count >= FF_REACH_LEAST ? grounded[i] : TRUE;
+	}
+	kept = 0;
+	for (i = 0; i < g_spawn_point_count; i++)
+	{
+		if (!reachable[i])
+			continue;
+		g_spawn_points[kept] = g_spawn_points[i];
+		g_spawn_facings[kept] = g_spawn_facings[i];
+		kept++;
+	}
+	g_spawn_point_count = kept;
+	reach_release();
+}
+
 static void ensure_active_firefight_structure_bsp(void)
 {
 	struct scenario *scen = global_scenario_get();
@@ -947,6 +1275,7 @@ static void ensure_active_firefight_structure_bsp(void)
 		}
 	}
 	g_spawn_point_count = write_idx;
+	filter_unreachable_spawn_points();
 }
 
 boolean firefight_select_player_spawn_point(
@@ -1638,7 +1967,10 @@ static short select_wave_spawn_zones(
 	}
 
 	if (g_spawn_point_count == 0)
+	{
 		discover_map_spawn_points();
+		filter_unreachable_spawn_points();
+	}
 
 	/* Pass 1: Strict safe distance from living players (>= 16u), generators (>= 12u), and player spawns (>= 10u) */
 	for (i = 0; i < g_spawn_point_count; i++)
@@ -1802,15 +2134,45 @@ static short select_wave_spawn_zones(
 		}
 	}
 
+	/* (no spot of the map's: a ring about the first player, each spot this
+	side of the structure with ground under it, nearer where 20 units is
+	behind a wall; one of none such is the ring's as it was) */
 	if (selected == 0 && human_count > 0)
 	{
+		short tries;
+
 		for (s = 0; s < desired_zones; s++)
 		{
 			real angle = (real)s * (2.0f * 3.14159265f / (real)desired_zones) + spawner_rand_range(0.0f, 1.0f);
 			real_point3d candidate = player_positions[0];
-			candidate.x += (real)cos(angle) * 20.0f;
-			candidate.y += (real)sin(angle) * 20.0f;
-			candidate.z += 0.3f;
+			boolean found = FALSE;
+
+			for (tries = 0; tries < 8 && !found; tries++)
+			{
+				real try_angle = angle + (real)tries * 0.785398f;
+				real reach;
+
+				for (reach = 20.0f; reach >= 8.0f && !found; reach -= 4.0f)
+				{
+					candidate = player_positions[0];
+					candidate.x += (real)cos(try_angle) * reach;
+					candidate.y += (real)sin(try_angle) * reach;
+					candidate.z += 0.3f;
+					if (spot_reachable_from(&player_positions[0], &candidate))
+					{
+						found = TRUE;
+						angle = try_angle;
+					}
+				}
+			}
+			if (!found)
+			{
+				candidate = player_positions[0];
+				candidate.x += (real)cos(angle) * 20.0f;
+				candidate.y += (real)sin(angle) * 20.0f;
+				candidate.z += 0.3f;
+				platform_log("firefight: no open ground about the player for a wave's spot: one 20 units off");
+			}
 			out_zones[selected] = candidate;
 			out_facings[selected] = angle + 3.14159265f;
 			selected++;
@@ -2127,9 +2489,12 @@ static long spawn_single_actor_at(
 	if (forced_team_index == NONE && is_custom_enemy(variant_tag_index))
 		forced_team_index = _game_team_covenant;
 
+	/* (about the zone's spot, not through a wall nor off a ledge from it) */
 	pos = *base_pos;
 	pos.x += spawner_rand_range(-1.8f, 1.8f);
 	pos.y += spawner_rand_range(-1.8f, 1.8f);
+	if (!spot_reachable_from(base_pos, &pos))
+		pos = *base_pos;
 	pos.z += 0.25f;
 
 	object_placement_data_new(&placement, variant_def->unit_reference.index, NONE);
@@ -3658,6 +4023,8 @@ static long spawn_specific_enemy_vehicle_at(
 		{
 			placement.position.x += spawner_rand_range(-2.0f, 2.0f);
 			placement.position.y += spawner_rand_range(-2.0f, 2.0f);
+			if (!is_banshee && !spot_reachable_from(zone, &placement.position))
+				placement.position = *zone;
 		}
 		if (is_banshee)
 			placement.position.z += 9.0f;
@@ -5841,10 +6208,12 @@ static void map_content_list_read(char const *map_name)
 	memset(g_mc_list.counts, 0, sizeof(g_mc_list.counts));
 	g_mc_list.kinds = 0;
 	/* (the game's own maps have none of their own: only a Custom Edition
-	map's file is read, its tags' names alone) */
+	map's or an MCC map's file is read, its tags' names alone) */
 	stem = tag_name_strip_path(map_name);
 	if (custom_edition_level_name(map_name) && !is_stock_map_stem(stem))
 		custom_edition_map_tag_names_walk(map_name, map_content_kinds_visit, NULL);
+	else if (mcc_level_name(map_name))
+		mcc_cache_tag_names_walk(map_name, map_content_kinds_visit, NULL);
 	snprintf(g_mc_list.map, sizeof(g_mc_list.map), "%s", map_name);
 	error(_error_silent, "firefight: %s's own content: %d enemies, %d weapons, %d vehicles", map_name,
 		g_mc_list.counts[0], g_mc_list.counts[1], g_mc_list.counts[2]);

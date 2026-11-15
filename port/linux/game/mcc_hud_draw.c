@@ -211,11 +211,33 @@ struct hud_absolute_placement_definition const *mcc_hud_child_placement(
 {
     unsigned short child;
     if (!mcc_cache_tags_loaded()) return parent;
+    /* An imported (native) element's bytes there are not an MCC anchor. */
+    if (!mcc_cache_contains(element,8)) return parent;
     memcpy(&child,(unsigned char const *)element+6,sizeof(child));
     if (!child || child>9) return parent;
     *storage=*parent;
     storage->corner=(short)(child-1);
     return storage;
+}
+
+/* An imported (native) HUD on an MCC map: its placements were never
+ * converted (mcc_hud.c), yet a bitmap it names by a name the map already has
+ * is the map's own, drawn at MCC resolution. Give that bitmap the size MCC's
+ * conversion gives its own placements; a native bitmap keeps scale 1. */
+real mcc_hud_foreign_bitmap_scale(void const *placement, struct bitmap_data const *bitmap)
+{
+    if (!mcc_cache_tags_loaded() || !placement || !bitmap) return 1.0f;
+    if (mcc_cache_contains(placement,sizeof(struct hud_placement_definition))) return 1.0f;
+    if (!mcc_cache_contains(bitmap,sizeof(*bitmap)) || bitmap->tag_index==NONE) return 1.0f;
+    return mcc_hud_bitmap_scale(bitmap->tag_index);
+}
+
+/* The digits of an MCC map's own number bitmaps are drawn on its canvas;
+ * a copied-in (native) digit bitmap keeps the native size. */
+boolean mcc_hud_digits_on_canvas(void const *bitmap_group)
+{
+    return mcc_cache_tags_loaded() && bitmap_group &&
+        mcc_cache_contains(bitmap_group,sizeof(struct bitmap_group));
 }
 
 real mcc_hud_canvas_scale(void)
@@ -228,6 +250,8 @@ real mcc_hud_bitmap_scale(long bitmap_group_index)
     struct bitmap_group const *group;
     if (!mcc_cache_tags_loaded() || bitmap_group_index==NONE) return 1.0f;
     group=bitmap_group_get(bitmap_group_index);
+    /* A bitmap copied into the level (Firefight's weapons) keeps native size. */
+    if (!mcc_cache_contains(group,sizeof(*group))) return 1.0f;
     return group->flags&(0x10|0x80) ? 0.25f : 0.5f;
 }
 
@@ -352,6 +376,8 @@ boolean mcc_hud_anchor_point(short anchor, struct hud_placement_definition const
     rectangle2d frame;
     long horizontal_inset;
     if (!mcc_cache_tags_loaded() || anchor<0 || anchor>8 || anchor==4) return FALSE;
+    /* An imported (native) HUD keeps the native layout and safe frame. */
+    if (anchor<4 && placement && !mcc_cache_contains(placement,sizeof(*placement))) return FALSE;
     if (anchor<4 && (mcc_native_view || (mcc_weapon_frame!=NONE ? mcc_weapon_frame :
         placement->pad==MCC_HUD_NATIVE_FRAME))) return FALSE;
     horizontal_inset=halo_screen_width()/20;

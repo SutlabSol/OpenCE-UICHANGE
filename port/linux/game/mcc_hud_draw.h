@@ -15,6 +15,8 @@ struct icon_hud_element_definition;
 /* Neutral for every non-MCC cache. No native or CE tag is rewritten. */
 real mcc_hud_canvas_scale(void);
 real mcc_hud_bitmap_scale(long bitmap_group_index);
+real mcc_hud_foreign_bitmap_scale(void const *placement, struct bitmap_data const *bitmap);
+boolean mcc_hud_digits_on_canvas(void const *bitmap_group);
 void mcc_hud_mask_begin(struct bitmap_data const *bitmap);
 void mcc_hud_mask_end(void);
 void mcc_hud_mask_transform(struct bitmap_data const *bitmap,

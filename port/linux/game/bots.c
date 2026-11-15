@@ -8530,3 +8530,34 @@ void bots_update_actions(struct player_action *actions)
 		bots_vehicle_census();
 	}
 }
+
+/* port: a bot's goal and path, by its unit, for ai_falls.c's trails; 0 for
+a unit no bot drives */
+int bots_describe_unit(long unit_index, char *text, int size)
+{
+	static char const *const goals[] = { "none", "objective", "enemy", "roam", "item", "vehicle" };
+	long index;
+
+	if (unit_index == NONE || !bots_game_allowed())
+		return 0;
+	for (index = 0; index < BOTS_MAXIMUM; index++)
+	{
+		struct bots_bot const *bot = &bots_globals.bots[index];
+		struct player_datum *player;
+
+		if (bot->player_index == NONE || (player = player_try_and_get(bot->player_index)) == NULL ||
+			player->unit_index != unit_index)
+		{
+			continue;
+		}
+		snprintf(text, (size_t)size, "bot goal=%s (%.1f %.1f %.1f) path=%s/%d failures=%ld%s%s%s",
+			bot->goal_kind >= 0 && bot->goal_kind < (short)NUMBEROF(goals) ? goals[bot->goal_kind] : "?",
+			bot->goal_point.x, bot->goal_point.y, bot->goal_point.z,
+			bot->path.valid ? "yes" : "no", (int)bot->path.step_count, bot->path_failures,
+			bot->goal_exact ? " exact" : "",
+			bot->via_teleporter ? " via-teleporter" : "",
+			bot->shortcut_phase != _bots_shortcut_none ? " shortcut" : "");
+		return 1;
+	}
+	return 0;
+}
