@@ -3097,6 +3097,22 @@ void ui_widgets_close_all_for_local_player(
 	return;
 }
 
+/* port: the screen Back goes to from a local player's screen (the top of its
+history: the lobby's Server Setup, menu_functions.c's lobby_leave), NONE for
+none */
+long ui_widget_port_back_screen_tag(
+	short local_player_index)
+{
+	struct widget_stack_node *top;
+
+	if (local_player_index == NONE)
+		local_player_index = 0;
+	if (local_player_index < 0 || local_player_index >= MAXIMUM_NUMBER_OF_LOCAL_PLAYERS)
+		return NONE;
+	top = widget_globals.widget_stack[local_player_index];
+	return top ? top->data.previous_widget_tag : NONE;
+}
+
 void ui_widgets_delete_history(
 	void)
 {

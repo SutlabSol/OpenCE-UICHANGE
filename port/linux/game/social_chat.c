@@ -128,6 +128,9 @@ are kept in memory alone, gone with the game.
 #include <stdio.h>
 #include <string.h>
 
+/* (bots.c's: a bot setting Firefight keeps apart from multiplayer's) */
+char const *bots_setting_key(char const *name);
+
 void platform_log(char const *format, ...);
 unsigned long system_milliseconds(void);
 unsigned long config_changes(void);
@@ -2207,8 +2210,8 @@ static void social_chat_player_pick(
 		{
 			char count[16];
 
-			snprintf(count, sizeof(count), "%ld", MAX(config_integer("bots.count") - 1, 0L));
-			config_write("bots.count", count);
+			snprintf(count, sizeof(count), "%ld", MAX(config_integer(bots_setting_key("bots.count")) - 1, 0L));
+			config_write(bots_setting_key("bots.count"), count);
 		}
 		social_chat_player_close();
 		break;

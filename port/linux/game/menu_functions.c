@@ -1222,6 +1222,8 @@ static boolean campaign_menu_initialize(struct widget_instance *list, short cont
 }
 
 boolean multiplayer_firefight_mode(void);
+/* (bots.c's: the bots' settings Firefight keeps apart from multiplayer's) */
+char const *bots_setting_key(char const *name);
 
 /* (PLAY's menu) "port play init": DAILY CHALLENGE only with
 game.daily_challenge on (off, Back takes its place) */
@@ -13757,12 +13759,12 @@ static void server_settings_update(struct widget_instance *list)
 			if (bots)
 			{
 				long max_bots = pve_bots ? (long)FIREFIGHT_MAX_BOTS : (long)BOTS_MAXIMUM;
-				long count = PIN(config_integer("bots.count"), 0, max_bots);
-				char const *skill = config_string("bots.skill");
+				long count = PIN(config_integer(bots_setting_key("bots.count")), 0, max_bots);
+				char const *skill = config_string(bots_setting_key("bots.skill"));
 				char value[64];
 				short index;
 
-				if (!config_boolean("bots.enabled") || !count)
+				if (!config_boolean(bots_setting_key("bots.enabled")) || !count)
 					snprintf(value, sizeof(value), "OFF");
 				else if (pve_bots)
 				{
@@ -17053,6 +17055,20 @@ lobby_add_player) */
 /* "port lobby leave" (B): a player leaves the game, the machine's last
 leaving it (TRUE: back from the lobby); a controller not playing cancels
 ADD PLAYER */
+long ui_widget_port_back_screen_tag(short local_player_index);
+void network_game_server_pause_countdown(void *server, boolean pause_countdown);
+
+/* whether the host's lobby goes back to Server Setup (the game being set up,
+not one played: after a game the lobby is the only screen) */
+static boolean lobby_back_to_server_setup(struct widget_instance *widget)
+{
+	struct widget_instance *top = widget ? screen_of(widget) : NULL;
+	long back = ui_widget_port_back_screen_tag(top ? top->local_player_index : NONE);
+	char const *name = back != NONE ? tag_get_name(back) : NULL;
+
+	return global_network_game_server_get() && name && strstr(name, "server_settings") != NULL;
+}
+
 static boolean lobby_leave(struct widget_instance *widget, struct event_record *event, short controller,
 	boolean *widget_deleted)
 {
@@ -17060,6 +17076,22 @@ static boolean lobby_leave(struct widget_instance *widget, struct event_record *
 	{
 		lobby_join_reset();
 		return FALSE;
+	}
+	/* (the host's player 1 back to Server Setup: the game kept as it is, its
+	players in it, the countdown stopped till START GAME opens the lobby
+	again. Leaving it (the player out, the server let go for a game no other
+	machine joins) left Server Setup's START GAME with no game to start) */
+	if (lobby_back_to_server_setup(widget))
+	{
+		short other;
+
+		for (other = 0; other < MAXIMUM_LOCAL_PLAYERS; other++)
+		{
+			if (other != controller && lobby_controller_playing(other))
+				return ui_widget_port_unjoin_player(widget, event, widget_deleted);
+		}
+		network_game_server_pause_countdown(global_network_game_server_get(), TRUE);
+		return TRUE;
 	}
 	return ui_widget_port_unjoin_player(widget, event, widget_deleted);
 }
@@ -19779,6 +19811,13 @@ static boolean text_chat_locked(struct gametype_option const *option)
 
 /* an option of the host's own setting: the value shown for it (the one
 set, else the nearest) */
+/* the setting an option of the host's own sets: a bot setting Firefight's own
+in a Firefight game (bots_setting_key) */
+static char const *gametype_option_setting_key(struct gametype_option const *option)
+{
+	return bots_setting_key(option->setting);
+}
+
 static short gametype_option_setting_index(struct gametype_option const *option)
 {
 	struct pc_menu_setting setting;
@@ -19786,11 +19825,11 @@ static short gametype_option_setting_index(struct gametype_option const *option)
 	short index;
 
 	csmemset(&setting, 0, sizeof(setting));
-	setting.setting = option->setting;
+	setting.setting = gametype_option_setting_key(option);
 	setting.value_count = option->count;
 	for (index = 0; index < option->count; index++)
 		setting.values[index] = option->setting_values[index];
-	if (!setting_text(option->setting, text, sizeof(text), FALSE))
+	if (!setting_text(gametype_option_setting_key(option), text, sizeof(text), FALSE))
 		return 0;
 	return setting_value_index(&setting, text);
 }
@@ -19952,9 +19991,9 @@ static void gametype_options_each(struct widget_instance *list, boolean save)
 						gametype_option_setting_index(option);
 				}
 				else if (!text_chat_locked(option) && index != gametype_option_setting_index(option) &&
-					!setting_write(option->setting, option->setting_values[index]))
+					!setting_write(gametype_option_setting_key(option), option->setting_values[index]))
 				{
-					platform_log("menus: could not set %s", option->setting);
+					platform_log("menus: could not set %s", gametype_option_setting_key(option));
 				}
 				continue;
 			}
@@ -19996,9 +20035,9 @@ static void setting_options_each(struct widget_instance *list, boolean save)
 					gametype_option_setting_index(option);
 			}
 			else if (!text_chat_locked(option) && index != gametype_option_setting_index(option) &&
-				!setting_write(option->setting, option->setting_values[index]))
+				!setting_write(gametype_option_setting_key(option), option->setting_values[index]))
 			{
-				platform_log("menus: could not set %s", option->setting);
+				platform_log("menus: could not set %s", gametype_option_setting_key(option));
 			}
 		}
 	}

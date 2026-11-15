@@ -431,7 +431,13 @@ static struct skull_set config_set(void)
 
 	if (!config_boolean("game.skulls"))
 		return skull_set_none();
-	if (game && game->variant.game_engine_index != game_engine_none && !skulls_firefight_mode())
+	/* (a multiplayer game's none; Firefight's its own, its variant's starting
+	skulls and those its rounds turn on (firefight.c): the campaign's
+	game.skulls_active, which only the campaign's skulls screen writes, as it
+	starts a level, are not carried over) */
+	if (skulls_firefight_mode())
+		return skull_set_none();
+	if (game && game->variant.game_engine_index != game_engine_none)
 		return skull_set_none();
 
 	return skull_set_intersection(skulls_set_from_text(config_string("game.skulls_active")), skulls_unlocked_set());

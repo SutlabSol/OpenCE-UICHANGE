@@ -1084,6 +1084,16 @@ static const struct config_setting config_settings[] =
 		"names begin with [BOT]. In a game, the console's add_bot and drop_bot\n"
 		"(add_bot_red, drop_bot_blue...) add or take one. 0: none, as in the\n"
 		"stock game." },
+	{ "bots.firefight_enabled", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Firefight's bots.enabled: whether bots join a Firefight game hosted here\n"
+		"as the players' allies (Firefight's BOTS screen), kept apart from a\n"
+		"multiplayer game's." },
+	{ "bots.firefight_count", _config_integer, "0", NULL, _environment_value, _platform_all,
+		"Firefight's bots.count: the bots in a Firefight game hosted here (0 to 16),\n"
+		"kept apart from a multiplayer game's." },
+	{ "bots.firefight_skill", _config_string, "\"distributed\"", NULL, _environment_value, _platform_all,
+		"Firefight's bots.skill (the same words), kept apart from a multiplayer\n"
+		"game's." },
 	{ "bots.keep_min", _config_boolean, "true", "HALO_BOTS_KEEP_MIN", _environment_value, _platform_all,
 		"In a system link or internet game hosted here: a player who joins takes\n"
 		"a bot's place (20 bots, one joins: 19 bots and the player), and a bot\n"

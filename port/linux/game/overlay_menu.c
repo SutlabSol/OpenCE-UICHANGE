@@ -183,6 +183,9 @@ enum overlay_entry_state
 struct overlay_folder;
 struct overlay_source;
 
+/* (bots.c's: a bot setting Firefight keeps apart from multiplayer's) */
+char const *bots_setting_key(char const *name);
+
 struct overlay_entry
 {
 	short type;
@@ -654,7 +657,8 @@ static boolean overlay_entry_on(
 		return config_integer(entry->state_name) != 0;
 	case _overlay_state_config_equals:
 	{
-		char const *word = config_string(entry->state_name);
+		/* (a bot setting: Firefight's own in a Firefight game, bots.c) */
+		char const *word = config_string(bots_setting_key(entry->state_name));
 
 		return word && entry->state_text && !strcmp(word, entry->state_text);
 	}
@@ -1341,6 +1345,7 @@ static void overlay_choose(
 	struct overlay_entry *entry;
 	char const *command;
 	char why[128];
+	char mapped_command[128];
 	char status[96];
 	boolean on;
 
@@ -1399,6 +1404,15 @@ static void overlay_choose(
 	default:
 		on = TRUE;
 		command = entry->command;
+		/* (a setting's choice: written to the setting the game at hand keeps,
+		a bot setting Firefight's own in a Firefight game: bots.c) */
+		if (entry->state == _overlay_state_config_equals && entry->state_name && entry->state_text &&
+			strcmp(bots_setting_key(entry->state_name), entry->state_name))
+		{
+			snprintf(mapped_command, sizeof(mapped_command), "config %s %s", bots_setting_key(entry->state_name),
+				entry->state_text);
+			command = mapped_command;
+		}
 		break;
 	}
 	if (!command)

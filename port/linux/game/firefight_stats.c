@@ -579,13 +579,9 @@ boolean firefight_stats_achievements_disabled(void)
 	}
 	if (skull_active(_skull_bandanna) || skull_active(_skull_scarab) || skull_active(_skull_envy))
 		return TRUE;
-	if (config_boolean("game.skulls") &&
-		(skull_set_has(&active_cfg, _skull_bandanna) ||
-		 skull_set_has(&active_cfg, _skull_scarab) ||
-		 skull_set_has(&active_cfg, _skull_envy)))
-	{
-		return TRUE;
-	}
+	/* (the campaign's skulls setting is not Firefight's: skull_active has
+	those the game has on) */
+	(void)active_cfg;
 	return FALSE;
 }
 

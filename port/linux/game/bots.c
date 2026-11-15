@@ -1127,6 +1127,34 @@ static char const *bots_setting_string(char const *variable, char const *name)
 	return value && value[0] ? value : config_string(name);
 }
 
+/* (menu_functions.c's: a Firefight game being set up) */
+boolean multiplayer_firefight_mode(void);
+
+/* The setting a bot setting is kept in for the game at hand: Firefight's
+own (bots.firefight_enabled, _count, _skill: the allies of a Firefight game,
+remembered apart from a multiplayer game's bots), else the name as it is.
+The teams and KEEP COUNT are shared (Firefight's bots are on the players'
+side, and keep their count as any game's). */
+char const *bots_setting_key(char const *name)
+{
+	static char const *const keys[][2] =
+	{
+		{ "bots.enabled", "bots.firefight_enabled" },
+		{ "bots.count", "bots.firefight_count" },
+		{ "bots.skill", "bots.firefight_skill" },
+	};
+	short index;
+
+	if (!name || !(firefight_active() || multiplayer_firefight_mode()))
+		return name;
+	for (index = 0; index < (short)NUMBEROF(keys); index++)
+	{
+		if (!strcmp(name, keys[index][0]))
+			return keys[index][1];
+	}
+	return name;
+}
+
 static long bots_count_override = -1;
 
 #if OPENCE_ENABLE_FORGE
@@ -1147,16 +1175,20 @@ long bots_wanted_count(void)
 		return 0;
 #endif
 	/* (BOTS: OFF keeps bots.count's number for later) */
-	if (bots_count_override < 0 && !config_boolean("bots.enabled"))
+	if (bots_count_override < 0 && !config_boolean(bots_setting_key("bots.enabled")))
 		return 0;
-	count = bots_count_override >= 0 ? bots_count_override : bots_setting_integer("HALO_BOTS", "bots.count");
+	count = bots_count_override >= 0 ? bots_count_override : bots_setting_integer("HALO_BOTS", bots_setting_key("bots.count"));
+	/* (Firefight's as its BOTS screen shows them, FIREFIGHT_MAX_BOTS at most:
+	bots.count is every game's, and a multiplayer game's 127 stayed in it) */
+	if (bots_count_override < 0 && (firefight_active() || multiplayer_firefight_mode()) && count > FIREFIGHT_MAX_BOTS)
+		count = FIREFIGHT_MAX_BOTS;
 
 	return count < 0 ? 0 : count > BOTS_MAXIMUM ? BOTS_MAXIMUM : count;
 }
 
 short bots_skill(void)
 {
-	char const *name = bots_setting_string("HALO_BOT_SKILL", "bots.skill");
+	char const *name = bots_setting_string("HALO_BOT_SKILL", bots_setting_key("bots.skill"));
 	short skill;
 
 	if (!strcmp(name, "distributed"))
@@ -1224,7 +1256,7 @@ float bots_score_multiplier_penalty(void)
 {
 	if (bots_wanted_count() <= 0)
 		return 0.0f;
-	return bots_difficulty_multiplier_penalty(bots_difficulty_from_string(config_string("bots.skill")));
+	return bots_difficulty_multiplier_penalty(bots_difficulty_from_string(config_string(bots_setting_key("bots.skill"))));
 }
 
 /* whether this machine hosts a game bots may play in: any multiplayer game
