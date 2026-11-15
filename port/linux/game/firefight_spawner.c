@@ -37,6 +37,9 @@ Friendly AI Reinforcements, and Round-Scheduled Player Vehicles.
 #include "memory/data.h"
 #include "networking/network_game_globals.h"
 #include "objects/damage.h"
+#include "game/game_globals.h"
+#include "objects/damage_effect_definitions.h"
+#include "items/projectile_definitions.h"
 #include "objects/objects.h"
 #include "models/model_definitions.h"
 #include "physics/collision_bsp_definitions.h"
@@ -266,6 +269,7 @@ static boolean map_vehicles_only(void);
 static long pick_map_vehicle(boolean heavy, boolean custom_only);
 static long pick_map_weapon(boolean heavy, boolean custom_only);
 static boolean map_weapons_only(void);
+static boolean weapon_tag_stock(char const *name, char const *lowered);
 static boolean vehicle_tag_flies(long vehicle_tag);
 static boolean vehicle_tag_hovers(long vehicle_tag);
 
@@ -2930,6 +2934,22 @@ char const *firefight_unit_own_weapon_label(long unit_index)
 	return NULL;
 }
 
+/* a wave enemy's weapons taken for one of a weapon tag */
+static void firefight_give_enemy_weapon(long unit_index, long definition)
+{
+	struct object_placement_data placement;
+	long weapon_index;
+
+	object_placement_data_new(&placement, definition, NONE);
+	object_get_origin(unit_index, &placement.position);
+	weapon_index = object_new(&placement);
+	if (weapon_index == NONE)
+		return;
+	unit_delete_all_weapons(unit_index);
+	if (!unit_add_weapon_to_inventory(unit_index, weapon_index, _unit_add_weapon_replace))
+		object_delete(weapon_index);
+}
+
 /* a wave enemy armed by ENEMY LOADOUT, with what it can hold of the choice
 (Flood infection forms, carriers and the like hold nothing, and keep what
 they have). Humans' first, then the Covenant's */
@@ -2992,14 +3012,34 @@ static void firefight_arm_wave_enemy(long unit_index)
 	}
 	if (!count)
 		return;
-	object_placement_data_new(&placement, held[spawner_rand() % (unsigned long)count], NONE);
-	object_get_origin(unit_index, &placement.position);
-	weapon_index = object_new(&placement);
-	if (weapon_index == NONE)
+	firefight_give_enemy_weapon(unit_index, held[spawner_rand() % (unsigned long)count]);
+}
+
+/* the percent of wave enemies given one of the map's own weapons with
+INCLUDE MAP (ONLY MAP's all that can hold one), ENEMY LOADOUT's DEFAULT */
+#define FF_MAP_WEAPON_ENEMY_PERCENT 40
+
+/* a wave enemy of DEFAULT's ENEMY LOADOUT, with MAP CONTENT's weapons on,
+given one of the map's that its unit has the animations to hold (a weapon of
+a label it has: no animations borrowed, as ENEMY LOADOUT's choices do) */
+static void firefight_arm_wave_enemy_map(long unit_index)
+{
+	long held[MAX_ROSTER_VARIANTS];
+	boolean only = map_weapons_only();
+	short count = 0;
+	short i;
+
+	if (map_content_of(FIREFIGHT_MAP_CONTENT_WEAPONS_OFF) == _firefight_map_content_vanilla || ff_map_weapon_count <= 0)
 		return;
-	unit_delete_all_weapons(unit_index);
-	if (!unit_add_weapon_to_inventory(unit_index, weapon_index, _unit_add_weapon_replace))
-		object_delete(weapon_index);
+	if (!only && (long)(spawner_rand() % 100) >= FF_MAP_WEAPON_ENEMY_PERCENT)
+		return;
+	for (i = 0; i < ff_map_weapon_count; i++)
+	{
+		if ((only || !ff_map_weapon_stock[i]) && unit_can_hold_weapon_definition(unit_index, ff_map_weapon_tags[i]))
+			held[count++] = ff_map_weapon_tags[i];
+	}
+	if (count)
+		firefight_give_enemy_weapon(unit_index, held[spawner_rand() % (unsigned long)count]);
 }
 
 static long spawn_subtype_actor_at(
@@ -3047,6 +3087,11 @@ static long spawn_subtype_actor_at(
 	if (firefight_enemy_weapons_borrowed())
 	{
 		firefight_arm_wave_enemy(unit_index);
+	}
+	else if (!force_sword)
+	{
+		/* (MAP CONTENT: the map's own weapons in enemies' hands too) */
+		firefight_arm_wave_enemy_map(unit_index);
 	}
 	else if (force_sword)
 	{
@@ -4690,6 +4735,151 @@ static boolean drop_area_nearest(real_point3d const *point, real_point3d *area);
 
 void firefight_ordnance_preview_refusals(char *text, long size);
 
+/* ---- What the pods hold: of two pools, the regular weapons and the heavy
+(power) ones, each gone through in a shuffled order before any comes again
+(a bag each, kept from drop to drop), a pod a heavy one
+FF_ORDNANCE_HEAVY_PERCENT of the time (a heavy drop's first pod for each
+player always). The game's: the standard and power weapons the level has;
+INCLUDE MAP's the map's own beside them, ONLY MAP's the map's alone (each
+by its damage: map_weapon_heavy); and the variant's profile's, one for each
+player, of a bag of its own. */
+
+#define FF_ORDNANCE_HEAVY_PERCENT 30
+#define FF_ORDNANCE_BAG_SIZE 96
+
+enum
+{
+	_ff_ordnance_bag_regular,
+	_ff_ordnance_bag_heavy,
+	_ff_ordnance_bag_custom,
+	NUMBER_OF_FF_ORDNANCE_BAGS
+};
+
+static struct
+{
+	long tags[FF_ORDNANCE_BAG_SIZE];
+	short count;
+	short next;
+	unsigned long signature;
+} g_ordnance_bags[NUMBER_OF_FF_ORDNANCE_BAGS];
+
+static void ordnance_pool_add(long *pool, short *count, long tag)
+{
+	short index;
+
+	if (tag == NONE || *count >= FF_ORDNANCE_BAG_SIZE)
+		return;
+	for (index = 0; index < *count; index++)
+	{
+		if (pool[index] == tag)
+			return;
+	}
+	pool[(*count)++] = tag;
+}
+
+static void ordnance_bag_shuffle(short bag)
+{
+	short index;
+
+	for (index = (short)(g_ordnance_bags[bag].count - 1); index > 0; index--)
+	{
+		short other = (short)(spawner_rand() % (unsigned long)(index + 1));
+		long swap = g_ordnance_bags[bag].tags[index];
+
+		g_ordnance_bags[bag].tags[index] = g_ordnance_bags[bag].tags[other];
+		g_ordnance_bags[bag].tags[other] = swap;
+	}
+	g_ordnance_bags[bag].next = 0;
+}
+
+/* the next of a bag's weapons (its pool new: shuffled again); NONE for an
+empty pool */
+static long ordnance_bag_next(short bag, long const *pool, short count)
+{
+	unsigned long signature = 2166136261UL;
+	short index;
+
+	for (index = 0; index < count; index++)
+		signature = (signature ^ (unsigned long)pool[index]) * 16777619UL;
+	if (signature != g_ordnance_bags[bag].signature || count != g_ordnance_bags[bag].count)
+	{
+		csmemcpy(g_ordnance_bags[bag].tags, pool, (size_t)count * sizeof(long));
+		g_ordnance_bags[bag].count = count;
+		g_ordnance_bags[bag].signature = signature;
+		ordnance_bag_shuffle(bag);
+	}
+	if (count <= 0)
+		return NONE;
+	if (g_ordnance_bags[bag].next >= count)
+	{
+		long last = g_ordnance_bags[bag].tags[count - 1];
+
+		ordnance_bag_shuffle(bag);
+		/* (not the one just given first again) */
+		if (count > 1 && g_ordnance_bags[bag].tags[0] == last)
+		{
+			g_ordnance_bags[bag].tags[0] = g_ordnance_bags[bag].tags[count - 1];
+			g_ordnance_bags[bag].tags[count - 1] = last;
+		}
+	}
+	return g_ordnance_bags[bag].tags[g_ordnance_bags[bag].next++];
+}
+
+/* (a weapon one of the game's: imported, or the map's own of a stock name) */
+static boolean ordnance_tag_stock(long tag_index)
+{
+	char lowered[256];
+	char const *name = tag_get_name(tag_index);
+
+	if (!name)
+		return FALSE;
+	lowercase_copy(name, lowered, sizeof(lowered));
+	return !tag_is_maps_own(tag_index) || weapon_tag_stock(name, lowered);
+}
+
+/* the pools of a drop: regular and heavy weapons, as the header says */
+static void ordnance_pools_build(long *regular, short *regular_count, long *heavy, short *heavy_count)
+{
+	byte mode = map_content_of(FIREFIGHT_MAP_CONTENT_WEAPONS_OFF);
+	boolean only = map_weapons_only();
+	short index;
+
+	*regular_count = 0;
+	*heavy_count = 0;
+	if (!only)
+	{
+		/* (the game's own alone: a map's weapon of a like name is MAP
+		CONTENT's) */
+		for (index = 0; index < ff_standard_weapon_tag_count; index++)
+		{
+			short power;
+			boolean is_power = FALSE;
+
+			for (power = 0; power < ff_power_weapon_tag_count; power++)
+				is_power |= ff_power_weapon_tags[power] == ff_standard_weapon_tags[index];
+			if (!is_power && ordnance_tag_stock(ff_standard_weapon_tags[index]))
+				ordnance_pool_add(regular, regular_count, ff_standard_weapon_tags[index]);
+		}
+		for (index = 0; index < ff_power_weapon_tag_count; index++)
+		{
+			if (ordnance_tag_stock(ff_power_weapon_tags[index]))
+				ordnance_pool_add(heavy, heavy_count, ff_power_weapon_tags[index]);
+		}
+	}
+	if (only || mode == _firefight_map_content_include_map)
+	{
+		for (index = 0; index < ff_map_weapon_count; index++)
+		{
+			if (!only && ff_map_weapon_stock[index])
+				continue;
+			if (ff_map_weapon_power[index])
+				ordnance_pool_add(heavy, heavy_count, ff_map_weapon_tags[index]);
+			else
+				ordnance_pool_add(regular, regular_count, ff_map_weapon_tags[index]);
+		}
+	}
+}
+
 void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 {
 	real_point3d player_positions[16];
@@ -4798,39 +4988,50 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 	g_pod_held_count = 0;
 
 	/* What the pods hold, full of ammunition, scaling with player numbers (up
-	to 8 players' worth, a weapon a pod):
-	 * - Rounds 1-5: 1 Pistol, 1 Assault Rifle, 1 Shotgun
-	 * - Rounds 3-5: + 1 Sniper Rifle
-	 * - Rounds 4-5 (or a heavy drop): + 1 Rocket Launcher
-	 * - the variant's profile's weapon, and INCLUDE MAP's one of the map's own;
-	 * ONLY MAP: the map's own weapons in the game's place (3 each, and a power
-	 * weapon from round 3), the game's where the map has none */
-	for (p = 0; p < MIN(total_players, 8); p++)
+	to 8 players' worth, a weapon a pod): 3 for each player, 4 from round 3, and
+	one more on a heavy drop (round 4 on, or one called for anti-armour), each
+	of the bags above; and one of the variant's profile's for each player */
 	{
+		long regular[FF_ORDNANCE_BAG_SIZE];
+		long heavy_pool[FF_ORDNANCE_BAG_SIZE];
+		long custom[FF_ORDNANCE_BAG_SIZE];
+		short regular_count;
+		short heavy_count;
+		short custom_count = 0;
 		boolean heavy = round_num >= 4 || heavy_anti_armor;
+		short pods = (short)(3 + (round_num >= 3 ? 1 : 0) + (heavy ? 1 : 0));
 
-		if (map_weapons_only())
+		ordnance_pools_build(regular, &regular_count, heavy_pool, &heavy_count);
+		for (i = 0; i < ff_custom_weapon_count; i++)
+			ordnance_pool_add(custom, &custom_count, ff_custom_weapon_tags[i]);
+		/* (none of a pool: the other's, the game's few by name the last) */
+		if (!regular_count && !heavy_count)
 		{
-			pod_contents_add(pick_map_weapon(FALSE, FALSE));
-			pod_contents_add(pick_map_weapon(FALSE, FALSE));
-			pod_contents_add(pick_map_weapon(FALSE, FALSE));
-			if (round_num >= 3 || heavy)
-				pod_contents_add(pick_map_weapon(TRUE, FALSE));
+			ordnance_pool_add(regular, &regular_count, pistol_weap);
+			ordnance_pool_add(regular, &regular_count, ar_weap);
+			ordnance_pool_add(heavy_pool, &heavy_count, shotgun_weap);
+			ordnance_pool_add(heavy_pool, &heavy_count, sniper_weap);
+			ordnance_pool_add(heavy_pool, &heavy_count, rocket_weap);
 		}
-		else
+		for (p = 0; p < MIN(total_players, 8); p++)
 		{
-			pod_contents_add(pistol_weap);
-			pod_contents_add(ar_weap);
-			pod_contents_add(shotgun_weap);
-			if (round_num >= 3)
-				pod_contents_add(sniper_weap);
-			if (heavy)
-				pod_contents_add(rocket_weap);
-			if (map_content_of(FIREFIGHT_MAP_CONTENT_WEAPONS_OFF) == _firefight_map_content_include_map)
-				pod_contents_add(pick_map_weapon(heavy, TRUE));
+			short pod;
+
+			for (pod = 0; pod < pods; pod++)
+			{
+				boolean heavy_pod = (heavy && pod == 0) ||
+					(long)(spawner_rand() % 100) < FF_ORDNANCE_HEAVY_PERCENT;
+
+				if (heavy_pod && !heavy_count)
+					heavy_pod = FALSE;
+				else if (!heavy_pod && !regular_count)
+					heavy_pod = TRUE;
+				pod_contents_add(heavy_pod ? ordnance_bag_next(_ff_ordnance_bag_heavy, heavy_pool, heavy_count) :
+					ordnance_bag_next(_ff_ordnance_bag_regular, regular, regular_count));
+			}
+			if (custom_count)
+				pod_contents_add(ordnance_bag_next(_ff_ordnance_bag_custom, custom, custom_count));
 		}
-		/* (and one of the variant's weapons for each player) */
-		pod_contents_add(pick_custom_weapon(heavy));
 	}
 
 	/* where each pod lands (ordnance_pod_spot), apart from each other: round
@@ -5957,6 +6158,64 @@ static boolean map_weapon_power(char const *lowered)
 	return name_has_word(lowered, power_words);
 }
 
+/* a map weapon a heavy drop's (a power weapon) by its damage: its
+projectiles explode (detonation damage FF_HEAVY_EXPLOSION_DAMAGE or more,
+FF_HEAVY_EXPLOSION_RADIUS across or wider), or a trigger pull does
+FF_HEAVY_SHOT_DAMAGE or more (its projectiles' impact or detonation damage,
+all of a shot's: a shotgun's pellets); one with no damage to read (a melee
+weapon's) by its words. Each written to the log, to tune these by */
+#define FF_HEAVY_SHOT_DAMAGE 70.0f
+#define FF_HEAVY_EXPLOSION_DAMAGE 30.0f
+#define FF_HEAVY_EXPLOSION_RADIUS 1.5f
+
+static real damage_effect_upper(long damage_tag, real *radius)
+{
+	struct damage_effect_definition const *effect;
+
+	if (damage_tag == NONE || !tag_index_is_group(damage_tag, DAMAGE_EFFECT_DEFINITION_TAG))
+		return 0.0f;
+	effect = (struct damage_effect_definition const *)tag_get(DAMAGE_EFFECT_DEFINITION_TAG, damage_tag);
+	if (!effect || !(effect->damage.damage_upper_bound >= 0.0f) || effect->damage.damage_upper_bound > 100000.0f)
+		return 0.0f;
+	if (radius)
+		*radius = effect->cutoff_radius;
+	return effect->damage.damage_upper_bound;
+}
+
+static boolean map_weapon_heavy(long weapon_tag, char const *lowered)
+{
+	struct weapon_definition const *definition = weapon_definition_get(weapon_tag);
+	real shot_damage = 0.0f;
+	boolean explosive = FALSE;
+	boolean heavy;
+	long index;
+
+	for (index = 0; definition && index < definition->weapon.triggers.count; index++)
+	{
+		struct weapon_trigger_definition const *trigger = TAG_BLOCK_GET_ELEMENT(&definition->weapon.triggers, index,
+			struct weapon_trigger_definition);
+		struct projectile_definition const *projectile;
+		real radius = 0.0f;
+		real impact;
+		real detonation;
+
+		if (trigger->projectile.index == NONE || !tag_index_is_group(trigger->projectile.index, PROJECTILE_DEFINITION_TAG))
+			continue;
+		projectile = projectile_definition_get(trigger->projectile.index);
+		if (!projectile)
+			continue;
+		impact = damage_effect_upper(projectile->projectile.impact_damage.index, NULL);
+		detonation = damage_effect_upper(projectile->projectile.attached_detonation_damage.index, &radius);
+		if (detonation >= FF_HEAVY_EXPLOSION_DAMAGE && radius >= FF_HEAVY_EXPLOSION_RADIUS)
+			explosive = TRUE;
+		shot_damage = MAX(shot_damage, MAX(impact, detonation) * (real)MAX(1, trigger->projectiles_per_shot));
+	}
+	heavy = explosive || shot_damage >= FF_HEAVY_SHOT_DAMAGE || (shot_damage <= 0.0f && map_weapon_power(lowered));
+	error(_error_silent, "firefight: map weapon %s: %.0f a shot%s: %s", tag_get_name(weapon_tag), shot_damage,
+		explosive ? ", explosive" : "", heavy ? "HEAVY" : "regular");
+	return heavy;
+}
+
 /* whether a vehicle is one of the game's own, as stock Halo has them */
 static boolean vehicle_tag_stock(char const *lowered)
 {
@@ -6000,11 +6259,93 @@ static boolean map_weapon_name_usable(char const *lowered)
 		strstr(lowered, "needler\\needler"));
 }
 
+/* whether a weapon has what a player's or an enemy's needs (as the Tag
+Injector's needs list has it: tag_injector.c's preview_needs): its model and
+collision (lying on the ground), its first-person model and animations, its
+HUD, and a projectile a trigger fires (none at all: a melee weapon's, by its
+name) */
+static boolean map_weapon_complete(struct weapon_definition const *definition, char const *lowered)
+{
+	struct weapon_interface_definition const *interface = &definition->weapon.interface_definition;
+	boolean fires = FALSE;
+	long index;
+
+	if (definition->object.model.index == NONE || definition->object.collision_model.index == NONE ||
+		interface->first_person_model.index == NONE || interface->first_person_animations.index == NONE ||
+		interface->hud_interface.index == NONE)
+	{
+		return FALSE;
+	}
+	for (index = 0; index < definition->weapon.triggers.count; index++)
+	{
+		struct weapon_trigger_definition const *trigger = TAG_BLOCK_GET_ELEMENT(&definition->weapon.triggers, index,
+			struct weapon_trigger_definition);
+
+		if (trigger->projectile.index != NONE)
+			fires = TRUE;
+	}
+	return fires || strstr(lowered, "sword") || strstr(lowered, "hammer") || strstr(lowered, "melee");
+}
+
+/* whether a weapon is a vehicle's alone: a vehicle starts with it, and no
+biped nor any actor variant has it */
+static boolean map_weapon_vehicles_only(long weapon_tag)
+{
+	struct tag_iterator iter;
+	long tag_index;
+	boolean vehicles = FALSE;
+	long index;
+
+	tag_iterator_new(&iter, VEHICLE_DEFINITION_TAG);
+	while (!vehicles && (tag_index = tag_iterator_next(&iter)) != NONE)
+	{
+		struct unit_definition const *unit = (struct unit_definition const *)tag_get(VEHICLE_DEFINITION_TAG, tag_index);
+
+		for (index = 0; unit && index < unit->unit.initial_weapons.count && !vehicles; index++)
+		{
+			/* (a unit's initial weapon: its reference first, 0x24 bytes) */
+			struct tag_reference const *reference = (struct tag_reference const *)((byte const *)
+				unit->unit.initial_weapons.address + index * 0x24);
+
+			vehicles = reference->index == weapon_tag;
+		}
+	}
+	if (!vehicles)
+		return FALSE;
+	tag_iterator_new(&iter, BIPED_DEFINITION_TAG);
+	while ((tag_index = tag_iterator_next(&iter)) != NONE)
+	{
+		struct unit_definition const *unit = (struct unit_definition const *)tag_get(BIPED_DEFINITION_TAG, tag_index);
+
+		for (index = 0; unit && index < unit->unit.initial_weapons.count; index++)
+		{
+			struct tag_reference const *reference = (struct tag_reference const *)((byte const *)
+				unit->unit.initial_weapons.address + index * 0x24);
+
+			if (reference->index == weapon_tag)
+				return FALSE;
+		}
+	}
+	tag_iterator_new(&iter, ACTOR_VARIANT_DEFINITION_TAG);
+	while ((tag_index = tag_iterator_next(&iter)) != NONE)
+	{
+		struct actor_variant_definition const *variant = actor_variant_definition_get(tag_index);
+
+		if (variant && variant->ranged_combat.reference.index == weapon_tag &&
+			variant->unit_reference.index != NONE && tag_index_is_group(variant->unit_reference.index, BIPED_DEFINITION_TAG))
+		{
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
 static boolean map_weapon_usable(long weapon_tag, char const *lowered)
 {
 	struct weapon_definition *definition = weapon_definition_get(weapon_tag);
 
-	return definition && !((definition->weapon.flags >> 3) & 1) && map_weapon_name_usable(lowered);
+	return definition && !((definition->weapon.flags >> 3) & 1) && map_weapon_name_usable(lowered) &&
+		map_weapon_complete(definition, lowered) && !map_weapon_vehicles_only(weapon_tag);
 }
 
 /* (by its name: an actor variant that fights, not the cinematics' nor the
@@ -6017,6 +6358,7 @@ static boolean map_enemy_name_fights(char const *lowered)
 }
 
 static boolean map_content_custom_off(byte custom_bit, short kind, long tag_index);
+static boolean map_content_custom_on_by_hand(byte custom_bit, short kind, long tag_index);
 
 static void scan_map_content(void)
 {
@@ -6086,13 +6428,21 @@ static void scan_map_content(void)
 		if (!tag_is_maps_own(tag_index))
 			continue;
 		lowercase_copy(tag_get_name(tag_index), lowered, sizeof(lowered));
-		if (!map_weapon_usable(tag_index, lowered) ||
+		/* (one that is not usable alone where CUSTOM has it turned on by hand;
+		those of vehicles and the like are kept for them all the same) */
+		if (!map_weapon_name_usable(lowered) ||
+			(!map_weapon_usable(tag_index, lowered) &&
+				!map_content_custom_on_by_hand(FIREFIGHT_MAP_CONTENT_WEAPONS_CUSTOM, _firefight_map_content_kind_weapons,
+					tag_index)) ||
 			map_content_custom_off(FIREFIGHT_MAP_CONTENT_WEAPONS_CUSTOM, _firefight_map_content_kind_weapons, tag_index))
 		{
+			if (map_weapon_name_usable(lowered) && !map_weapon_usable(tag_index, lowered))
+				error(_error_silent, "firefight: MAP CONTENT leaves %s out (not a weapon players or enemies can use)",
+					tag_get_name(tag_index));
 			continue;
 		}
 		ff_map_weapon_tags[ff_map_weapon_count] = tag_index;
-		ff_map_weapon_power[ff_map_weapon_count] = map_weapon_power(lowered);
+		ff_map_weapon_power[ff_map_weapon_count] = map_weapon_heavy(tag_index, lowered);
 		ff_map_weapon_stock[ff_map_weapon_count++] = weapon_tag_stock(tag_get_name(tag_index), lowered);
 	}
 
@@ -6139,6 +6489,10 @@ static struct
 	byte kinds;
 	short counts[NUMBER_OF_FIREFIGHT_MAP_CONTENT_KINDS];
 	char names[NUMBER_OF_FIREFIGHT_MAP_CONTENT_KINDS][FF_MC_LIST_MAX][FF_MC_NAME_SIZE];
+	/* (those found not usable, by firefight_map_content_check: off unless
+	turned on by hand) */
+	boolean unusable[NUMBER_OF_FIREFIGHT_MAP_CONTENT_KINDS][FF_MC_LIST_MAX];
+	boolean checked;
 } g_mc_list;
 
 /* (the saved file's section for one map: its byte, the tags turned off) */
@@ -6206,6 +6560,8 @@ static void map_content_list_read(char const *map_name)
 	if (!map_name || !map_name[0] || !strcmp(g_mc_list.map, map_name))
 		return;
 	memset(g_mc_list.counts, 0, sizeof(g_mc_list.counts));
+	memset(g_mc_list.unusable, 0, sizeof(g_mc_list.unusable));
+	g_mc_list.checked = FALSE;
 	g_mc_list.kinds = 0;
 	/* (the game's own maps have none of their own: only a Custom Edition
 	map's or an MCC map's file is read, its tags' names alone) */
@@ -6240,6 +6596,44 @@ char const *firefight_map_content_tag_name(char const *map_name, short kind, sho
 	if (index < 0 || index >= firefight_map_content_tag_count(map_name, kind))
 		return NULL;
 	return g_mc_list.names[kind][index];
+}
+
+void firefight_map_content_check(char const *map_name, boolean (*usable)(short kind, char const *tag_name))
+{
+	short kind;
+	short index;
+
+	if (!map_name || !map_name[0] || !usable)
+		return;
+	map_content_list_read(map_name);
+	if (g_mc_list.checked)
+		return;
+	g_mc_list.checked = TRUE;
+	for (kind = 0; kind < NUMBER_OF_FIREFIGHT_MAP_CONTENT_KINDS; kind++)
+	{
+		for (index = 0; index < g_mc_list.counts[kind]; index++)
+		{
+			g_mc_list.unusable[kind][index] = !usable(kind, g_mc_list.names[kind][index]);
+			if (g_mc_list.unusable[kind][index])
+				error(_error_silent, "firefight: %s's %s is not usable: off unless turned on", map_name,
+					g_mc_list.names[kind][index]);
+		}
+	}
+}
+
+boolean firefight_map_content_tag_usable(char const *map_name, short kind, char const *tag_name)
+{
+	short index;
+
+	if (kind < 0 || kind >= NUMBER_OF_FIREFIGHT_MAP_CONTENT_KINDS || !tag_name)
+		return TRUE;
+	map_content_list_read(map_name);
+	for (index = 0; index < g_mc_list.counts[kind]; index++)
+	{
+		if (!strcmp(g_mc_list.names[kind][index], tag_name))
+			return !g_mc_list.unusable[kind][index];
+	}
+	return TRUE;
 }
 
 /* (the saved file's section for the map, read once for each map asked of) */
@@ -6359,48 +6753,64 @@ void firefight_map_content_save(char const *map_name, byte content)
 	map_content_saved_write();
 }
 
-/* (a tag on unless the map's section turns it off, by its name) */
+/* (the map's section's choice of a tag, by its name: its kind's letter
+turns it off, the letter in capitals on by hand, a tag not usable) */
 static short map_content_saved_find(short kind, char const *tag_name)
 {
 	short index;
 
 	for (index = 0; index < g_mc_saved.count; index++)
 	{
-		if (g_mc_saved.kinds[index] == ff_mc_kind_letters[kind] && !strcmp(g_mc_saved.names[index], tag_name))
+		if ((g_mc_saved.kinds[index] == ff_mc_kind_letters[kind] ||
+			g_mc_saved.kinds[index] == ff_mc_kind_letters[kind] - 'a' + 'A') && !strcmp(g_mc_saved.names[index], tag_name))
+		{
 			return index;
+		}
 	}
 	return NONE;
+}
+
+/* (its choice, else on if usable) */
+static boolean map_content_tag_on_usable(char const *map_name, short kind, char const *tag_name, boolean usable)
+{
+	short found;
+
+	map_content_saved_read(map_name);
+	found = map_content_saved_find(kind, tag_name);
+	if (found == NONE)
+		return usable;
+	return g_mc_saved.kinds[found] != ff_mc_kind_letters[kind];
 }
 
 boolean firefight_map_content_tag_on(char const *map_name, short kind, char const *tag_name)
 {
 	if (kind < 0 || kind >= NUMBER_OF_FIREFIGHT_MAP_CONTENT_KINDS || !tag_name)
 		return TRUE;
-	map_content_saved_read(map_name);
-	return map_content_saved_find(kind, tag_name) == NONE;
+	return map_content_tag_on_usable(map_name, kind, tag_name, firefight_map_content_tag_usable(map_name, kind, tag_name));
 }
 
 void firefight_map_content_tag_set(char const *map_name, short kind, char const *tag_name, boolean on)
 {
 	short found;
+	boolean usable;
 
 	if (kind < 0 || kind >= NUMBER_OF_FIREFIGHT_MAP_CONTENT_KINDS || !tag_name || !tag_name[0])
 		return;
+	usable = firefight_map_content_tag_usable(map_name, kind, tag_name);
 	map_content_saved_read(map_name);
 	if (!g_mc_saved.map[0])
 		return;
 	found = map_content_saved_find(kind, tag_name);
-	if (on == (found == NONE))
-		return;
-	if (on)
+	if (found != NONE)
 	{
 		memmove(&g_mc_saved.kinds[found], &g_mc_saved.kinds[found + 1], (size_t)(g_mc_saved.count - found - 1));
 		memmove(g_mc_saved.names[found], g_mc_saved.names[found + 1], (size_t)(g_mc_saved.count - found - 1) * FF_MC_NAME_SIZE);
 		g_mc_saved.count--;
 	}
-	else if (g_mc_saved.count < FF_MC_SAVED_MAX)
+	/* (off: its letter; on, of one not usable: in capitals; else nothing) */
+	if ((!on || !usable) && g_mc_saved.count < FF_MC_SAVED_MAX)
 	{
-		g_mc_saved.kinds[g_mc_saved.count] = ff_mc_kind_letters[kind];
+		g_mc_saved.kinds[g_mc_saved.count] = on ? (char)(ff_mc_kind_letters[kind] - 'a' + 'A') : ff_mc_kind_letters[kind];
 		snprintf(g_mc_saved.names[g_mc_saved.count++], FF_MC_NAME_SIZE, "%s", tag_name);
 	}
 	map_content_saved_write();
@@ -6415,7 +6825,20 @@ static boolean map_content_custom_off(byte custom_bit, short kind, long tag_inde
 
 	if (!opts || !(opts->firefight_map_content & custom_bit) || !loaded || !loaded[0] || tag_index == NONE)
 		return FALSE;
-	return !firefight_map_content_tag_on(loaded, kind, tag_get_name(tag_index));
+	/* (the tags here are those already found usable, or turned on by hand) */
+	return !map_content_tag_on_usable(loaded, kind, tag_get_name(tag_index), TRUE);
+}
+
+/* (in the game: whether CUSTOM has a tag of the map's that is not usable
+turned on by hand) */
+static boolean map_content_custom_on_by_hand(byte custom_bit, short kind, long tag_index)
+{
+	struct game_variant_options const *opts = game_variant_options_get();
+	char const *loaded = cache_file_loaded_map_name();
+
+	if (!opts || !(opts->firefight_map_content & custom_bit) || !loaded || !loaded[0] || tag_index == NONE)
+		return FALSE;
+	return map_content_tag_on_usable(loaded, kind, tag_get_name(tag_index), FALSE);
 }
 
 /* whether MAP CONTENT has the map's weapons in place of the game's: ONLY

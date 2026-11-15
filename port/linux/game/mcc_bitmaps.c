@@ -330,6 +330,41 @@ static void mcc_bitmap_decode(unsigned char const *input,uint32_t *output,
     }
 }
 
+/* (port) A level of a bitmap's pixels as 0xAARRGGBB texels, the top row
+ * first, for the menus' previews (mcc_tag_preview.c): no loading pulse, no
+ * channel reordering. 0 for a format not decoded, or too few bytes. */
+int mcc_bitmaps_decode_texels(void const *input,uint32_t input_bytes,uint32_t *output,
+    unsigned width,unsigned height,short format)
+{
+    unsigned char const *source=input;
+    int bytes_per_pixel=mcc_bitmap_bytes(format);
+    uint64_t need;
+    unsigned x,y;
+    if (!source || !output || !width || !height) return 0;
+    if (bytes_per_pixel) need=(uint64_t)width*height*(unsigned)bytes_per_pixel;
+    else if (format>=14 && format<=18 && format!=17) need=(uint64_t)((width+3)/4)*((height+3)/4)*(format==14 ? 8 : 16);
+    else return 0;
+    if (need>input_bytes) return 0;
+    if (bytes_per_pixel) {
+        for (x=0;x<width*height;x++) output[x]=mcc_pixel(source+x*(unsigned)bytes_per_pixel,format);
+        return 1;
+    }
+    for (y=0;y<height;y+=4) for (x=0;x<width;x+=4) {
+        unsigned char rgba[64];
+        unsigned dx,dy;
+        if (format==14) bcdec_bc1(source,rgba,16);
+        else if (format==15) bcdec_bc2(source,rgba,16);
+        else if (format==16) bcdec_bc3(source,rgba,16);
+        else bcdec_bc7(source,rgba,16);
+        source+=format==14 ? 8 : 16;
+        for (dy=0;dy<4 && y+dy<height;dy++) for (dx=0;dx<4 && x+dx<width;dx++) {
+            unsigned char const *p=rgba+(dy*4+dx)*4;
+            output[(y+dy)*width+x+dx]=p[2]|((uint32_t)p[1]<<8)|((uint32_t)p[0]<<16)|((uint32_t)p[3]<<24);
+        }
+    }
+    return 1;
+}
+
 static uint32_t mcc_morton_axis(unsigned value,unsigned width,unsigned height,unsigned depth,unsigned axis)
 {
     unsigned dimensions[3]={width,height,depth},bit,position=0,n;

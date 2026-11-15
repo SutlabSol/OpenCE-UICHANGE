@@ -116,6 +116,7 @@ symbols in this file:
 
 #include "mcc_hud_draw.h" /* port: port/linux/game/mcc_hud_draw.c */
 #include "mcc_cache.h" /* port: preserve MCC-authored gameplay icons */
+#include "tag_editor.h" /* port: port/linux/game/tag_editor.c */
 #include "cseries/cseries.h"
 
 #include "cseries/errors.h"
@@ -1972,6 +1973,14 @@ void hud_messaging_update(
 				item = item_definition_get(message->item_definition_index);
 				string_index = item->item.hud_message_index + message_offset;
 				item_text = hud_get_item_string(string_index);
+				/* port: an imported weapon's on a map with item texts of its own
+				(port/linux/game/tag_editor.c) */
+				{
+					unsigned short const *imported = tag_editor_imported_item_text(message->item_definition_index);
+
+					if (imported && !message->quantity)
+						item_text = (wchar_t const *)imported;
+				}
 				if ((message->message_offset == NONE && message_offset) ||
 					message->quantity)
 				{

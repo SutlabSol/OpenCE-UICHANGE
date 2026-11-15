@@ -1046,6 +1046,9 @@ static void crosshairs_draw(
 				boolean in_multiplayer = local_player_count() > 1;
 				short crosshair_index;
 
+				/* port: an imported HUD on an MCC map (mcc_hud_draw.c) */
+				mcc_hud_foreign_begin(definition);
+
 				for (crosshair_index = 0;
 					crosshair_index < definition->crosshairs.count;
 					crosshair_index++)
@@ -1365,6 +1368,7 @@ static void crosshairs_draw(
 
 	/* port: other HUD elements keep their ordinary anchors */
 	passenger_camera_reticle_end();
+	mcc_hud_foreign_begin(NULL);
 	match_assert_stack_frame("c:\\halo\\SOURCE\\interface\\hud_weapon.c", 0x4E2);
 	return;
 }
@@ -1421,6 +1425,8 @@ static void render_weapon_hud(
 		sizeof(stack_buffer));
 	definition = weapon_hud_interface_definition_get(hud_index);
 	hud_state = get_hud_state(local_player_index);
+	/* port: an imported HUD on an MCC map (mcc_hud_draw.c) */
+	mcc_hud_foreign_begin(definition);
 
 	if (TEST_FLAG(
 		definition->flash_cutoffs.flags,
@@ -1951,6 +1957,7 @@ static void render_weapon_hud(
 		}
 	}
 
+	mcc_hud_foreign_begin(NULL);
 	match_assert_stack_frame("c:\\halo\\SOURCE\\interface\\hud_weapon.c", 0x308);
 	return;
 }

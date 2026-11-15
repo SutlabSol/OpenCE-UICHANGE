@@ -924,6 +924,12 @@ short firefight_map_content_tag_count(char const *map_name, short kind);
 char const *firefight_map_content_tag_name(char const *map_name, short kind, short index);
 boolean firefight_map_content_tag_on(char const *map_name, short kind, char const *tag_name);
 void firefight_map_content_tag_set(char const *map_name, short kind, char const *tag_name, boolean on);
+/* the menu's check of a map's own (its tags opened for their previews): a
+tag found not usable (a weapon a vehicle's, or missing what a player needs)
+is off unless turned on by hand; and whether one was found usable (TRUE
+before any check) */
+void firefight_map_content_check(char const *map_name, boolean (*usable)(short kind, char const *tag_name));
+boolean firefight_map_content_tag_usable(char const *map_name, short kind, char const *tag_name);
 boolean firefight_map_content_saved(char const *map_name, byte *content);
 void firefight_map_content_save(char const *map_name, byte content);
 /* (actors.c) the team of a unit an actor takes */

@@ -220,14 +220,24 @@ struct hud_absolute_placement_definition const *mcc_hud_child_placement(
     return storage;
 }
 
-/* An imported (native) HUD on an MCC map: its placements were never
+/* An imported (native) weapon HUD on an MCC map: its placements were never
  * converted (mcc_hud.c), yet a bitmap it names by a name the map already has
  * is the map's own, drawn at MCC resolution. Give that bitmap the size MCC's
- * conversion gives its own placements; a native bitmap keeps scale 1. */
+ * conversion gives its own placements; a native bitmap keeps scale 1.
+ * Whether the HUD is imported is its tag's (hud_weapon.c sets it about each
+ * weapon HUD's drawing): its placements reach the draw as copies, which no
+ * map owns (a crosshair's). */
+static boolean mcc_hud_foreign;
+
+void mcc_hud_foreign_begin(void const *definition)
+{
+    mcc_hud_foreign=mcc_cache_tags_loaded() && definition && !mcc_cache_contains(definition,4);
+}
+
 real mcc_hud_foreign_bitmap_scale(void const *placement, struct bitmap_data const *bitmap)
 {
-    if (!mcc_cache_tags_loaded() || !placement || !bitmap) return 1.0f;
-    if (mcc_cache_contains(placement,sizeof(struct hud_placement_definition))) return 1.0f;
+    (void)placement;
+    if (!mcc_hud_foreign || !mcc_cache_tags_loaded() || !bitmap) return 1.0f;
     if (!mcc_cache_contains(bitmap,sizeof(*bitmap)) || bitmap->tag_index==NONE) return 1.0f;
     return mcc_hud_bitmap_scale(bitmap->tag_index);
 }
@@ -377,7 +387,7 @@ boolean mcc_hud_anchor_point(short anchor, struct hud_placement_definition const
     long horizontal_inset;
     if (!mcc_cache_tags_loaded() || anchor<0 || anchor>8 || anchor==4) return FALSE;
     /* An imported (native) HUD keeps the native layout and safe frame. */
-    if (anchor<4 && placement && !mcc_cache_contains(placement,sizeof(*placement))) return FALSE;
+    if (anchor<4 && mcc_hud_foreign) return FALSE;
     if (anchor<4 && (mcc_native_view || (mcc_weapon_frame!=NONE ? mcc_weapon_frame :
         placement->pad==MCC_HUD_NATIVE_FRAME))) return FALSE;
     horizontal_inset=halo_screen_width()/20;

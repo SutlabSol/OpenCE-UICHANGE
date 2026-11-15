@@ -61,6 +61,7 @@ A client of a network game changes nothing: it plays the host's.
 #include "effects/effect_definitions.h"
 #include "game/game_globals.h"
 #include "game/players.h"
+#include "interface/hud.h"
 #include "interface/hud_definitions.h"
 #include "interface/weapon_hud_interface_definition.h"
 #include "items/projectile_definitions.h"
@@ -79,6 +80,7 @@ A client of a network game changes nothing: it plays the host's.
 #include "tag_injector.h"
 #include "tag_multiplayer.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2382,6 +2384,93 @@ static void capture_end(
 
 /* ---------- public code */
 
+/* (tag_import.c's, custom_edition_cache.c's and mcc_cache.c's; the tag
+files' group test) */
+int tag_import_tag_imported(long tag_index);
+boolean tag_index_is_group(long tag_index, long group_tag);
+boolean custom_edition_cache_tags_loaded(void);
+boolean mcc_cache_tags_loaded(void);
+
+/* An imported weapon's pickup prompt on a Custom Edition or MCC map: its
+HUD's messaging icon is a sequence of the game's icon sheet, but the HUD
+globals' sheet it is drawn from is the map's (imported tags take none of a
+name the map has), its icons elsewhere, and its item texts are the map's
+too. Words instead: the weapon's name, of its tag's leaf ("mp_" off, each
+word capitalized). NULL (as before) on the game's own maps, for the map's own
+weapons, or where the sheet was imported too. */
+static unsigned short const *tag_editor_imported_pickup_text(
+	long weapon,
+	char const *name,
+	unsigned char *text_wanted,
+	unsigned short *text)
+{
+	struct weapon_definition const *definition = weapon_definition_get(weapon);
+	char const *leaf;
+	boolean word_start = TRUE;
+	short index;
+	short length = 0;
+
+	if (!definition || (!custom_edition_cache_tags_loaded() && !mcc_cache_tags_loaded()) || !hud_globals ||
+		definition->weapon.interface_definition.hud_interface.index == NONE ||
+		!tag_import_tag_imported(definition->weapon.interface_definition.hud_interface.index) ||
+		hud_globals->messaging.messaging_icons.index == NONE ||
+		tag_import_tag_imported(hud_globals->messaging.messaging_icons.index))
+	{
+		return NULL;
+	}
+	leaf = strrchr(name, '\\');
+	leaf = leaf ? leaf + 1 : name;
+	if (!_strnicmp(leaf, "mp_", 3))
+		leaf += 3;
+	for (index = 0; leaf[index] && length < RENAME_LENGTH; index++)
+	{
+		char character = leaf[index] == '_' ? ' ' : leaf[index];
+
+		if (character == ' ')
+		{
+			word_start = TRUE;
+			if (length && text[length - 1] != ' ')
+				text[length++] = ' ';
+			continue;
+		}
+		text[length++] = (unsigned short)(unsigned char)(word_start ? toupper((unsigned char)character) : character);
+		word_start = FALSE;
+	}
+	while (length && text[length - 1] == ' ')
+		length--;
+	text[length] = 0;
+	if (!length)
+		return NULL;
+	*text_wanted = TRUE;
+	return text;
+}
+
+unsigned short const *tag_editor_imported_item_text(
+	long item)
+{
+	static unsigned short text[RENAME_LENGTH + 16];
+	static char const prefix[] = "Picked up ";
+	unsigned short name[RENAME_LENGTH + 1];
+	unsigned char wanted = FALSE;
+	char const *tag_name = item == NONE ? NULL : tag_get_name(item);
+	short length = 0;
+	short index;
+
+	if (!tag_name || !tag_index_is_group(item, WEAPON_DEFINITION_TAG) || !tag_import_tag_imported(item) ||
+		!hud_globals || hud_globals->messaging.hud_item_messages.index == NONE ||
+		tag_import_tag_imported(hud_globals->messaging.hud_item_messages.index) ||
+		!tag_editor_imported_pickup_text(item, tag_name, &wanted, name))
+	{
+		return NULL;
+	}
+	for (index = 0; prefix[index]; index++)
+		text[length++] = (unsigned short)prefix[index];
+	for (index = 0; name[index] && length < (short)NUMBEROF(text) - 1; index++)
+		text[length++] = name[index];
+	text[length] = 0;
+	return text;
+}
+
 unsigned short const *tag_editor_pickup_text(
 	long weapon,
 	unsigned char *text_wanted)
@@ -2394,11 +2483,11 @@ unsigned short const *tag_editor_pickup_text(
 	short index;
 
 	*text_wanted = FALSE;
-	if (profile == NONE || !name)
+	if (!name)
 		return NULL;
-	tag = port_tag_profiles_tag_find(profile, WEAPON_DEFINITION_TAG, name);
+	tag = profile == NONE ? NONE : port_tag_profiles_tag_find(profile, WEAPON_DEFINITION_TAG, name);
 	if (tag == NONE || strcmp(tag_injector_tag_setting(profile, tag, "pickup"), "text"))
-		return NULL;
+		return tag_editor_imported_pickup_text(weapon, name, text_wanted, text);
 	*text_wanted = TRUE;
 	typed = tag_injector_tag_setting(profile, tag, "pickup_text");
 	if (!typed || !typed[0])

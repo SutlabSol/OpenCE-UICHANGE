@@ -259,6 +259,11 @@ boolean tag_injector_map_tag_preview(
 	long index,
 	struct tag_injector_mesh *mesh,
 	struct tag_injector_needs *needs);
+/* whether the open map's tag of a category, by its name, has everything it
+needs (its needs list: none missing); TRUE for one not found */
+boolean tag_injector_map_tag_usable(
+	short category,
+	char const *tag_name);
 boolean tag_injector_profile_tag_preview(
 	long profile,
 	long tag,

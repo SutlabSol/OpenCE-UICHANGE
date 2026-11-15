@@ -20642,6 +20642,18 @@ static short map_content_tag_row(struct widget_instance *widget)
 	return NONE;
 }
 
+/* (firefight_map_content_check's: whether the open map's weapon has what a
+player needs, the MCC map's file read as it is, a Custom Edition map's by
+the Tag Injector; other kinds as they are) */
+static boolean map_content_tag_usable(short kind, char const *tag_name)
+{
+	if (kind != _firefight_map_content_kind_weapons)
+		return TRUE;
+	if (map_content_menu.previewing_mcc)
+		return mcc_tag_preview_weapon_usable(tag_name);
+	return tag_injector_map_tag_usable(_tag_injector_weapons, tag_name);
+}
+
 /* "map content tags init": the first row focused, and the map opened as the
 Tag Injector opens one, for its tags' models (tag_preview.c); "map content
 tags close" (the list's deleted) lets it go */
@@ -20659,12 +20671,15 @@ static boolean map_content_tags_initialize(struct widget_instance *list)
 	if (map_content_menu.previewing_mcc)
 	{
 		map_content_menu.previewing = TRUE;
+		firefight_map_content_check(server_settings_map_name(), map_content_tag_usable);
 		return TRUE;
 	}
 	map = tag_injector_maps_available(reason, sizeof(reason)) ? tag_injector_map_named(server_settings_map_name()) : NONE;
 	if (map != NONE && tag_injector_map_opened() != map && !tag_injector_map_open(map))
 		map = NONE;
 	map_content_menu.previewing = map != NONE;
+	if (map_content_menu.previewing)
+		firefight_map_content_check(server_settings_map_name(), map_content_tag_usable);
 	return TRUE;
 }
 
@@ -20776,7 +20791,10 @@ static void map_content_tags_update(struct widget_instance *list)
 			short character;
 
 			map_content_tag_preview(kind, tag_name);
-			snprintf(text, sizeof(text), "%s\n \nA turns it %s. Kept for this map.%s", tag_name, on ? "off" : "on",
+			snprintf(text, sizeof(text), "%s\n \nA turns it %s. Kept for this map.%s%s", tag_name, on ? "off" : "on",
+				firefight_map_content_tag_usable(map_name, kind, tag_name) ? "" :
+					"\n \nNot a weapon players or enemies can use (a vehicle's or turret's, or missing a model, "
+					"animations, a projectile or its HUD): off unless turned on.",
 				map_content_menu.previewing ? "" : "\n \n(No preview: the map's file could not be opened.)");
 			for (character = 0; text[character] && character < (short)NUMBEROF(wide) - 1; character++)
 				wide[character] = (wchar_t)(unsigned char)text[character];

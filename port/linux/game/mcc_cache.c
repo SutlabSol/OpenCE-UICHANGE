@@ -3,6 +3,7 @@
 #include "cseries.h"
 #include "errors.h"
 #include "cache/cache_files.h"
+#include "bitmaps/bitmap_group.h"
 #include "scenario/scenario_definitions.h"
 #include "interface/ui_widget.h"
 #include "mcc_cache.h"
@@ -653,14 +654,19 @@ struct mcc_raw_map {
     struct mcc_cache_identity identity;
     struct mcc_cache_report report;
     unsigned char *tags;
+    /* (its level's name and MCC resources alone: mcc_resources.c reads
+    bitmaps.map's pixels through a runtime) */
+    struct mcc_runtime runtime;
 };
 
 struct mcc_raw_map *mcc_cache_raw_open(char const *name)
 {
-    struct mcc_raw_map *map = calloc(1, sizeof(*map));
+    /* (malloc, not calloc: the game's free takes only what its malloc made) */
+    struct mcc_raw_map *map = malloc(sizeof(*map));
     enum mcc_cache_status status;
 
     if (!map) return NULL;
+    memset(map, 0, sizeof(*map));
     map->stream = mcc_open(mcc_identity_local_name(name), &map->source, &map->identity);
     if (!map->stream) {
         free(map);
@@ -674,12 +680,17 @@ struct mcc_raw_map *mcc_cache_raw_open(char const *name)
         mcc_cache_raw_close(map);
         return NULL;
     }
+    map->runtime.source = map->source;
+    map->runtime.report = map->report;
+    if (!mcc_package_name(mcc_identity_local_name(name), map->runtime.level_name))
+        map->runtime.level_name[0] = 0;
     return map;
 }
 
 void mcc_cache_raw_close(struct mcc_raw_map *map)
 {
     if (!map) return;
+    mcc_resources_dispose(&map->runtime);
     if (map->tags) free(map->tags);
     if (map->stream) fclose(map->stream);
     free(map);
@@ -712,4 +723,28 @@ boolean mcc_cache_raw_model_read(struct mcc_raw_map *map, boolean strip, unsigne
     end = strip ? map->report.model_bytes : map->report.model_vertex_bytes;
     if (start > end || offset > end - start || bytes > end - start - offset) return FALSE;
     return mcc_file_read(map->stream, map->report.model_file_offset + start + (uint32_t)offset, (uint32_t)bytes, out);
+}
+
+boolean mcc_cache_raw_bitmap_read(struct mcc_raw_map *map, unsigned long bitmap_handle, short bitmap_index,
+    struct bitmap_data const *bitmap, unsigned long bytes, void *out)
+{
+    if (!map || !bitmap || !out || !bytes || bitmap->pixels_size <= 0 || bytes > (unsigned long)bitmap->pixels_size)
+        return FALSE;
+    /* (bit 8: its pixels in bitmaps.map, as "<tag name>_<index>", or in its
+    tag's "<tag name>__pixels": mcc_bitmaps.c's mcc_texture_prepare) */
+    if (bitmap->flags & 0x100) {
+        unsigned char *entry = mcc_cache_raw_entry(map, bitmap_handle & 0xFFFF);
+        char const *tag_name;
+        char resource_name[272], group_name[272];
+        if (!entry || mcc_wire_u32(entry + 12) != (uint32_t)bitmap_handle || !map->runtime.level_name[0]) return FALSE;
+        tag_name = mcc_cache_raw_pointer(map, mcc_wire_u32(entry + 16), 1);
+        if (!tag_name || !memchr(tag_name, 0, MIN(256u, (unsigned)(map->tags + map->identity.tag_data_size -
+            (unsigned char const *)tag_name)))) return FALSE;
+        snprintf(resource_name, sizeof(resource_name), "%s_%u", tag_name, (unsigned)bitmap_index);
+        snprintf(group_name, sizeof(group_name), "%s__pixels", tag_name);
+        return mcc_resources_read(&map->runtime, 1, resource_name, (uint32_t)bitmap->pixels_offset, (uint32_t)bytes,
+            out, group_name) ? TRUE : FALSE;
+    }
+    return (uint64_t)(uint32_t)bitmap->pixels_offset + bytes <= map->source.size &&
+        map->source.read(map->source.context, (uint32_t)bitmap->pixels_offset, (uint32_t)bytes, out) ? TRUE : FALSE;
 }

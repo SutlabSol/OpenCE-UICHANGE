@@ -2804,6 +2804,39 @@ boolean tag_injector_map_tag_preview(
 	return TRUE;
 }
 
+boolean tag_injector_map_tag_usable(
+	short category,
+	char const *tag_name)
+{
+	struct preview_source source;
+	struct tag_injector_needs needs;
+	long count = tag_injector_category_count(category);
+	long index;
+	short need;
+
+	if (!tag_name)
+		return TRUE;
+	for (index = 0; index < count; index++)
+	{
+		long absolute = menu_tag(category, index);
+
+		if (absolute == NONE || _stricmp(menu_tag_name(absolute), tag_name))
+			continue;
+		memset(&source, 0, sizeof(source));
+		custom_edition_cache_bundle_source(&source.map);
+		preview_needs(&source, tag_injector_menu.header->instances[absolute].base_address,
+			(unsigned long)tag_injector_menu.header->instances[absolute].group_tag, &needs);
+		for (need = 0; need < needs.count; need++)
+		{
+			if (needs.needs[need].state == _tag_injector_need_missing)
+				return FALSE;
+		}
+		return TRUE;
+	}
+	/* (one not found: as it was, usable) */
+	return TRUE;
+}
+
 boolean tag_injector_profile_tag_preview(
 	long profile,
 	long tag,

@@ -40,5 +40,10 @@ unsigned long mcc_cache_raw_tag_count(struct mcc_raw_map const *map);
 unsigned char *mcc_cache_raw_entry(struct mcc_raw_map *map, unsigned long index);
 boolean mcc_cache_raw_model_read(struct mcc_raw_map *map, boolean strip, unsigned long offset,
     unsigned long bytes, void *out);
+/* The first `bytes` of a bitmap's pixels (a bitmap of the bitmap tag of that
+handle, at that index of it): the map's own, or MCC's bitmaps.map's */
+struct bitmap_data;
+boolean mcc_cache_raw_bitmap_read(struct mcc_raw_map *map, unsigned long bitmap_handle, short bitmap_index,
+    struct bitmap_data const *bitmap, unsigned long bytes, void *out);
 
 #endif
