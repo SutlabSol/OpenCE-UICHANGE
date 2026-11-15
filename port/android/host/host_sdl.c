@@ -881,11 +881,112 @@ int host_sdl_show_toast(const char *message, int duration, int gravity, int x, i
 #endif
 }
 
+/* ---------- a dialog over the game's window */
+
+#ifdef HALO_MACOS
+/* the game's windows as a dialog shows and after: a window kept in relative
+mouse mode takes the mouse back to its middle as it becomes key again during
+the dialog's modal loop (leaving fullscreen is an animation, which ends with
+the window made key), and the keys then go to it, which reads no events
+until the dialog is answered: the mouse is stuck, Escape does nothing and the
+app cannot be quit. So the windows give up the mouse and fullscreen, the
+change of Space done before the dialog, which is a sheet on the window */
+#define DIALOG_WINDOWS 4
+
+struct dialog_windows
+{
+	int count;
+	SDL_Window *windows[DIALOG_WINDOWS];
+	bool relative[DIALOG_WINDOWS];
+	bool grabbed[DIALOG_WINDOWS];
+	bool fullscreen[DIALOG_WINDOWS];
+};
+
+static SDL_Window *dialog_windows_release(struct dialog_windows *saved)
+{
+	SDL_Window *parent = NULL;
+	SDL_Window **windows;
+	int count = 0;
+	int index;
+
+	memset(saved, 0, sizeof(*saved));
+	windows = SDL_GetWindows(&count);
+	if (!windows)
+		return NULL;
+	for (index = 0; index < count && saved->count < DIALOG_WINDOWS; index++)
+	{
+		SDL_Window *window = windows[index];
+		SDL_WindowFlags flags = SDL_GetWindowFlags(window);
+		int slot = saved->count++;
+
+		saved->windows[slot] = window;
+		saved->relative[slot] = SDL_GetWindowRelativeMouseMode(window);
+		saved->grabbed[slot] = SDL_GetWindowMouseGrab(window);
+		saved->fullscreen[slot] = (flags & SDL_WINDOW_FULLSCREEN) != 0;
+		SDL_SetWindowRelativeMouseMode(window, false);
+		SDL_SetWindowMouseGrab(window, false);
+		if (saved->fullscreen[slot])
+			SDL_SetWindowFullscreen(window, false);
+		/* (the guest may have just left fullscreen itself: updater.c) */
+		SDL_SyncWindow(window);
+		if (!parent && !(flags & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)))
+			parent = window;
+	}
+	SDL_free(windows);
+	SDL_ShowCursor();
+	if (parent)
+		SDL_RaiseWindow(parent);
+	return parent;
+}
+
+static void dialog_windows_restore(const struct dialog_windows *saved)
+{
+	int index;
+
+	for (index = 0; index < saved->count; index++)
+	{
+		SDL_Window *window = saved->windows[index];
+
+		if (saved->fullscreen[index])
+			SDL_SetWindowFullscreen(window, true);
+		if (saved->grabbed[index])
+			SDL_SetWindowMouseGrab(window, true);
+		if (saved->relative[index])
+			SDL_SetWindowRelativeMouseMode(window, true);
+	}
+}
+#endif
+
+static bool dialog_show(const SDL_MessageBoxData *data, int *answer)
+{
+#ifdef HALO_MACOS
+	struct dialog_windows saved;
+	SDL_MessageBoxData question = *data;
+	bool shown;
+
+	question.window = dialog_windows_release(&saved);
+	shown = SDL_ShowMessageBox(&question, answer);
+	dialog_windows_restore(&saved);
+	return shown;
+#else
+	return SDL_ShowMessageBox(data, answer);
+#endif
+}
+
 /* ---------- a message for the player (a host of another network version) */
 
 int host_sdl_show_simple_message_box(uint32_t flags, const char *title, const char *message)
 {
-	return SDL_ShowSimpleMessageBox((SDL_MessageBoxFlags)flags, title, message, NULL) ? 1 : 0;
+	static const SDL_MessageBoxButtonData ok = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT | SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "OK" };
+	SDL_MessageBoxData data;
+
+	memset(&data, 0, sizeof(data));
+	data.flags = (SDL_MessageBoxFlags)flags;
+	data.title = title;
+	data.message = message;
+	data.numbuttons = 1;
+	data.buttons = &ok;
+	return dialog_show(&data, NULL) ? 1 : 0;
 }
 
 /* ---------- a question for the player (the mods at startup: port_mods.c) */
@@ -919,7 +1020,7 @@ int host_sdl_show_message_box(struct host_message_box *box)
 	question.message = (const char *)host_pointer(box->message);
 	question.numbuttons = box->button_count;
 	question.buttons = buttons;
-	if (!SDL_ShowMessageBox(&question, &answer))
+	if (!dialog_show(&question, &answer))
 		return 0;
 	box->chosen = answer;
 	return 1;
