@@ -2,7 +2,7 @@
 AI_FALLS.C
 
 (port, debug) Why AI walk off cliffs and into death volumes: a trail of
-each AI unit's last moments, written to halo.log when it dies a way no
+each AI unit's last moments, written to debug.txt when it dies a way no
 enemy killed it.
 
 The units followed: those an actor drives (Firefight's waves, a campaign's
@@ -22,12 +22,14 @@ map), its trail is written if:
 - it ended outside the map's clusters, or inside a trigger volume (the
   volumes a map's scripts kill in, by their names).
 
-"ai falls:" lines; at the level's end a count of the deaths followed and
-of those written. players.c calls ai_falls_update each tick, after the
+"ai falls:" lines in debug.txt (not halo.log, which is off unless
+debug.halo_log); at the level's end a count of the deaths followed and of
+those written. players.c calls ai_falls_update each tick, after the
 bots' controls; ai_falls_level_end at the level's end (bots' dispose).
 */
 
 #include "cseries.h"
+#include "cseries/errors.h"
 #include "ai/actors.h"
 #include "game/game.h"
 #include "objects/objects.h"
@@ -36,10 +38,11 @@ bots' controls; ai_falls_level_end at the level's end (bots' dispose).
 #include "tag_files/tag_groups.h"
 #include "units/units.h"
 
+#include "death_volumes.h"
+
 #include <stdio.h>
 #include <string.h>
 
-void platform_log(char const *format, ...);
 /* bots.c: a bot's goal and path, by its unit; 0 for a unit no bot drives */
 int bots_describe_unit(long unit_index, char *text, int size);
 /* a Firefight game (firefight.c's) */
@@ -141,7 +144,7 @@ static struct ai_falls_unit *ai_falls_find(long unit_index, boolean add, boolean
 	if (!free_slot)
 	{
 		if (!ai_falls.full_logged)
-			platform_log("ai falls: more than %d AI units at once: the rest not followed", AI_FALLS_TRACKED);
+			error(_error_silent, "ai falls: more than %d AI units at once: the rest not followed", AI_FALLS_TRACKED);
 		ai_falls.full_logged = TRUE;
 		return NULL;
 	}
@@ -154,13 +157,14 @@ static struct ai_falls_unit *ai_falls_find(long unit_index, boolean add, boolean
 
 /* the trigger volumes holding a point, by name; whether it is outside the
 map's clusters */
-static void ai_falls_where(real_point3d const *point, char *text, int size)
+static void ai_falls_where(real_point3d const *point, char *text, int size, short *first_volume)
 {
 	struct scenario *scenario = global_scenario_try_and_get();
 	struct location location;
 	int used = 0;
 	short index;
 
+	*first_volume = NONE;
 	scenario_location_from_point(&location, point);
 	used += snprintf(text, (size_t)size, "%s", location.cluster_index == NONE ? "OUTSIDE THE MAP" : "in the map");
 	if (!scenario)
@@ -170,6 +174,8 @@ static void ai_falls_where(real_point3d const *point, char *text, int size)
 		struct scenario_trigger_volume const *volume =
 			TAG_BLOCK_GET_ELEMENT(&scenario->trigger_volumes, index, struct scenario_trigger_volume);
 
+		if (scenario_trigger_volume_test_point(index, point) && *first_volume == NONE)
+			*first_volume = index;
 		if (scenario_trigger_volume_test_point(index, point))
 			used += snprintf(text + used, (size_t)(size - used), ", in trigger volume \"%s\"", volume->name);
 	}
@@ -183,6 +189,7 @@ static void ai_falls_finish(struct ai_falls_unit *entry, struct unit_datum const
 	short category = unit ? unit->unit.last_damage_category : NONE;
 	char where[512];
 	boolean outside, in_volume, write;
+	short volume_index;
 	char const *name;
 
 	if (entry->count == 0)
@@ -194,7 +201,11 @@ static void ai_falls_finish(struct ai_falls_unit *entry, struct unit_datum const
 	last = &entry->samples[(entry->next + AI_FALLS_SAMPLES - 1) % AI_FALLS_SAMPLES];
 	for (index = 0; index < entry->count; index++)
 		highest = MAX(highest, entry->samples[(entry->next + AI_FALLS_SAMPLES - entry->count + index) % AI_FALLS_SAMPLES].position.z);
-	ai_falls_where(&last->position, where, sizeof(where));
+	ai_falls_where(&last->position, where, sizeof(where), &volume_index);
+	/* (a volume a unit died of falling damage in without a fall: one that
+	kills, learnt) */
+	if (volume_index != NONE && category == AI_FALLS_FALLING_CATEGORY)
+		death_volume_learn(volume_index, entry->bot ? "a bot died in it" : "an actor died in it");
 	outside = strstr(where, "OUTSIDE") != NULL;
 	in_volume = strstr(where, "trigger volume") != NULL;
 	write = category == AI_FALLS_FALLING_CATEGORY || highest - last->position.z >= AI_FALLS_DROP || outside || in_volume;
@@ -202,7 +213,7 @@ static void ai_falls_finish(struct ai_falls_unit *entry, struct unit_datum const
 	{
 		ai_falls.written++;
 		name = entry->definition_index != NONE ? tag_get_name(entry->definition_index) : NULL;
-		platform_log("ai falls: %s %s %s (%s): damage category %d, dropped %.1f in the trail, at (%.1f %.1f %.1f) %s",
+		error(_error_silent, "ai falls: %s %s %s (%s): damage category %d, dropped %.1f in the trail, at (%.1f %.1f %.1f) %s",
 			entry->bot ? "bot" : "actor", name ? name : "?", how, multiplayer_firefight_mode() ? "firefight" : "game",
 			(int)category, highest - last->position.z, last->position.x, last->position.y, last->position.z, where);
 		for (index = 0; index < entry->count; index++)
@@ -210,7 +221,7 @@ static void ai_falls_finish(struct ai_falls_unit *entry, struct unit_datum const
 			struct ai_falls_sample const *sample =
 				&entry->samples[(entry->next + AI_FALLS_SAMPLES - entry->count + index) % AI_FALLS_SAMPLES];
 
-			platform_log("ai falls:   t-%ld (%.1f %.1f %.1f) vz %.1f %s", last->tick - sample->tick,
+			error(_error_silent, "ai falls:   t-%ld (%.1f %.1f %.1f) vz %.1f %s", last->tick - sample->tick,
 				sample->position.x, sample->position.y, sample->position.z, sample->vertical_speed, sample->what);
 		}
 	}
@@ -283,7 +294,7 @@ void ai_falls_level_end(void)
 	long index;
 
 	if (ai_falls.deaths)
-		platform_log("ai falls: the level's end: %ld AI deaths followed, %ld written", ai_falls.deaths, ai_falls.written);
+		error(_error_silent, "ai falls: the level's end: %ld AI deaths followed, %ld written", ai_falls.deaths, ai_falls.written);
 	for (index = 0; index < AI_FALLS_TRACKED; index++)
 		ai_falls.units[index].unit_index = NONE;
 	ai_falls.last_tick = 0;
@@ -291,4 +302,5 @@ void ai_falls_level_end(void)
 	ai_falls.written = 0;
 	ai_falls.full_logged = FALSE;
 	ai_falls.initialized = TRUE;
+	death_volumes_level_end();
 }

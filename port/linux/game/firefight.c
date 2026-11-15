@@ -1537,6 +1537,7 @@ static boolean firefight_initialize_for_new_map(
 	short i;
 
 	csmemset(&ff_state, 0, sizeof(ff_state));
+	firefight_drops_reset();
 	if (opts && opts->firefight_unit_toggles == 0)
 	{
 		struct game_variant_options fixed = *opts;
@@ -1805,6 +1806,8 @@ static void firefight_update(
 	/* (stuck or far-off wave enemies brought to the players) */
 	if (ff_state.phase_state == _ff_phase_wave_active)
 		firefight_relocate_idle_enemies();
+	/* (enemies that chose to drop over an edge after the players, landed) */
+	firefight_drops_update();
 	ff_state.team_score = campaign_score_team_points();
 
 	/* Check wipe / defeat condition */

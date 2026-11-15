@@ -555,6 +555,10 @@ struct firefight_globals
 	long ordnance_pod_drop_time;
 	real_point3d ordnance_pod_positions[FIREFIGHT_MAX_ORDNANCE_PODS];
 	short ordnance_pod_count;
+	/* port: how many pods each player's set is (the pods in order, a set to
+	each of the game's players by their order: each player's HUD marks its own
+	set alone); 0: one set for all (a host from before) */
+	short ordnance_pods_per_player;
 
 	/* HUD banner state */
 	short banner_type;
@@ -788,6 +792,17 @@ struct game_variant;
 struct game_variant_options;
 extern struct game_variant global_variant;
 boolean firefight_active(void);
+/* how far an actor walks a straight line on the level towards a point (at
+most most units, no drop over 1.2 units, no kill volume), where it stops into
+end; stopped at an edge with ground to land on beyond it, TRUE into edge and
+the landing (firefight_spawner.c) */
+real firefight_straight_walk(real_point3d const *from, real_point3d const *to, real most, real_point3d *end,
+	boolean *edge, real_point3d *landing);
+/* an actor's chosen drop over an edge: no falling damage until it lands;
+the drops landed each Firefight tick; forgotten at a game's start */
+void firefight_actor_drop(long unit_index);
+void firefight_drops_update(void);
+void firefight_drops_reset(void);
 boolean firefight_build_variant_by_name(char const *name, struct game_variant *out_variant);
 boolean firefight_get_variant_by_name(struct game_variant *out_variant, char const *name);
 struct game_variant *build_game_variant_firefight(struct game_variant *variant);

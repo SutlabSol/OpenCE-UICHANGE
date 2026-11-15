@@ -15933,3 +15933,149 @@ static boolean hs_compile_and_evaluate_command(
 }
 
 /* ---------- private code */
+
+/* port: the trigger volumes the map's scripts kill in (death_volumes.c):
+a volume is one when a call that kills (unit_kill, unit_kill_silent,
+damage_object, damage_new, object_destroy, or a static script that makes
+one) and the volume's constant are both under the same expression, the
+lowest that holds both - (if (volume_test_objects killme2 (players))
+(unit_kill ...)), or a begin's (sleep_until (volume_test_object ...))
+then its kill. Volumes named in globals or other scripts' calls are not. */
+#define HS_KILL_VOLUME_LONGS 8
+#define HS_KILL_VOLUME_DEPTH 96
+
+struct hs_kill_volume_walk
+{
+	unsigned long *found;
+	short volume_count;
+	boolean const *killing_scripts;
+	long nodes_left;
+};
+
+static boolean hs_kill_function(short function_index)
+{
+	static char const *const names[] = { "unit_kill", "unit_kill_silent", "damage_object", "damage_new", "object_destroy" };
+	struct hs_function_definition *function = mcc_script_function(function_index);
+	short index;
+
+	if (!function)
+	{
+		if (function_index < 0 || function_index >= hs_function_table_count)
+			return FALSE;
+		function = hs_function_table.functions[function_index];
+	}
+	if (!function || !function->name)
+		return FALSE;
+	for (index = 0; index < (short)NUMBEROF(names); index++)
+	{
+		if (!csstrcmp(function->name, names[index]))
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/* (the volumes under an expression into volumes, whether a kill is under
+it into kills; TRUE when the lowest expression holding both was found
+under it, its volumes marked) */
+static boolean hs_kill_volumes_walk(struct hs_kill_volume_walk *walk, long expression_index, short depth,
+	unsigned long *volumes, boolean *kills)
+{
+	struct hs_syntax_node const *node = hs_syntax_try_get(expression_index);
+	struct hs_syntax_node const *child;
+	boolean joint = FALSE;
+	short index;
+
+	*kills = FALSE;
+	if (!node || depth > HS_KILL_VOLUME_DEPTH || --walk->nodes_left < 0)
+		return FALSE;
+	if (TEST_FLAG(node->flags, _hs_syntax_node_primitive_bit))
+	{
+		if (node->type == _hs_type_trigger_volume && !TEST_FLAG(node->flags, _hs_syntax_node_variable_bit) &&
+			node->short_value >= 0 && node->short_value < walk->volume_count &&
+			node->short_value < HS_KILL_VOLUME_LONGS * 32)
+		{
+			BIT_VECTOR_SET_FLAG(volumes, node->short_value, TRUE);
+		}
+		return FALSE;
+	}
+	if (TEST_FLAG(node->flags, _hs_syntax_node_script_bit))
+		*kills = walk->killing_scripts && node->script_index >= 0 && node->script_index < MAXIMUM_HS_SCRIPTS_PER_SCENARIO &&
+			walk->killing_scripts[node->script_index];
+	else
+		*kills = hs_kill_function(node->function_index);
+	/* (the arguments: after the function's name, the first child) */
+	for (child = hs_syntax_try_get(node->data), index = 0; child && child->next_node_index != NONE && index < 256; index++)
+	{
+		unsigned long child_volumes[HS_KILL_VOLUME_LONGS];
+		long child_index = child->next_node_index;
+		boolean child_kills;
+		short word;
+
+		csmemset(child_volumes, 0, sizeof(child_volumes));
+		if (hs_kill_volumes_walk(walk, child_index, (short)(depth + 1), child_volumes, &child_kills))
+			joint = TRUE;
+		*kills |= child_kills;
+		for (word = 0; word < HS_KILL_VOLUME_LONGS; word++)
+			volumes[word] |= child_volumes[word];
+		child = hs_syntax_try_get(child_index);
+	}
+	if (!joint && *kills)
+	{
+		short word;
+		boolean any = FALSE;
+
+		for (word = 0; word < HS_KILL_VOLUME_LONGS; word++)
+		{
+			if (volumes[word])
+				any = TRUE;
+			if (walk->found)
+				walk->found[word] |= volumes[word];
+		}
+		joint = any;
+	}
+	return joint;
+}
+
+/* the volumes (bits by index into volumes, HS_KILL_VOLUME_LONGS longs: 256
+volumes) the map's scripts kill in; their count */
+short hs_scenario_kill_volumes(unsigned long *volumes, short volume_count)
+{
+	static boolean killing_scripts[MAXIMUM_HS_SCRIPTS_PER_SCENARIO];
+	struct scenario *scenario;
+	struct hs_kill_volume_walk walk;
+	short pass, index, count = 0;
+
+	csmemset(volumes, 0, sizeof(unsigned long) * HS_KILL_VOLUME_LONGS);
+	if (global_scenario_index == NONE || !hs_syntax_data)
+		return 0;
+	scenario = global_scenario_get();
+	csmemset(killing_scripts, 0, sizeof(killing_scripts));
+	/* (first which static scripts kill, then every script's volumes with
+	calls to those as kills) */
+	for (pass = 0; pass < 2; pass++)
+	{
+		for (index = 0; index < scenario->hs_scripts.count && index < MAXIMUM_HS_SCRIPTS_PER_SCENARIO; index++)
+		{
+			struct hs_script const *script = TAG_BLOCK_GET_ELEMENT(&scenario->hs_scripts, index, struct hs_script);
+			unsigned long subtree[HS_KILL_VOLUME_LONGS];
+			boolean kills;
+
+			if (pass == 0 && script->script_type != _hs_script_static)
+				continue;
+			csmemset(subtree, 0, sizeof(subtree));
+			walk.found = pass == 1 ? volumes : NULL;
+			walk.volume_count = volume_count;
+			walk.killing_scripts = pass == 1 ? killing_scripts : NULL;
+			walk.nodes_left = 65536;
+			hs_kill_volumes_walk(&walk, script->root_expression_index, 0, subtree, &kills);
+			if (pass == 0)
+				killing_scripts[index] = kills;
+		}
+	}
+	for (index = 0; index < volume_count && index < HS_KILL_VOLUME_LONGS * 32; index++)
+	{
+		if (BIT_VECTOR_TEST_FLAG(volumes, index))
+			count++;
+	}
+	return count;
+}

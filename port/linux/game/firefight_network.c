@@ -60,7 +60,10 @@ struct firefight_net_packet
 	long ordnance_pod_drop_time;
 	byte ordnance_pod_count;
 	byte ordnance_heavy;
-	byte pad[2];
+	/* (port) each player's set of pods (ordnance_pods_per_player), 0 from a
+	host before it: one set for all */
+	byte ordnance_pods_per_player;
+	byte pad[1];
 	/* (mod version 104) the rest, a weapon a pod */
 	real_point3d more_ordnance_positions[FIREFIGHT_MAX_ORDNANCE_PODS - FIREFIGHT_ORDNANCE_PODS_BEFORE_104];
 };
@@ -140,6 +143,7 @@ long firefight_write_network_state(
 	pkt.ordnance_pod_count = (byte)PIN(ff_state.ordnance_pod_count, 0, FIREFIGHT_MAX_ORDNANCE_PODS);
 	pkt.ordnance_pod_drop_time = ff_state.ordnance_pod_drop_time;
 	pkt.ordnance_heavy = ff_state.last_ordnance_is_heavy ? 1 : 0;
+	pkt.ordnance_pods_per_player = (byte)PIN(ff_state.ordnance_pods_per_player, 0, 255);
 
 	csmemcpy(buffer, &pkt, sizeof(pkt));
 	return (long)sizeof(pkt);
@@ -232,6 +236,7 @@ boolean firefight_read_network_state(
 			FIREFIGHT_MAX_ORDNANCE_PODS : FIREFIGHT_ORDNANCE_PODS_BEFORE_104);
 		ff_state.last_ordnance_position = pkt.ordnance_positions[0];
 		ff_state.last_ordnance_is_heavy = pkt.ordnance_heavy != 0;
+		ff_state.ordnance_pods_per_player = pkt.ordnance_pods_per_player;
 	}
 	ff_state.ordnance_pod_drop_time = pkt.ordnance_pod_drop_time;
 

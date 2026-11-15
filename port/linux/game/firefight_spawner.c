@@ -48,6 +48,7 @@ Friendly AI Reinforcements, and Round-Scheduled Player Vehicles.
 #include "scenario/scenario_definitions.h"
 #include "structures/structure_bsp_definitions.h"
 #include "structures/structures.h"
+#include "death_volumes.h"
 #include "tag_files/tag_files.h"
 #include "tag_files/tag_groups.h"
 #include "units/biped_definitions.h"
@@ -211,6 +212,8 @@ enum
 	FF_MAX_DROP_AREAS = 16
 };
 #define FF_POD_FALL_HEIGHT 45.0f
+/* port: how far over a pod's spot a kill volume refuses it */
+#define FF_POD_KILL_VOLUME_HEIGHT 10.0f
 /* the pod: the game's props' capsule (tools/prop_assets.py), else Two
 Betrayals' storage crate. The capsule is its Firefight copy, the drop area's
 tag, which is the props' alone: the map it was taken from has its own
@@ -269,6 +272,7 @@ enum
 	_pod_spot_crowded,
 	_pod_spot_too_near,
 	_pod_spot_enemies,
+	_pod_spot_kill_volume,
 	NUMBER_OF_POD_SPOT_REFUSALS
 };
 static long g_pod_spot_refusals[NUMBER_OF_POD_SPOT_REFUSALS];
@@ -930,9 +934,8 @@ players' starting locations (or a teleporter's ends):
   has no walkable surfaces or the filter would leave fewer than
   FF_REACH_LEAST points (a map of jumps and lifts: its spots as they were).
 
-halo.log has what was dropped and why ("firefight: spawn points"). */
+debug.txt has what was dropped and why ("firefight: spawn points"). */
 
-void platform_log(char const *format, ...);
 
 #define FF_PATHFINDING_WALKABLE_BIT 6
 #define FF_REACH_CORNERS 16
@@ -1113,6 +1116,163 @@ static long reach_ground(real_point3d const *point, real_point3d *ground)
 	return NONE;
 }
 
+/* port: how far an actor walks a straight line on the level (the AI's
+fallback when its path search fails: actor_moving.c), towards a point, at
+most most units: on while the ground at each half unit is no more than
+FF_STRAIGHT_STEP_UP above the last nor FF_STRAIGHT_DROP below it, no wall
+between, and out of the volumes the map kills in (death_volumes.c); the
+point it stops at into end. House 2's roofs: the line ran on over their
+edges, 6 to 8 units down, and the grunts and jackals died of the fall.
+Stopped at an edge, where it would land beyond it (ground within
+FF_STRAIGHT_LANDING_DEPTH, in the map, out of the kill volumes) into
+landing, TRUE into edge: firefight_actor_drop's */
+#define FF_STRAIGHT_STEP 0.5f
+#define FF_STRAIGHT_STEP_UP 0.8f
+#define FF_STRAIGHT_DROP 1.2f
+#define FF_STRAIGHT_LANDING_DEPTH 30.0f
+real firefight_straight_walk(real_point3d const *from, real_point3d const *to, real most, real_point3d *end,
+	boolean *edge, real_point3d *landing)
+{
+	unsigned long const flags = FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit);
+	real_point3d ground;
+	real_vector3d along;
+	real length, walked = 0.0f;
+
+	*end = *from;
+	*edge = FALSE;
+	*landing = *from;
+	if (reach_ground(from, &ground) == NONE)
+		return 0.0f;
+	*end = ground;
+	along.i = to->x - from->x;
+	along.j = to->y - from->y;
+	along.k = 0.0f;
+	length = (real)sqrt(along.i * along.i + along.j * along.j);
+	if (length < 0.01f)
+		return 0.0f;
+	along.i /= length;
+	along.j /= length;
+	most = MIN(most, length);
+	while (walked + FF_STRAIGHT_STEP <= most + 0.01f)
+	{
+		struct collision_result collision;
+		real_point3d start = ground, next;
+		real_vector3d step = { along.i * FF_STRAIGHT_STEP, along.j * FF_STRAIGHT_STEP, 0.0f };
+		real_vector3d down = { 0.0f, 0.0f, -(FF_STRAIGHT_STEP_UP + FF_STRAIGHT_DROP) };
+
+		/* (a wall before it) */
+		start.z += FF_STRAIGHT_STEP_UP + 0.1f;
+		if (collision_test_vector(flags, &start, &step, NONE, &collision))
+			break;
+		/* (ground no further down than a safe drop; else an edge, and
+		where a drop over it lands) */
+		start.x += step.i;
+		start.y += step.j;
+		if (!collision_test_vector(flags, &start, &down, NONE, &collision) ||
+			collision.type != _collision_result_structure)
+		{
+			real_vector3d deep = { 0.0f, 0.0f, -(FF_STRAIGHT_STEP_UP + FF_STRAIGHT_LANDING_DEPTH) };
+			struct location location;
+
+			/* (a little past the edge, so the fall clears it) */
+			start.x += step.i * 2.0f;
+			start.y += step.j * 2.0f;
+			if (collision_test_vector(flags, &start, &deep, NONE, &collision) &&
+				collision.type == _collision_result_structure && !death_volume_column(&collision.point, 2.0f))
+			{
+				scenario_location_from_point(&location, &collision.point);
+				if (location.cluster_index != NONE)
+				{
+					*edge = TRUE;
+					*landing = collision.point;
+				}
+			}
+			break;
+		}
+		next = collision.point;
+		if (death_volume_column(&next, 2.0f))
+			break;
+		ground = next;
+		walked += FF_STRAIGHT_STEP;
+	}
+	*end = ground;
+	return walked;
+}
+
+/* port: an actor's drop over an edge it chose (actor_moving.c: no path, the
+one it fights below, ground to land on): no falling damage from the drop,
+until it lands (or FF_DROP_TICKS); a fall it did not choose hurts as
+ever. firefight_drops_update, each Firefight tick, lands them */
+#define FF_DROPS 32
+#define FF_DROP_TICKS (TICKS_PER_SECOND * 6)
+static struct
+{
+	long unit_index;
+	long started_tick;
+	boolean fell;
+	boolean had_flag;
+} ff_drops[FF_DROPS];
+static long ff_drops_count;
+
+void firefight_actor_drop(long unit_index)
+{
+	struct unit_datum *unit = unit_try_and_get(unit_index);
+	long index, slot = NONE;
+
+	if (!unit)
+		return;
+	for (index = 0; index < ff_drops_count; index++)
+	{
+		if (ff_drops[index].unit_index == unit_index)
+		{
+			ff_drops[index].started_tick = game_time_get();
+			return;
+		}
+	}
+	if (ff_drops_count >= FF_DROPS)
+		return;
+	slot = ff_drops_count++;
+	ff_drops[slot].unit_index = unit_index;
+	ff_drops[slot].started_tick = game_time_get();
+	ff_drops[slot].fell = FALSE;
+	ff_drops[slot].had_flag = TEST_FLAG(unit->unit.flags, _unit_no_falling_damage_bit);
+	SET_FLAG(unit->unit.flags, _unit_no_falling_damage_bit, TRUE);
+	error(_error_silent, "firefight: %s drops over an edge after its target (no falling damage until it lands)",
+		tag_get_name(object_get(unit_index)->definition_index));
+}
+
+void firefight_drops_update(void)
+{
+	long index;
+
+	for (index = 0; index < ff_drops_count;)
+	{
+		struct unit_datum *unit = unit_try_and_get(ff_drops[index].unit_index);
+		boolean done = !unit;
+
+		if (unit)
+		{
+			real vertical = unit->object.translational_velocity.k;
+
+			if (vertical < -0.05f)
+				ff_drops[index].fell = TRUE;
+			done = (ff_drops[index].fell && vertical > -0.01f) ||
+				game_time_get() - ff_drops[index].started_tick > FF_DROP_TICKS;
+			if (done && !ff_drops[index].had_flag)
+				SET_FLAG(unit->unit.flags, _unit_no_falling_damage_bit, FALSE);
+		}
+		if (done)
+			ff_drops[index] = ff_drops[--ff_drops_count];
+		else
+			index++;
+	}
+}
+
+void firefight_drops_reset(void)
+{
+	ff_drops_count = 0;
+}
+
 /* the walkable group of the ground under a point: NONE for ground that is
 not walkable or none */
 static long reach_group_at(real_point3d const *point)
@@ -1149,7 +1309,7 @@ static void filter_unreachable_spawn_points(void)
 {
 	struct scenario *scen = global_scenario_get();
 	long seeds[64];
-	short seed_count = 0, i, no_ground = 0, cut_off = 0, kept = 0;
+	short seed_count = 0, i, no_ground = 0, cut_off = 0, kept = 0, in_kill_volume = 0;
 	boolean grounded[MAX_SPAWN_POINTS];
 	boolean reachable[MAX_SPAWN_POINTS];
 	boolean filter_groups;
@@ -1186,9 +1346,16 @@ static void filter_unreachable_spawn_points(void)
 
 	for (i = 0; i < g_spawn_point_count; i++)
 	{
-		long surface_index = reach_ground(&g_spawn_points[i], NULL);
+		real_point3d ground;
+		long surface_index = reach_ground(&g_spawn_points[i], &ground);
 		short s;
 
+		/* port: ground in or under a volume the map kills in is none */
+		if (surface_index != NONE && death_volume_column(&ground, 4.0f))
+		{
+			surface_index = NONE;
+			in_kill_volume++;
+		}
 		grounded[i] = surface_index != NONE;
 		reachable[i] = grounded[i];
 		if (!grounded[i])
@@ -1212,8 +1379,8 @@ static void filter_unreachable_spawn_points(void)
 	}
 	for (i = 0; i < g_spawn_point_count; i++)
 		kept += reachable[i] ? 1 : 0;
-	platform_log("firefight: spawn points: %d, %d with no ground under them, %d on ground the players cannot "
-		"walk to (%s, %d starting groups)", g_spawn_point_count, no_ground, cut_off,
+	error(_error_silent, "firefight: spawn points: %d, %d with no ground under them (%d of those in a kill volume), %d on "
+		"ground the players cannot walk to (%s, %d starting groups)", g_spawn_point_count, no_ground, in_kill_volume, cut_off,
 		filter_groups ? "walkable groups" : "no walkable groups", seed_count);
 	if (kept < FF_REACH_LEAST)
 	{
@@ -1222,7 +1389,7 @@ static void filter_unreachable_spawn_points(void)
 
 		for (i = 0; i < g_spawn_point_count; i++)
 			grounded_count += grounded[i] ? 1 : 0;
-		platform_log("firefight: spawn points: only %d would be left: keeping %s", kept,
+		error(_error_silent, "firefight: spawn points: only %d would be left: keeping %s", kept,
 			grounded_count >= FF_REACH_LEAST ? "those with ground" : "them all");
 		for (i = 0; i < g_spawn_point_count; i++)
 			reachable[i] = grounded_count >= FF_REACH_LEAST ? grounded[i] : TRUE;
@@ -2191,7 +2358,7 @@ static short select_wave_spawn_zones(
 				candidate.x += (real)cos(angle) * 20.0f;
 				candidate.y += (real)sin(angle) * 20.0f;
 				candidate.z += 0.3f;
-				platform_log("firefight: no open ground about the player for a wave's spot: one 20 units off");
+				error(_error_silent, "firefight: no open ground about the player for a wave's spot: one 20 units off");
 			}
 			out_zones[selected] = candidate;
 			out_facings[selected] = angle + 3.14159265f;
@@ -2490,7 +2657,7 @@ players made known to it. FF_RELOCATE_PER_SECOND at most a second; one
 moved FF_RELOCATE_MOST times and idle again is taken away (its slot freed,
 as one killed, so the wave can end). An enemy riding a vehicle is let out
 of it first. The host's alone (the waves are); "firefight: relocated" lines
-in halo.log, with where it was. */
+in debug.txt, with where it was. */
 
 #define FF_IDLE_TICKS (10 * TICKS_PER_SECOND)
 #define FF_IDLE_CHECK_TICKS TICKS_PER_SECOND
@@ -2708,7 +2875,7 @@ void firefight_relocate_idle_enemies(void)
 		/* (moved as often as it may be: taken away, the wave's as one killed) */
 		if (g_idle[slot].moves >= FF_RELOCATE_MOST)
 		{
-			platform_log("firefight: relocated %s %d times and idle again at (%.1f %.1f %.1f): taken away",
+			error(_error_silent, "firefight: relocated %s %d times and idle again at (%.1f %.1f %.1f): taken away",
 				tag_get_name(object_get(unit_index)->definition_index), (int)g_idle[slot].moves, position.x, position.y,
 				position.z);
 			if (unit->unit.actor_index != NONE)
@@ -2735,7 +2902,7 @@ void firefight_relocate_idle_enemies(void)
 		object_set_position(unit_index, &spot, NULL, NULL);
 		taken[taken_count++] = spot;
 		g_idle[slot].moves++;
-		platform_log("firefight: relocated %s (%d of %d) from (%.1f %.1f %.1f) to (%.1f %.1f %.1f): idle %ld s",
+		error(_error_silent, "firefight: relocated %s (%d of %d) from (%.1f %.1f %.1f) to (%.1f %.1f %.1f): idle %ld s",
 			tag_get_name(object_get(unit_index)->definition_index), (int)g_idle[slot].moves, FF_RELOCATE_MOST, position.x,
 			position.y, position.z, spot.x, spot.y, spot.z, (now - g_idle[slot].active_tick) / TICKS_PER_SECOND);
 		spawn_insertion_beacon_effect(&spot, unit_index, 0, FALSE);
@@ -5313,6 +5480,9 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 			ordnance_pool_add(heavy_pool, &heavy_count, sniper_weap);
 			ordnance_pool_add(heavy_pool, &heavy_count, rocket_weap);
 		}
+		/* (each player's set: its pods, in order; firefight_hud.c marks a
+		player's own set alone) */
+		ff_state.ordnance_pods_per_player = (short)(pods + (custom_count ? 1 : 0));
 		for (p = 0; p < MIN(total_players, 8); p++)
 		{
 			short pod;
@@ -5546,6 +5716,10 @@ static boolean pod_spot_passes(
 	start.z += 0.3f;
 	if (!point_is_in_valid_bsp(&start))
 		return POD_SPOT_REFUSED(_pod_spot_outside_map);
+	/* port: not in a volume the map kills in, nor on the ground under one
+	(Splash Site's sea floor under "killme2": death_volumes.c) */
+	if (death_volume_column(&ground, FF_POD_KILL_VOLUME_HEIGHT))
+		return POD_SPOT_REFUSED(_pod_spot_kill_volume);
 	/* (seen from the player: no wall between, nor the pod inside one) */
 	start = ground;
 	start.z += 0.8f;
@@ -6038,7 +6212,7 @@ void firefight_ordnance_preview_refusals(char *text, long size)
 {
 	static char const *const names[NUMBER_OF_POD_SPOT_REFUSALS] = {
 		"no ground", "object under", "slope", "outside map", "unseen", "cramped", "roofed", "crowded", "too near",
-		"enemies"
+		"enemies", "kill volume"
 	};
 	short reason;
 

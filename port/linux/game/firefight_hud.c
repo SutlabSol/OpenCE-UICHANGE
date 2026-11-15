@@ -25,6 +25,7 @@ Halo 1 CE-styled Firefight HUD module:
 #include "interface/hud_messaging.h"
 #include "interface/interface.h"
 #include "math/real_math.h"
+#include "memory/data.h"
 #include "objects/objects.h"
 #include "rasterizer/rasterizer.h"
 #include "render/render.h"
@@ -709,6 +710,92 @@ static void format_elapsed_time(long elapsed_ticks, char *out_buf, size_t buf_si
 		snprintf(out_buf, buf_size, "%02ld:%02ld", minutes, seconds);
 }
 
+/* ---------- the ordnance pods' markers (port) */
+
+/* a player's place among the game's players (those not quit, by their
+index, as every machine has them); NONE for none */
+static short firefight_hud_player_order(long player_index)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+	short order = 0;
+
+	if (!player_data || player_index == NONE)
+		return NONE;
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		if (iterator.datum_index == player_index)
+			return order;
+		if (!player->quit_out_of_game)
+			order++;
+	}
+	return NONE;
+}
+
+/* the pods of the drop this view's player marks: its own set (each player's
+set, in order, by its place among the players: firefight_spawner.c's pods
+for the first 8 players; a ninth player shares the first's), all of them
+from a host that sent no sets */
+static void firefight_hud_own_pods(short pods, short *first, short *last)
+{
+	short per_player = ff_state.ordnance_pods_per_player;
+	short sets, order;
+
+	*first = 0;
+	*last = pods;
+	if (per_player <= 0 || render.local_player_index == NONE)
+		return;
+	sets = (short)((pods + per_player - 1) / per_player);
+	order = firefight_hud_player_order(local_player_get_player_index(render.local_player_index));
+	if (order == NONE || sets <= 1)
+		return;
+	order = (short)(order % sets);
+	*first = (short)(order * per_player);
+	*last = (short)MIN(pods, *first + per_player);
+}
+
+/* whether this view's player has been to the pod (within 2.5 units, since
+it landed: the weapon on it taken, or seen and left), its marker gone till
+the next drop */
+#define FF_HUD_POD_VISIT_DISTANCE 2.5f
+#define FF_HUD_POD_LANDED_TICKS (3 * TICKS_PER_SECOND)
+static boolean firefight_hud_pod_visited(short pod)
+{
+	static long drop_time[MAXIMUM_LOCAL_PLAYERS];
+	static unsigned long visited[MAXIMUM_LOCAL_PLAYERS][(FIREFIGHT_MAX_ORDNANCE_PODS + 31) / 32];
+	short local = render.local_player_index;
+	struct player_datum *player;
+	struct object_datum *unit;
+	real_point3d const *spot = &ff_state.ordnance_pod_positions[pod];
+
+	if (local < 0 || local >= MAXIMUM_LOCAL_PLAYERS || pod < 0 || pod >= FIREFIGHT_MAX_ORDNANCE_PODS)
+		return FALSE;
+	if (drop_time[local] != ff_state.ordnance_pod_drop_time)
+	{
+		drop_time[local] = ff_state.ordnance_pod_drop_time;
+		csmemset(visited[local], 0, sizeof(visited[local]));
+	}
+	if (visited[local][pod >> 5] & (1UL << (pod & 31)))
+		return TRUE;
+	if (ff_state.ordnance_pod_drop_time <= 0 ||
+		game_time_get() - ff_state.ordnance_pod_drop_time < FF_HUD_POD_LANDED_TICKS)
+	{
+		return FALSE;
+	}
+	player = (struct player_datum *)datum_try_and_get(player_data, local_player_get_player_index(local));
+	unit = player ? object_try_and_get(player->unit_index) : NULL;
+	if (!unit)
+		return FALSE;
+	if (distance2d((real_point2d const *)&unit->object.position, (real_point2d const *)spot) < FF_HUD_POD_VISIT_DISTANCE &&
+		fabs(unit->object.position.z - spot->z) < 2.0f)
+	{
+		visited[local][pod >> 5] |= 1UL << (pod & 31);
+		return TRUE;
+	}
+	return FALSE;
+}
+
 /* ---------- 3D -> 2D Navpoints (Stragglers & Resupply Drops) */
 
 static void draw_world_navpoint(
@@ -1380,14 +1467,20 @@ void firefight_hud_draw(void)
 
 	if (ff_state.ordnance_navpoint_ticks > 0)
 	{
-		/* (every pod of the drop, where each lands: the host's spots, which
-		its clients have too, firefight_network.c) */
+		/* (the pods of the drop, where each lands: the host's spots, which
+		its clients have too, firefight_network.c; port: this player's own
+		set alone, less those it has been to since they landed) */
 		short pods = (short)PIN(ff_state.ordnance_pod_count, 1, FIREFIGHT_MAX_ORDNANCE_PODS);
+		short first = 0, last = pods;
 		short pod;
 
-		for (pod = 0; pod < pods; pod++)
+		firefight_hud_own_pods(pods, &first, &last);
+		for (pod = first; pod < last; pod++)
 		{
 			real_point3d ord_pos = ff_state.ordnance_pod_positions[pod];
+
+			if (firefight_hud_pod_visited(pod))
+				continue;
 
 			ord_pos.z += 0.4f;
 			draw_world_navpoint(

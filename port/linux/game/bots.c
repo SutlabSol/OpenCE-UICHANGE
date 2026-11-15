@@ -241,6 +241,8 @@ extern int g_forge_session_enabled;
 #include "game_modes.h"
 #include "infection.h"
 #include "game/player_queues_new.h"
+#include "death_volumes.h"
+#include "cseries/errors.h"
 
 
 /* capture the flag's and king of the hill's (below) */
@@ -338,6 +340,9 @@ a wall below the chest is one a jump clears */
 a weapon set aside put back the powerup set aside before it, gone for again
 every second - Sidewinder's overshield and camouflage under the bridge) */
 #define BOTS_UNREACHABLE_ITEMS 8
+/* port: how far above a point a volume the map kills in makes it one to keep
+off (the ground under one: death_volumes.c) */
+#define BOTS_DEATH_VOLUME_HEIGHT 4.0f
 /* port: turrets: a bot on foot mans one no further than this, the enemy it
 saw no further from the turret than this; and the most turrets kept */
 #define BOTS_TURRET_REACH 12.0f
@@ -724,6 +729,8 @@ struct bots_bot
 	end, straight on with jumps until then, and the game's goals left a
 	while after */
 	boolean path_short;
+	/* port: when a step into a volume the map kills in was last refused */
+	long death_volume_tick;
 	long climb_until_tick;
 	long climb_start_tick;
 	real climb_best_distance;
@@ -1046,6 +1053,8 @@ static struct
 	long scan_index;
 	boolean scan_done;
 	long roofed_count;
+	/* port: those in or under a volume the map kills in (death_volumes.c) */
+	long deadly_count;
 	unsigned long long scan_us;
 	long scan_ticks;
 } bots_paths;
@@ -1979,6 +1988,12 @@ forgotten) */
 static boolean bots_item_unreachable(struct bots_bot const *bot, long item_index)
 {
 	long index;
+	struct object_datum *item = object_try_and_get(item_index);
+
+	/* port: one in a volume the map kills in, or on the ground under one
+	(Splash Site's sea floor under "killme2": death_volumes.c) */
+	if (item && death_volume_column(&item->object.position, BOTS_DEATH_VOLUME_HEIGHT))
+		return TRUE;
 
 	for (index = 0; index < BOTS_UNREACHABLE_ITEMS; index++)
 	{
@@ -2148,7 +2163,7 @@ static void bots_add_roam_point(real_point3d const *point)
 	if (bots_globals.roam_point_count >= BOTS_MAXIMUM_ROAM_POINTS)
 		return;
 	surface_index = bots_surface_below(point, &ground);
-	if (surface_index == NONE)
+	if (surface_index == NONE || death_volume_column(&ground, BOTS_DEATH_VOLUME_HEIGHT))
 		return;
 	bots_globals.roam_points[bots_globals.roam_point_count] = ground;
 	bots_globals.roam_surfaces[bots_globals.roam_point_count] = surface_index;
@@ -2176,6 +2191,7 @@ static void bots_paths_release(void)
 	bots_paths.scan_index = 0;
 	bots_paths.scan_done = FALSE;
 	bots_paths.roofed_count = 0;
+	bots_paths.deadly_count = 0;
 	bots_paths.scan_us = 0;
 	bots_paths.scan_ticks = 0;
 	if (bots_paths.walkable)
@@ -2451,6 +2467,8 @@ static void bots_paths_scan(void)
 		{
 			bots_paths.scan_done = TRUE;
 			bots_paths.scan_us += bots_time_us() - started;
+			error(_error_silent, "bots: %ld walkable surfaces in or under a volume the map kills in closed",
+				bots_paths.deadly_count);
 			platform_log("bots: %ld walkable surfaces with no room above closed (%ld ticks, %.1f ms, %.0f us a tick at most "
 				"%d surfaces)", bots_paths.roofed_count, bots_paths.scan_ticks, (double)bots_paths.scan_us / 1000.0,
 				(double)bots_paths.scan_us / (double)bots_paths.scan_ticks, BOTS_PATHS_SCAN_A_TICK);
@@ -2458,6 +2476,30 @@ static void bots_paths_scan(void)
 		}
 		if (!bots_paths_walkable_surface(bsp, surface_index, corners, &corner_count, &middle, &reach))
 			continue;
+		/* port: in a volume the map kills in, or under one (its middle, a
+		corner or a point between: Splash Site's "killme2"), closed */
+		if (death_volumes_any())
+		{
+			boolean deadly = death_volume_column(&middle, BOTS_DEATH_VOLUME_HEIGHT);
+
+			for (sample = 0; !deadly && sample < corner_count; sample++)
+			{
+				real_point3d between;
+
+				between.x = 0.5f * (middle.x + corners[sample].x);
+				between.y = 0.5f * (middle.y + corners[sample].y);
+				between.z = 0.5f * (middle.z + corners[sample].z);
+				deadly = death_volume_column(&corners[sample], BOTS_DEATH_VOLUME_HEIGHT) ||
+					death_volume_column(&between, BOTS_DEATH_VOLUME_HEIGHT);
+			}
+			if (deadly)
+			{
+				bots_paths.walkable[surface_index] &= (byte)~FLAG(BOTS_PATHFINDING_WALKABLE_BIT);
+				bots_paths.vehicle_walkable[surface_index] &= (byte)~FLAG(BOTS_PATHFINDING_WALKABLE_BIT);
+				bots_paths.deadly_count++;
+				continue;
+			}
+		}
 		/* (the middle first: covered, the surface is; else most of the
 		points between it and the corners) */
 		for (sample = -1; sample < corner_count; sample++)
@@ -8292,6 +8334,29 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 	}
 	bots_profile_part(_bots_part_walk, &started);
 
+	/* port: a step into a volume the map kills in (a path short of its goal
+	gone on in a straight line, a strafe, a retreat) not taken, by a bot not
+	in one already: the goal given up, an item left be (death_volumes.c) */
+	if (tick.moving && death_volumes_any() && death_volume_at(&tick.position) == NONE)
+	{
+		real_point3d ahead = tick.position;
+
+		ahead.x += (real)cos(tick.move_direction) * 1.2f;
+		ahead.y += (real)sin(tick.move_direction) * 1.2f;
+		if (death_volume_column(&ahead, 1.0f) ||
+			(ahead.z -= 1.5f, death_volume_at(&ahead) != NONE))
+		{
+			tick.moving = FALSE;
+			if (bot->goal_kind == _bots_goal_item && object_try_and_get(bot->item_index))
+				bots_item_set_unreachable(bot, bot->item_index);
+			if (game_time_get() - bot->death_volume_tick > TICKS_PER_SECOND)
+			{
+				bot->goal_kind = _bots_goal_none;
+				bot->path.valid = FALSE;
+				bot->death_volume_tick = game_time_get();
+			}
+		}
+	}
 	if (tick.moving)
 	{
 		real relative = bots_angle_difference(tick.move_direction, bot->yaw);

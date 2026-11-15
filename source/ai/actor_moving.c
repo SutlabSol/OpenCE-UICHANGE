@@ -2079,35 +2079,44 @@ boolean actor_path_refresh(
 						destination_type == _destination_raw_location))
 				{
 					struct path_result *fallback_path = &actor->control.path.path;
-					real_vector3d step_vec;
-					real step_dist;
+					real_point3d const *destination_point = &actor->control.path.destination.point;
+					real_point3d stop, landing;
+					boolean edge;
+					real full = distance2d((real_point2d const *)&actor->input.position.body_position,
+						(real_point2d const *)destination_point);
+					/* port: the straight line walked only over ground (no
+					drop over 1.2 units, no wall, no kill volume): House 2's
+					grunts walked it off the roofs and died of the fall */
+					real walked = firefight_straight_walk(&actor->input.position.body_position, destination_point,
+						8.0f, &stop, &edge, &landing);
 
 					csmemset(fallback_path, 0, sizeof(*fallback_path));
-					fallback_path->valid = TRUE;
 					fallback_path->endpoint = actor->control.path.destination;
 					fallback_path->step_index = 0;
 					fallback_path->step_count = 1;
 					fallback_path->steps[0].surface_index = actor->input.pathfinding_surface_index;
-					vector_from_points3d(
-						&actor->input.position.body_position,
-						&actor->control.path.destination.point,
-						&step_vec);
-					step_dist = normalize3d(&step_vec);
-					if (step_dist > 10.0f)
+					if (walked >= 0.75f)
 					{
-						point_from_line3d(
-							&actor->input.position.body_position,
-							&step_vec,
-							8.0f,
-							&fallback_path->steps[0].point);
+						fallback_path->valid = TRUE;
+						fallback_path->steps[0].point = walked >= full - 0.25f ? *destination_point : stop;
+						fallback_path->steps_finish_path = walked >= full - 0.25f;
+						success = TRUE;
+					}
+					/* port: at an edge with what it goes for below and ground
+					to land on: it chooses to drop, and that drop does not
+					hurt it (firefight_actor_drop) - else it would stand there
+					a target */
+					else if (edge &&
+						destination_type == _destination_prop &&
+						destination_point->z < stop.z - 1.2f &&
+						landing.z < stop.z - 1.2f)
+					{
+						fallback_path->valid = TRUE;
+						fallback_path->steps[0].point = landing;
 						fallback_path->steps_finish_path = FALSE;
+						firefight_actor_drop(actor->meta.unit_index);
+						success = TRUE;
 					}
-					else
-					{
-						fallback_path->steps[0].point = actor->control.path.destination.point;
-						fallback_path->steps_finish_path = TRUE;
-					}
-					success = TRUE;
 				}
 
 				if (success &&
