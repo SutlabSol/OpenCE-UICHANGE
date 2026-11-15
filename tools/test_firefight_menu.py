@@ -431,12 +431,18 @@ def test_the_ordnance_drops_in_a_pod_every_machine_shows():
     assert '"scenery\\\\c_storage\\\\c_storage"' in RANDOMIZER_C
     # (where a pod lands: map ground, seen, clear round, open sky; its weapons
     # held on its sides, full)
-    for rule in ("if (collision.object_index != NONE)", "if (collision.plane.n.k < 0.8f)",
+    for rule in ("if (collision.type == _collision_result_object)", "if (collision.plane.n.k < 0.8f)",
                  "if (pod_ray(structure, eye, &vector, &collision) && collision.t < 0.98f)",
                  "collision.t * FF_POD_FALL_HEIGHT < sky"):
         assert rule in SPAWNER_C
     assert "pod_weapon_fill(object_index);" in SPAWNER_C and "pod_weapons_hold(FALSE);" in SPAWNER_C
-    assert "_ammo" not in SPAWNER_C.split("void firefight_spawn_ordnance_drop(", 1)[1].split("\n}\n", 1)[0]
+    drop = SPAWNER_C.split("void firefight_spawn_ordnance_drop(", 1)[1].split("\n}\n", 1)[0]
+    # (the ammo crate is the pod's own: never the level's ammo powerups)
+    assert "ff_ammo_tags" not in drop
+    # (port: the pods let go in groups, each player's set its own, rolled by its health)
+    assert "ordnance_roll(odds->health)" in drop and "first_drop" in drop
+    assert "FIREFIGHT_ORDNANCE_MIN_GROUPS = 3," in (ROOT / "port/linux/include/halo_firefight.h").read_text()
+    assert "pod_elapsed = elapsed - firefight_ordnance_pod_release_delay(pod, pods);" in SPAWNER_C
     modes = (ROOT / "port/assets/tag_packs/watanoge_gamemodes.toml").read_text()
     assert '"scenery\\\\c_storage\\\\"' in modes
 

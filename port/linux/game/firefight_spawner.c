@@ -30,6 +30,7 @@ Friendly AI Reinforcements, and Round-Scheduled Player Vehicles.
 #include "game/game_allegiance.h"
 #include "game/game_engine.h"
 #include "game/players.h"
+#include "interface/hud_messaging.h"
 #include "items/equipment_definitions.h"
 #include "items/item_definitions.h"
 #include "items/weapon_definitions.h"
@@ -235,24 +236,40 @@ of near the player. Only a marker, taken away on every machine as Firefight
 plays (before any pod is made) */
 #define FF_DROP_AREA_TAG FF_POD_TAG
 
-/* (the host's) what the pods in the air hold; then, landed, each weapon held
-against its pod's side at its place till it's taken (or knocked off) */
+/* (the host's) what the pods in the air hold, each pod's (NONE: nothing, or
+taken out already); then, landed, each weapon (or powerup) held against its
+pod's side at its place till it's taken (or knocked off); and which pods give
+what they bring themselves, to a player walking into them (an ammo crate, or
+a powerup the level has no tag of) */
 static long g_pod_contents[FF_POD_MAX_CONTENTS];
 static short g_pod_content_count = 0;
+static boolean g_pod_touch[FIREFIGHT_MAX_ORDNANCE_PODS];
 static struct
 {
 	long object_index;
+	short pod;
 	real_point3d position;
 	real_vector3d forward;
 	real_vector3d up;
 } g_pod_held[FF_POD_MAX_CONTENTS];
 static short g_pod_held_count = 0;
-/* (each machine's) whether the pods shown have landed, each one's scenery,
-how high it falls from, and the drop they show */
-static boolean g_pod_landed = FALSE;
+/* (each machine's) where each pod shown is (port: each lets go with its
+group, firefight_ordnance_pod_release_delay), each one's scenery, how high it
+falls from, and the drop they show; and the pods it has seen used up (its
+own players told so) */
+enum
+{
+	_pod_phase_waiting = 0,
+	_pod_phase_falling,
+	_pod_phase_landed,
+	_pod_phase_gone
+};
+static byte g_pod_phase[FIREFIGHT_MAX_ORDNANCE_PODS];
+static unsigned long g_pod_spent_seen[(FIREFIGHT_MAX_ORDNANCE_PODS + 31) / 32];
 static long g_pod_objects[FIREFIGHT_MAX_ORDNANCE_PODS];
 static real g_pod_fall_heights[FIREFIGHT_MAX_ORDNANCE_PODS];
 static long g_pod_shown_time = NONE;
+static long g_pod_shown_tag = NONE;
 /* (each machine's) whether the pods shown are the capsule (else the crate) */
 static boolean g_pod_capsule = FALSE;
 /* (each machine's) the drop areas the level has, found once it plays */
@@ -5231,7 +5248,6 @@ static long find_loaded_tag_by_substring(unsigned long group_tag, char const *ex
 	return NONE;
 }
 
-static void pod_contents_add(long tag_index);
 static void pod_contents_spawn(void);
 static boolean ordnance_pod_spot(real_point3d const *anchor, long anchor_unit, boolean at_area,
 	real_point3d const *others, short other_count, real_point3d *out_position);
@@ -5385,12 +5401,103 @@ static void ordnance_pools_build(long *regular, short *regular_count, long *heav
 	}
 }
 
+/* port: what a drop brings each player: a weapon always, and bonuses by its
+health (its body's vitality; a player with no body, whole), each rolled on its
+own, one of each at most, any or none of them (percent). The game's first
+drop is a weapon each, nothing else */
+static struct ff_ordnance_odds
+{
+	byte extra_weapon;
+	byte ammo_crate;
+	byte overshield;
+	byte health;
+} const g_ordnance_odds[] = {
+	{ 10, 20, 20, 0 },  /* half its health or more */
+	{ 10, 10, 30, 30 }, /* under half */
+	{ 10, 10, 30, 60 }, /* under a quarter */
+};
+
+static boolean ordnance_roll(byte percent)
+{
+	return (long)(spawner_rand() % 100) < (long)percent;
+}
+
+/* a pod's weapon: of the variant's profile's half the time when it has
+any, else a heavy one (when `heavy`, and there are any) or a regular one */
+static long ordnance_weapon_pick(
+	boolean heavy,
+	long const *regular, short regular_count,
+	long const *heavy_pool, short heavy_count,
+	long const *custom, short custom_count)
+{
+	if (custom_count && ((!regular_count && !heavy_count) || (spawner_rand() & 1)))
+		return ordnance_bag_next(_ff_ordnance_bag_custom, custom, custom_count);
+	if (heavy && !heavy_count)
+		heavy = FALSE;
+	else if (!heavy && !regular_count)
+		heavy = TRUE;
+	if (heavy ? !heavy_count : !regular_count)
+		return NONE;
+	return heavy ? ordnance_bag_next(_ff_ordnance_bag_heavy, heavy_pool, heavy_count) :
+		ordnance_bag_next(_ff_ordnance_bag_regular, regular, regular_count);
+}
+
+static boolean ordnance_powerup_usable(long tag_index, short powerup_type)
+{
+	struct equipment_definition *definition = equipment_definition_get(tag_index);
+
+	/* (a powerup of no time does nothing when taken: players.c) */
+	return definition && definition->equipment.powerup_type == powerup_type &&
+		definition->equipment.powerup_time > 0.0f;
+}
+
+/* the level's powerup of the kind (the game's own by name first); NONE when
+it has none: the pod gives it itself then */
+static long ordnance_powerup_tag(short powerup_type)
+{
+	char const *path = powerup_type == _equipment_powerup_health ? "powerups\\health pack" : "powerups\\over shield";
+	long tag_index = tag_loaded(EQUIPMENT_DEFINITION_TAG, path);
+	struct tag_iterator iterator;
+
+	if (tag_index != NONE && ordnance_powerup_usable(tag_index, powerup_type))
+		return tag_index;
+	tag_iterator_new(&iterator, EQUIPMENT_DEFINITION_TAG);
+	while ((tag_index = tag_iterator_next(&iterator)) != NONE)
+	{
+		if (ordnance_powerup_usable(tag_index, powerup_type))
+			return tag_index;
+	}
+	return NONE;
+}
+
+/* a drop's pods as they are rolled, before they're the drop's */
+struct ff_ordnance_roll
+{
+	short count;
+	long tags[FF_POD_MAX_CONTENTS];
+	byte kinds[FF_POD_MAX_CONTENTS];
+	byte owners[FF_POD_MAX_CONTENTS];
+};
+
+static void ordnance_roll_add(struct ff_ordnance_roll *roll, short kind, byte owner, long tag_index)
+{
+	if (roll->count >= FF_POD_MAX_CONTENTS)
+		return;
+	if (kind == _ff_pod_kind_weapon &&
+		(tag_index == NONE || firefight_weapon_is_objective(tag_index, "an ordnance pod")))
+	{
+		return;
+	}
+	roll->tags[roll->count] = tag_index;
+	roll->kinds[roll->count] = (byte)kind;
+	roll->owners[roll->count++] = owner;
+}
+
 void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 {
 	real_point3d player_positions[16];
 	long player_units[16];
 	short player_count = get_living_player_positions(player_positions, player_units, 16);
-	short total_players = count_active_session_players();
 	short round_num = (short)MAX(1, ff_state.current_round);
 	long pistol_weap;
 	long ar_weap;
@@ -5400,7 +5507,7 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 	real_point3d anchor;
 	long anchor_unit;
 	short pod_count;
-	short i, p;
+	short i;
 
 	if (player_count == 0)
 	{
@@ -5423,48 +5530,21 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 	sniper_weap = find_loaded_tag_by_substring(WEAPON_DEFINITION_TAG, "weapons\\sniper rifle\\sniper rifle", "sniper rifle", NULL);
 	rocket_weap = find_loaded_tag_by_substring(WEAPON_DEFINITION_TAG, "weapons\\rocket launcher\\rocket launcher", "rocket launcher", NULL);
 
-	/* Directly refill all living players' reserve ammunition (except rocket launchers), grenades, and health on resupply */
+	/* (grenades topped up as a drop comes; the rest is what the pods bring:
+	an ammo crate, a health pack) */
 	for (i = 0; i < player_count; i++)
 	{
 		struct unit_datum *u = player_units[i] != NONE ?
 			(struct unit_datum *)object_try_and_get_and_verify_type(player_units[i], _object_mask_unit) : NULL;
-		short slot;
 
 		if (!u)
 			continue;
-		if (u->object.body_vitality < 1.0f)
-			u->object.body_vitality = 1.0f;
 		if (u->unit.grenade_counts[_unit_grenade_human_fragmentation] < 4)
 			u->unit.grenade_counts[_unit_grenade_human_fragmentation] =
 				(signed char)MIN(4, u->unit.grenade_counts[_unit_grenade_human_fragmentation] + 2);
 		if (u->unit.grenade_counts[_unit_grenade_covenant_plasma] < 4)
 			u->unit.grenade_counts[_unit_grenade_covenant_plasma] =
 				(signed char)MIN(4, u->unit.grenade_counts[_unit_grenade_covenant_plasma] + 2);
-
-		for (slot = 0; slot < 4; slot++)
-		{
-			long weap_idx = u->unit.weapon_object_indices[slot];
-			struct weapon_datum *weap;
-			struct weapon_definition *weap_def;
-			short m;
-
-			if (weap_idx == NONE)
-				continue;
-			weap = (struct weapon_datum *)object_try_and_get_and_verify_type(weap_idx, _object_mask_weapon);
-			if (!weap || weap->definition_index == rocket_weap)
-				continue;
-			weap->weapon.age = 0.0f;
-			weap_def = weapon_definition_get(weap->definition_index);
-			if (!weap_def)
-				continue;
-			for (m = 0; m < weap_def->weapon.magazines.count && m < 2; m++)
-			{
-				struct weapon_magazine_definition *mag_def = TAG_BLOCK_GET_ELEMENT(
-					&weap_def->weapon.magazines, m, struct weapon_magazine_definition);
-				if (mag_def && mag_def->rounds_total_maximum > 0)
-					weap->weapon.magazines[m].rounds_total = mag_def->rounds_total_maximum;
-			}
-		}
 	}
 
 	/* (the pods come to the player nearest the rest: people, not bots) */
@@ -5488,14 +5568,12 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 		}
 	}
 
-	/* (pods still in the air with the last drop's: their weapons out now) */
-	pod_contents_spawn();
-	g_pod_held_count = 0;
-
-	/* What the pods hold, full of ammunition, scaling with player numbers (up
-	to 8 players' worth, a weapon a pod): 3 for each player, 4 from round 3, and
-	one more on a heavy drop (round 4 on, or one called for anti-armour), each
-	of the bags above; and one of the variant's profile's for each player */
+	/* port: what the pods hold, each player's set (by its place among the
+	game's players, as firefight_hud.c counts them, which marks a player's own
+	alone), full of ammunition: a weapon, the drop's first a heavy one on a
+	heavy drop (round 4 on, or one called for anti-armour), the rest heavy
+	FF_ORDNANCE_HEAVY_PERCENT of the time, of the bags above; and the rest of
+	g_ordnance_odds, by the player's health */
 	{
 		long regular[FF_ORDNANCE_BAG_SIZE];
 		long heavy_pool[FF_ORDNANCE_BAG_SIZE];
@@ -5504,7 +5582,14 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 		short heavy_count;
 		short custom_count = 0;
 		boolean heavy = round_num >= 4 || heavy_anti_armor;
-		short pods = (short)(3 + (round_num >= 3 ? 1 : 0) + (heavy ? 1 : 0));
+		boolean first_drop = ff_state.ordnance_drops_made == 0;
+		boolean give_and_take = skull_active(_skull_give_and_take);
+		long health_tag = ordnance_powerup_tag(_equipment_powerup_health);
+		long shield_tag = ordnance_powerup_tag(_equipment_powerup_overshield);
+		struct ff_ordnance_roll roll;
+		struct data_iterator iterator;
+		struct player_datum *player;
+		short order = 0;
 
 		ordnance_pools_build(regular, &regular_count, heavy_pool, &heavy_count);
 		for (i = 0; i < ff_custom_weapon_count; i++)
@@ -5518,28 +5603,66 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 			ordnance_pool_add(heavy_pool, &heavy_count, sniper_weap);
 			ordnance_pool_add(heavy_pool, &heavy_count, rocket_weap);
 		}
-		/* (each player's set: its pods, in order; firefight_hud.c marks a
-		player's own set alone) */
-		ff_state.ordnance_pods_per_player = (short)(pods + (custom_count ? 1 : 0));
-		for (p = 0; p < MIN(total_players, 8); p++)
+		roll.count = 0;
+		ff_state.ordnance_drops_made++;
+		if (!player_data)
+			return;
+		data_iterator_new(&iterator, player_data);
+		while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL &&
+			roll.count < FF_POD_MAX_CONTENTS)
 		{
-			short pod;
+			struct unit_datum *unit;
+			struct ff_ordnance_odds const *odds;
+			real health = 1.0f;
+			byte owner;
 
-			for (pod = 0; pod < pods; pod++)
+			if (player->quit_out_of_game)
+				continue;
+			owner = (byte)MIN(order, FIREFIGHT_ORDNANCE_POD_ANYONE - 1);
+			order++;
+			unit = player->unit_index != NONE ?
+				(struct unit_datum *)object_try_and_get_and_verify_type(player->unit_index, _object_mask_unit) : NULL;
+			if (unit && !TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
+				health = unit->object.body_vitality;
+			odds = &g_ordnance_odds[health < 0.25f ? 2 : health < 0.5f ? 1 : 0];
+			ordnance_roll_add(&roll, _ff_pod_kind_weapon, owner, ordnance_weapon_pick(
+				heavy || ordnance_roll(FF_ORDNANCE_HEAVY_PERCENT),
+				regular, regular_count, heavy_pool, heavy_count, custom, custom_count));
+			if (first_drop)
+				continue;
+			if (ordnance_roll(odds->extra_weapon))
 			{
-				boolean heavy_pod = (heavy && pod == 0) ||
-					(long)(spawner_rand() % 100) < FF_ORDNANCE_HEAVY_PERCENT;
-
-				if (heavy_pod && !heavy_count)
-					heavy_pod = FALSE;
-				else if (!heavy_pod && !regular_count)
-					heavy_pod = TRUE;
-				pod_contents_add(heavy_pod ? ordnance_bag_next(_ff_ordnance_bag_heavy, heavy_pool, heavy_count) :
-					ordnance_bag_next(_ff_ordnance_bag_regular, regular, regular_count));
+				ordnance_roll_add(&roll, _ff_pod_kind_weapon, owner, ordnance_weapon_pick(
+					ordnance_roll(FF_ORDNANCE_HEAVY_PERCENT),
+					regular, regular_count, heavy_pool, heavy_count, custom, custom_count));
 			}
-			if (custom_count)
-				pod_contents_add(ordnance_bag_next(_ff_ordnance_bag_custom, custom, custom_count));
+			if (ordnance_roll(odds->ammo_crate))
+				ordnance_roll_add(&roll, _ff_pod_kind_ammo_crate, owner, NONE);
+			if (ordnance_roll(odds->overshield))
+				ordnance_roll_add(&roll, _ff_pod_kind_overshield, owner, shield_tag);
+			/* (Give & Take: a health pack is never taken, players.c) */
+			if (!give_and_take && ordnance_roll(odds->health))
+				ordnance_roll_add(&roll, _ff_pod_kind_health, owner, health_tag);
 		}
+		/* (no weapon to be had for anyone: no drop, the last one's left as it is) */
+		if (!roll.count)
+			return;
+
+		/* (pods still in the air with the last drop's: their weapons out now,
+		where those land) */
+		pod_contents_spawn();
+		g_pod_held_count = 0;
+		ff_state.ordnance_pods_per_player = 0;
+		for (i = 0; i < roll.count; i++)
+		{
+			g_pod_contents[i] = roll.tags[i];
+			g_pod_touch[i] = roll.kinds[i] == _ff_pod_kind_ammo_crate ||
+				(roll.kinds[i] != _ff_pod_kind_weapon && roll.tags[i] == NONE);
+			ff_state.ordnance_pod_kinds[i] = roll.kinds[i];
+			ff_state.ordnance_pod_owners[i] = roll.owners[i];
+		}
+		g_pod_content_count = roll.count;
+		csmemset(ff_state.ordnance_pod_spent, 0, sizeof(ff_state.ordnance_pod_spent));
 	}
 
 	/* where each pod lands (ordnance_pod_spot), apart from each other: round
@@ -5581,7 +5704,7 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 	}
 	ff_state.ordnance_pod_count = pod_count;
 	ff_state.last_ordnance_position = ff_state.ordnance_pod_positions[0];
-	ff_state.ordnance_navpoint_ticks = 20 * TICKS_PER_SECOND;
+	ff_state.ordnance_navpoint_ticks = (short)(20 * TICKS_PER_SECOND + firefight_ordnance_drop_span_ticks());
 	ff_state.last_ordnance_is_heavy = (round_num >= 4 || heavy_anti_armor);
 
 	/* (let go now: every machine shows them falling, and their weapons come
@@ -5882,16 +6005,6 @@ static boolean ordnance_pod_spot(
 	return FALSE;
 }
 
-static void pod_contents_add(long tag_index)
-{
-	if (tag_index == NONE || g_pod_content_count >= FF_POD_MAX_CONTENTS ||
-		firefight_weapon_is_objective(tag_index, "an ordnance pod"))
-	{
-		return;
-	}
-	g_pod_contents[g_pod_content_count++] = tag_index;
-}
-
 /* a weapon's magazines full, reserve and loaded both */
 static void pod_weapon_fill(long weapon_index)
 {
@@ -5956,33 +6069,49 @@ static void pod_slot_place(short pod, real_point3d *position, real_vector3d *for
 	*up = outward;
 }
 
-/* the pods' weapons, one in each (in order), full, and held there
-(pod_weapons_hold) */
+/* a pod's weapon (or powerup), out on it as it lands, full, and held there
+(pod_weapons_hold); a powerup stands upright in it */
+static void pod_content_spawn(short pod)
+{
+	struct object_placement_data placement;
+	long tag_index;
+	long object_index;
+
+	if (pod < 0 || pod >= g_pod_content_count || g_pod_contents[pod] == NONE)
+		return;
+	tag_index = g_pod_contents[pod];
+	g_pod_contents[pod] = NONE;
+	object_placement_data_new(&placement, tag_index, NONE);
+	pod_slot_place(pod, &placement.position, &placement.forward, &placement.up);
+	if (ff_state.ordnance_pod_kinds[pod] != _ff_pod_kind_weapon)
+	{
+		placement.forward = placement.up;
+		placement.up = *global_up3d;
+	}
+	object_index = object_new(&placement);
+	if (object_index == NONE)
+		return;
+	SET_FLAG(object_get(object_index)->object.flags, _object_cannot_be_garbage_bit, TRUE);
+	pod_weapon_fill(object_index);
+	if (g_pod_held_count < FF_POD_MAX_CONTENTS)
+	{
+		g_pod_held[g_pod_held_count].object_index = object_index;
+		g_pod_held[g_pod_held_count].pod = pod;
+		g_pod_held[g_pod_held_count].position = placement.position;
+		g_pod_held[g_pod_held_count].forward = placement.forward;
+		g_pod_held[g_pod_held_count++].up = placement.up;
+	}
+}
+
+/* every pod's not out yet (a new drop's coming: the last one's out where
+they land) */
 static void pod_contents_spawn(void)
 {
 	short pods = (short)PIN(ff_state.ordnance_pod_count, 1, FIREFIGHT_MAX_ORDNANCE_PODS);
-	short i;
+	short pod;
 
-	for (i = 0; i < g_pod_content_count && i < pods; i++)
-	{
-		struct object_placement_data placement;
-		long object_index;
-
-		object_placement_data_new(&placement, g_pod_contents[i], NONE);
-		pod_slot_place(i, &placement.position, &placement.forward, &placement.up);
-		object_index = object_new(&placement);
-		if (object_index == NONE)
-			continue;
-		SET_FLAG(object_get(object_index)->object.flags, _object_cannot_be_garbage_bit, TRUE);
-		pod_weapon_fill(object_index);
-		if (g_pod_held_count < FF_POD_MAX_CONTENTS)
-		{
-			g_pod_held[g_pod_held_count].object_index = object_index;
-			g_pod_held[g_pod_held_count].position = placement.position;
-			g_pod_held[g_pod_held_count].forward = placement.forward;
-			g_pod_held[g_pod_held_count++].up = placement.up;
-		}
-	}
+	for (pod = 0; pod < g_pod_content_count && pod < pods; pod++)
+		pod_content_spawn(pod);
 	g_pod_content_count = 0;
 }
 
@@ -5996,7 +6125,7 @@ static void pod_weapons_hold(boolean release)
 	{
 		long object_index = g_pod_held[i].object_index;
 		struct object_datum *object = object_index != NONE ?
-			object_try_and_get_and_verify_type(object_index, _object_mask_weapon) : NULL;
+			object_try_and_get_and_verify_type(object_index, _object_mask_weapon | _object_mask_equipment) : NULL;
 
 		if (!object || object->object.parent_object_index != NONE || release ||
 			distance3d(&object->object.position, &g_pod_held[i].position) > 0.6f)
@@ -6010,6 +6139,152 @@ static void pod_weapons_hold(boolean release)
 	}
 	if (release)
 		g_pod_held_count = 0;
+}
+
+/* (the host's) a pod gone: what's on it falls to the ground */
+static void pod_weapons_release(short pod)
+{
+	short i;
+
+	for (i = 0; i < g_pod_held_count; i++)
+	{
+		if (g_pod_held[i].pod == pod)
+			g_pod_held[i].object_index = NONE;
+	}
+}
+
+boolean firefight_ordnance_pod_spent(short pod)
+{
+	return pod >= 0 && pod < FIREFIGHT_MAX_ORDNANCE_PODS &&
+		(ff_state.ordnance_pod_spent[pod >> 5] & (1UL << (pod & 31))) != 0;
+}
+
+/* how near a player walks to a pod's spot for what the pod gives itself:
+across, and up or down */
+#define FF_POD_TOUCH_REACH 1.4f
+#define FF_POD_TOUCH_HEIGHT 2.0f
+
+static boolean pod_unit_touches(short pod, long unit_index, real reach)
+{
+	struct object_datum *unit = object_try_and_get_and_verify_type(unit_index, _object_mask_unit);
+	real_point3d const *spot = &ff_state.ordnance_pod_positions[pod];
+
+	return unit && !TEST_FLAG(unit->object.damage_flags, _object_dead_bit) &&
+		distance2d((real_point2d const *)&unit->object.position, (real_point2d const *)spot) < reach &&
+		fabs(unit->object.position.z - spot->z) < FF_POD_TOUCH_HEIGHT;
+}
+
+/* the weapon in the unit's hands' reserve full (one of charge charged);
+whether it wanted it */
+static boolean pod_unit_weapon_refill(long unit_index)
+{
+	struct unit_datum *unit = (struct unit_datum *)object_try_and_get_and_verify_type(unit_index, _object_mask_unit);
+	short slot = unit ? unit->unit.current_weapon_index : NONE;
+	long weapon_index = slot >= 0 && slot < MAXIMUM_WEAPONS_PER_UNIT ? unit->unit.weapon_object_indices[slot] : NONE;
+	struct weapon_datum *weapon = weapon_index != NONE ?
+		(struct weapon_datum *)object_try_and_get_and_verify_type(weapon_index, _object_mask_weapon) : NULL;
+	struct weapon_definition *definition = weapon ? weapon_definition_get(weapon->definition_index) : NULL;
+	boolean filled = FALSE;
+	short m;
+
+	if (!definition)
+		return FALSE;
+	if (!definition->weapon.magazines.count && weapon->weapon.age > 0.0f)
+	{
+		weapon->weapon.age = 0.0f;
+		filled = TRUE;
+	}
+	for (m = 0; m < definition->weapon.magazines.count && m < 2; m++)
+	{
+		struct weapon_magazine_definition *magazine = TAG_BLOCK_GET_ELEMENT(
+			&definition->weapon.magazines, m, struct weapon_magazine_definition);
+
+		if (magazine->rounds_total_maximum > 0 &&
+			weapon->weapon.magazines[m].rounds_total < magazine->rounds_total_maximum)
+		{
+			weapon->weapon.magazines[m].rounds_total = magazine->rounds_total_maximum;
+			filled = TRUE;
+		}
+	}
+	return filled;
+}
+
+/* (the host's) the landed pods that give what they bring themselves: to the
+first player on foot to walk into one who wants it (a weapon not full; a body
+hurt; shields not overcharged yet), then it's used up */
+static void pods_touch_update(short pods)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+	short pod;
+
+	if (!player_data)
+		return;
+	for (pod = 0; pod < pods; pod++)
+	{
+		if (g_pod_phase[pod] != _pod_phase_landed || !g_pod_touch[pod] || firefight_ordnance_pod_spent(pod))
+			continue;
+		data_iterator_new(&iterator, player_data);
+		while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+		{
+			struct object_datum *unit = player->unit_index != NONE ? object_try_and_get(player->unit_index) : NULL;
+			boolean used = FALSE;
+
+			if (!unit || unit->object.parent_object_index != NONE ||
+				!pod_unit_touches(pod, player->unit_index, FF_POD_TOUCH_REACH))
+			{
+				continue;
+			}
+			switch (ff_state.ordnance_pod_kinds[pod])
+			{
+			case _ff_pod_kind_ammo_crate: used = pod_unit_weapon_refill(player->unit_index); break;
+			case _ff_pod_kind_health: used = !skull_active(_skull_give_and_take) && object_restore_body(player->unit_index); break;
+			case _ff_pod_kind_overshield: used = object_double_charge_shield(player->unit_index); break;
+			}
+			if (used)
+			{
+				ff_state.ordnance_pod_spent[pod >> 5] |= 1UL << (pod & 31);
+				break;
+			}
+		}
+	}
+}
+
+/* (each machine's) a pod used up since it last looked: its own players at it
+told what they got */
+static void pods_spent_messages(short pods)
+{
+	short pod;
+
+	for (pod = 0; pod < pods; pod++)
+	{
+		unsigned long bit = 1UL << (pod & 31);
+		struct data_iterator iterator;
+		struct player_datum *player;
+		wchar_t const *text;
+
+		if (!(ff_state.ordnance_pod_spent[pod >> 5] & bit) || (g_pod_spent_seen[pod >> 5] & bit))
+			continue;
+		g_pod_spent_seen[pod >> 5] |= bit;
+		switch (ff_state.ordnance_pod_kinds[pod])
+		{
+		case _ff_pod_kind_ammo_crate: text = L"Ammo crate: weapon refilled."; break;
+		case _ff_pod_kind_health: text = L"Health restored."; break;
+		case _ff_pod_kind_overshield: text = L"Overshield!"; break;
+		default: continue;
+		}
+		if (!player_data)
+			continue;
+		data_iterator_new(&iterator, player_data);
+		while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+		{
+			if (player->local_player_index != NONE && player->unit_index != NONE &&
+				pod_unit_touches(pod, player->unit_index, FF_POD_TOUCH_REACH * 1.5f))
+			{
+				hud_print_message(player->local_player_index, text);
+			}
+		}
+	}
 }
 
 static void pod_effect(char const *effect_name, real_point3d const *position)
@@ -6075,6 +6350,40 @@ static void pod_position_at(short pod, long elapsed, real_point3d *position, rea
 	}
 }
 
+/* port: a drop's groups, 3 to 8 by how many pods (two a group; fewer pods
+than 3, one a group), each FIREFIGHT_ORDNANCE_GROUP_TICKS after the last; the
+pods in order (each player's set together, firefight_spawn_ordnance_drop) */
+static short ordnance_group_count(short pod_count)
+{
+	short groups = (short)PIN((pod_count + 1) / 2, FIREFIGHT_ORDNANCE_MIN_GROUPS, FIREFIGHT_ORDNANCE_MAX_GROUPS);
+
+	return (short)MIN(groups, MAX(pod_count, 1));
+}
+
+long firefight_ordnance_pod_release_delay(short pod, short pod_count)
+{
+	if (pod_count <= 0)
+		return 0;
+	pod = (short)PIN(pod, 0, pod_count - 1);
+	return (long)(pod * ordnance_group_count(pod_count) / pod_count) * FIREFIGHT_ORDNANCE_GROUP_TICKS;
+}
+
+long firefight_ordnance_drop_span_ticks(void)
+{
+	short pods = (short)PIN(ff_state.ordnance_pod_count, 1, FIREFIGHT_MAX_ORDNANCE_PODS);
+
+	return firefight_ordnance_pod_release_delay((short)(pods - 1), pods);
+}
+
+long firefight_ordnance_pod_land_time(short pod)
+{
+	short pods = (short)PIN(ff_state.ordnance_pod_count, 1, FIREFIGHT_MAX_ORDNANCE_PODS);
+
+	if (ff_state.ordnance_pod_drop_time == NONE || ff_state.ordnance_pod_drop_time <= 0)
+		return NONE;
+	return ff_state.ordnance_pod_drop_time + firefight_ordnance_pod_release_delay(pod, pods) + FF_POD_FALL_TICKS;
+}
+
 void firefight_ordnance_pod_reset(void)
 {
 	short pod;
@@ -6082,20 +6391,59 @@ void firefight_ordnance_pod_reset(void)
 	ff_state.ordnance_pod_drop_time = NONE;
 	ff_state.ordnance_pod_count = 0;
 	for (pod = 0; pod < FIREFIGHT_MAX_ORDNANCE_PODS; pod++)
+	{
 		g_pod_objects[pod] = NONE;
+		g_pod_phase[pod] = _pod_phase_waiting;
+		g_pod_touch[pod] = FALSE;
+	}
+	csmemset(g_pod_spent_seen, 0, sizeof(g_pod_spent_seen));
 	g_pod_shown_time = NONE;
 	g_pod_content_count = 0;
 	g_pod_held_count = 0;
-	g_pod_landed = FALSE;
+	/* (the host's) the game's first drop, 5 to 10 seconds in (port) */
+	ff_state.ordnance_drops_made = 0;
+	ff_state.first_ordnance_tick = (long)(5 * TICKS_PER_SECOND + spawner_rand() % (5 * TICKS_PER_SECOND + 1));
 	/* (a game's start: the level's objects are made again) */
 	g_drop_area_count = 0;
 	g_drop_areas_found = FALSE;
+}
+
+/* (each machine's) a pod's scenery made as its group lets go, from as high
+as the sky over it lets it */
+static void pod_let_go(short pod, long elapsed, long pod_tag)
+{
+	struct collision_result collision;
+	real_point3d ray_start = ff_state.ordnance_pod_positions[pod];
+	real_vector3d ray_up = { 0.0f, 0.0f, FF_POD_FALL_HEIGHT };
+
+	g_pod_fall_heights[pod] = FF_POD_FALL_HEIGHT;
+	ray_start.z += 1.0f;
+	if (collision_test_vector(FLAG(_collision_test_structure_bit), &ray_start, &ray_up, NONE, &collision))
+		g_pod_fall_heights[pod] = MAX(3.0f, collision.t * FF_POD_FALL_HEIGHT - 1.5f);
+	if (elapsed < FF_POD_FALL_TICKS)
+		pod_effect("effects\\coop teleport", &ff_state.ordnance_pod_positions[pod]);
+	g_pod_objects[pod] = NONE;
+	if (pod_tag != NONE)
+	{
+		struct object_placement_data placement;
+
+		object_placement_data_new(&placement, pod_tag, NONE);
+		pod_position_at(pod, elapsed, &placement.position, &placement.forward, &placement.up);
+		g_pod_objects[pod] = object_new(&placement);
+		if (g_pod_objects[pod] != NONE)
+		{
+			SET_FLAG(object_get(g_pod_objects[pod])->object.flags, _object_cannot_be_garbage_bit, TRUE);
+			object_set_automatic_deactivation(g_pod_objects[pod], FALSE);
+		}
+	}
 }
 
 void firefight_ordnance_pod_update(void)
 {
 	long drop_time = ff_state.ordnance_pod_drop_time;
 	short pods = (short)PIN(ff_state.ordnance_pod_count, 1, FIREFIGHT_MAX_ORDNANCE_PODS);
+	boolean host = !network_game_distributed_client();
+	boolean standing = FALSE;
 	long elapsed;
 	real_point3d position;
 	real_vector3d forward;
@@ -6109,94 +6457,109 @@ void firefight_ordnance_pod_update(void)
 	{
 		pods_delete_shown();
 		g_pod_shown_time = NONE;
-		if (!network_game_distributed_client())
+		if (host)
 			pod_weapons_hold(TRUE);
 		return;
 	}
 	elapsed = MAX(0, game_time_get() - drop_time);
 
-	/* a new drop: each pod let go from as high as the sky over it lets it */
+	/* a new drop: its pods let go group by group (port) */
 	if (g_pod_shown_time != drop_time)
 	{
-		long pod_tag = pod_tag_get(&g_pod_capsule);
-
+		g_pod_shown_tag = pod_tag_get(&g_pod_capsule);
 		pods_delete_shown();
 		g_pod_shown_time = drop_time;
-		g_pod_landed = FALSE;
+		for (pod = 0; pod < FIREFIGHT_MAX_ORDNANCE_PODS; pod++)
+			g_pod_phase[pod] = _pod_phase_waiting;
+		/* (a late joiner's: none it never saw used told of) */
+		csmemcpy(g_pod_spent_seen, ff_state.ordnance_pod_spent, sizeof(g_pod_spent_seen));
 		/* (a client's marker of them; the host set its own as it dropped them) */
-		if (network_game_distributed_client() && elapsed < FF_POD_FALL_TICKS)
-			ff_state.ordnance_navpoint_ticks = 20 * TICKS_PER_SECOND;
-		if (pod_tag == NONE)
+		if (!host && elapsed < firefight_ordnance_drop_span_ticks() + FF_POD_FALL_TICKS)
+			ff_state.ordnance_navpoint_ticks = (short)(20 * TICKS_PER_SECOND + firefight_ordnance_drop_span_ticks());
+		if (g_pod_shown_tag == NONE)
 			error(_error_silent, "firefight: no %s for the ordnance pods: their weapons land without them", FF_POD_TAG);
-		for (pod = 0; pod < pods; pod++)
+	}
+
+	for (pod = 0; pod < pods; pod++)
+	{
+		long pod_elapsed = elapsed - firefight_ordnance_pod_release_delay(pod, pods);
+
+		if (pod_elapsed < 0)
 		{
-			struct collision_result collision;
-			real_point3d ray_start = ff_state.ordnance_pod_positions[pod];
-			real_vector3d ray_up = { 0.0f, 0.0f, FF_POD_FALL_HEIGHT };
-
-			g_pod_fall_heights[pod] = FF_POD_FALL_HEIGHT;
-			ray_start.z += 1.0f;
-			if (collision_test_vector(FLAG(_collision_test_structure_bit), &ray_start, &ray_up, NONE, &collision))
-				g_pod_fall_heights[pod] = MAX(3.0f, collision.t * FF_POD_FALL_HEIGHT - 1.5f);
-			if (elapsed < FF_POD_FALL_TICKS)
-				pod_effect("effects\\coop teleport", &ff_state.ordnance_pod_positions[pod]);
-			if (pod_tag != NONE)
+			standing = TRUE;
+			continue;
+		}
+		if (g_pod_phase[pod] == _pod_phase_waiting)
+		{
+			/* (long gone before this machine saw it: a late joiner, a replay
+			sought past it) */
+			if (pod_elapsed >= FF_POD_FALL_TICKS + FF_POD_STAY_TICKS)
 			{
-				struct object_placement_data placement;
-
-				object_placement_data_new(&placement, pod_tag, NONE);
-				pod_position_at(pod, elapsed, &placement.position, &placement.forward, &placement.up);
-				g_pod_objects[pod] = object_new(&placement);
+				if (host)
+					pod_content_spawn(pod);
+				g_pod_phase[pod] = _pod_phase_gone;
+				continue;
+			}
+			pod_let_go(pod, pod_elapsed, g_pod_shown_tag);
+			g_pod_phase[pod] = _pod_phase_falling;
+		}
+		if (g_pod_phase[pod] == _pod_phase_falling)
+		{
+			if (pod_elapsed < FF_POD_FALL_TICKS)
+			{
 				if (g_pod_objects[pod] != NONE)
 				{
-					SET_FLAG(object_get(g_pod_objects[pod])->object.flags, _object_cannot_be_garbage_bit, TRUE);
-					object_set_automatic_deactivation(g_pod_objects[pod], FALSE);
+					pod_position_at(pod, pod_elapsed, &position, &forward, &up);
+					object_set_position(g_pod_objects[pod], &position, &forward, &up);
 				}
-			}
-		}
-	}
-
-	if (elapsed < FF_POD_FALL_TICKS)
-	{
-		for (pod = 0; pod < pods; pod++)
-		{
-			if (g_pod_objects[pod] == NONE)
+				standing = TRUE;
 				continue;
-			pod_position_at(pod, elapsed, &position, &forward, &up);
-			object_set_position(g_pod_objects[pod], &position, &forward, &up);
-		}
-	}
-	else if (!g_pod_landed)
-	{
-		g_pod_landed = TRUE;
-		for (pod = 0; pod < pods; pod++)
-		{
+			}
 			if (g_pod_objects[pod] != NONE)
 			{
 				pod_position_at(pod, FF_POD_FALL_TICKS, &position, &forward, &up);
 				object_set_position(g_pod_objects[pod], &position, &forward, &up);
 			}
 			/* (only a late joiner or a replay sought past it misses the blast) */
-			if (elapsed < FF_POD_FALL_TICKS + TICKS_PER_SECOND)
+			if (pod_elapsed < FF_POD_FALL_TICKS + TICKS_PER_SECOND)
 			{
 				pod_effect("weapons\\frag grenade\\effects\\explosion", &ff_state.ordnance_pod_positions[pod]);
 				pod_effect("effects\\coop teleport", &ff_state.ordnance_pod_positions[pod]);
 			}
+			if (host)
+				pod_content_spawn(pod);
+			g_pod_phase[pod] = _pod_phase_landed;
 		}
-		if (!network_game_distributed_client())
-			pod_contents_spawn();
-	}
-	else if (!network_game_distributed_client())
-	{
-		pod_weapons_hold(FALSE);
+		if (g_pod_phase[pod] == _pod_phase_landed)
+		{
+			if (pod_elapsed >= FF_POD_FALL_TICKS + FF_POD_STAY_TICKS)
+			{
+				if (g_pod_objects[pod] != NONE && object_try_and_get_and_verify_type(g_pod_objects[pod], _object_mask_scenery))
+					object_delete(g_pod_objects[pod]);
+				g_pod_objects[pod] = NONE;
+				/* (what's left on it falls to the ground with it gone) */
+				if (host)
+					pod_weapons_release(pod);
+				g_pod_phase[pod] = _pod_phase_gone;
+				continue;
+			}
+			standing = TRUE;
+		}
 	}
 
-	if (elapsed >= FF_POD_FALL_TICKS + FF_POD_STAY_TICKS)
+	if (host)
+	{
+		pod_weapons_hold(FALSE);
+		pods_touch_update(pods);
+	}
+	pods_spent_messages(pods);
+
+	/* (the drop's last pod gone) */
+	if (!standing)
 	{
 		pods_delete_shown();
-		if (!network_game_distributed_client())
+		if (host)
 		{
-			/* (what's left on them falls to the ground with them gone) */
 			pod_weapons_hold(TRUE);
 			ff_state.ordnance_pod_drop_time = NONE;
 		}

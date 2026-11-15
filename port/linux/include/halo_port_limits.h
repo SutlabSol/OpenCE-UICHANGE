@@ -189,9 +189,11 @@ in its state and copied into its levels (which moves the tags after it), and
 its variant's MAP CONTENT; 104 the game's props (tag_props.bin: the ordnance
 pod's capsule, Forge's weapon rack and their Firefight copies) added to
 Firefight's and Forge's levels, which moves the tags after them, and a
-weapon an ordnance pod (48 pods' places in Firefight's state). A Firefight game is always of this signature
+weapon an ordnance pod (48 pods' places in Firefight's state); 105 the pods
+let go in groups, each player's own, a pod an ammo crate, a health pack or an
+overshield (each pod's player, kind and use in Firefight's state). A Firefight game is always of this signature
 (network_server_message_handler.c) */
-#define HALO_PORT_MOD_NETWORK_VERSION 104
+#define HALO_PORT_MOD_NETWORK_VERSION 105
 #define HALO_PORT_MODDED_VERSION_MARK 0xFF00
 #define HALO_PORT_ADVERTISED_MODDED_VERSION (HALO_PORT_MODDED_VERSION_MARK | HALO_PORT_MOD_NETWORK_VERSION)
 

@@ -733,33 +733,37 @@ static short firefight_hud_player_order(long player_index)
 	return NONE;
 }
 
-/* the pods of the drop this view's player marks: its own set (each player's
-set, in order, by its place among the players: firefight_spawner.c's pods
-for the first 8 players; a ninth player shares the first's), all of them
-from a host that sent no sets */
-static void firefight_hud_own_pods(short pods, short *first, short *last)
+/* whether this view's player marks the pod: its own (each pod's player, by
+its place among the players: firefight_spawner.c's), or everyone's; from a
+host from before, its own set of ordnance_pods_per_player (a ninth player
+sharing the first's), else all of them */
+static boolean firefight_hud_own_pod(short pod, short pods)
 {
 	short per_player = ff_state.ordnance_pods_per_player;
-	short sets, order;
+	byte owner = ff_state.ordnance_pod_owners[pod];
+	short order;
 
-	*first = 0;
-	*last = pods;
-	if (per_player <= 0 || render.local_player_index == NONE)
-		return;
-	sets = (short)((pods + per_player - 1) / per_player);
+	if (render.local_player_index == NONE)
+		return TRUE;
 	order = firefight_hud_player_order(local_player_get_player_index(render.local_player_index));
-	if (order == NONE || sets <= 1)
-		return;
-	order = (short)(order % sets);
-	*first = (short)(order * per_player);
-	*last = (short)MIN(pods, *first + per_player);
+	if (order == NONE)
+		return TRUE;
+	if (per_player > 0)
+	{
+		short sets = (short)((pods + per_player - 1) / per_player);
+
+		return sets <= 1 || pod / per_player == order % sets;
+	}
+	return owner == FIREFIGHT_ORDNANCE_POD_ANYONE ||
+		owner == (byte)MIN(order, FIREFIGHT_ORDNANCE_POD_ANYONE - 1);
 }
 
 /* whether this view's player has been to the pod (within 2.5 units, since
 it landed: the weapon on it taken, or seen and left), its marker gone till
 the next drop */
 #define FF_HUD_POD_VISIT_DISTANCE 2.5f
-#define FF_HUD_POD_LANDED_TICKS (3 * TICKS_PER_SECOND)
+/* (so long after its own landing: its group's, firefight_ordnance_pod_land_time) */
+#define FF_HUD_POD_LANDED_TICKS (TICKS_PER_SECOND)
 static boolean firefight_hud_pod_visited(short pod)
 {
 	static long drop_time[MAXIMUM_LOCAL_PLAYERS];
@@ -778,8 +782,10 @@ static boolean firefight_hud_pod_visited(short pod)
 	}
 	if (visited[local][pod >> 5] & (1UL << (pod & 31)))
 		return TRUE;
+	if (firefight_ordnance_pod_spent(pod))
+		return TRUE;
 	if (ff_state.ordnance_pod_drop_time <= 0 ||
-		game_time_get() - ff_state.ordnance_pod_drop_time < FF_HUD_POD_LANDED_TICKS)
+		game_time_get() - firefight_ordnance_pod_land_time(pod) < FF_HUD_POD_LANDED_TICKS)
 	{
 		return FALSE;
 	}
@@ -1471,22 +1477,28 @@ void firefight_hud_draw(void)
 		its clients have too, firefight_network.c; port: this player's own
 		set alone, less those it has been to since they landed) */
 		short pods = (short)PIN(ff_state.ordnance_pod_count, 1, FIREFIGHT_MAX_ORDNANCE_PODS);
-		short first = 0, last = pods;
 		short pod;
 
-		firefight_hud_own_pods(pods, &first, &last);
-		for (pod = first; pod < last; pod++)
+		for (pod = 0; pod < pods; pod++)
 		{
 			real_point3d ord_pos = ff_state.ordnance_pod_positions[pod];
+			char const *label;
 
-			if (firefight_hud_pod_visited(pod))
+			if (!firefight_hud_own_pod(pod, pods) || firefight_hud_pod_visited(pod))
 				continue;
+			switch (ff_state.ordnance_pod_kinds[pod])
+			{
+			case _ff_pod_kind_ammo_crate: label = "AMMO"; break;
+			case _ff_pod_kind_health: label = "HEALTH"; break;
+			case _ff_pod_kind_overshield: label = "OVERSHIELD"; break;
+			default: label = ff_state.last_ordnance_is_heavy ? "HEAVY ORDNANCE" : "ORDNANCE"; break;
+			}
 
 			ord_pos.z += 0.4f;
 			draw_world_navpoint(
 				font_index, line_height, scale,
 				&ord_pos,
-				ff_state.last_ordnance_is_heavy ? "HEAVY ORDNANCE" : "ORDNANCE",
+				label,
 				0xE040E070, &green, TRUE);
 		}
 	}

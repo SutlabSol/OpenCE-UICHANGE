@@ -1887,7 +1887,8 @@ static void firefight_update(
 		if (ff_state.session_elapsed_ticks == 2)
 			firefight_spawn_player_vehicles();
 	}
-	if (ff_state.session_elapsed_ticks == 5 &&
+	/* (the game's first drop a few seconds in, 5 to 10: firefight_ordnance_pod_reset) */
+	if (ff_state.session_elapsed_ticks == MAX(5, ff_state.first_ordnance_tick) &&
 		(ff->ordnance_drops == _firefight_ordnance_per_round ||
 			ff->ordnance_drops == _firefight_ordnance_frequent ||
 			ff->ordnance_drops == _firefight_ordnance_per_set))

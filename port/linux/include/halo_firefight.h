@@ -307,6 +307,20 @@ enum
 	NUMBER_OF_FIREFIGHT_GENERATOR_FAIL_MODES
 };
 
+/* (port) what an ordnance pod brings (ordnance_pod_kinds): a weapon; an ammo
+crate, which fills the weapon in hand of the first player to walk into it
+whose weapon wants it; a health pack; an overshield. The last two are the
+level's powerup on the pod when it has one, else the pod gives it to the
+first player to walk into it who wants it, as the ammo crate does */
+enum firefight_ordnance_pod_kind
+{
+	_ff_pod_kind_weapon = 0,
+	_ff_pod_kind_ammo_crate,
+	_ff_pod_kind_health,
+	_ff_pod_kind_overshield,
+	NUMBER_OF_FF_POD_KINDS
+};
+
 enum
 {
 	_firefight_ordnance_off = 0,
@@ -346,6 +360,13 @@ enum
 	where mod version 103's state had them, firefight_network.c) */
 	FIREFIGHT_MAX_ORDNANCE_PODS = 48,
 	FIREFIGHT_ORDNANCE_PODS_BEFORE_104 = 4,
+	/* (port) a drop's pods come down in groups, so many seconds apart: 3 to
+	8 of them, by how many pods (firefight_ordnance_pod_release_delay) */
+	FIREFIGHT_ORDNANCE_MIN_GROUPS = 3,
+	FIREFIGHT_ORDNANCE_MAX_GROUPS = 8,
+	FIREFIGHT_ORDNANCE_GROUP_TICKS = 3 * 30,
+	/* (port) a pod no one player's (ordnance_pod_owners): everyone's */
+	FIREFIGHT_ORDNANCE_POD_ANYONE = 0xFF,
 	FIREFIGHT_MAX_SPAWN_ZONES_PER_WAVE = 3,
 	FIREFIGHT_MAX_BOTS = 16,
 	FIREFIGHT_BONUS_ROUND_TICKS = 60 * 30, /* 60 seconds at 30 Hz */
@@ -559,6 +580,17 @@ struct firefight_globals
 	each of the game's players by their order: each player's HUD marks its own
 	set alone); 0: one set for all (a host from before) */
 	short ordnance_pods_per_player;
+	/* port (mod version 105): each pod's player (its place among the game's
+	players, as firefight_hud.c counts them; FIREFIGHT_ORDNANCE_POD_ANYONE for
+	everyone's), what it brings (enum firefight_ordnance_pod_kind), and which
+	pods were used up (an ammo crate, or a powerup the pod gave itself) */
+	byte ordnance_pod_owners[FIREFIGHT_MAX_ORDNANCE_PODS];
+	byte ordnance_pod_kinds[FIREFIGHT_MAX_ORDNANCE_PODS];
+	unsigned long ordnance_pod_spent[(FIREFIGHT_MAX_ORDNANCE_PODS + 31) / 32];
+	/* (the host's) how many drops this game has had (the first is a weapon
+	each), and the game's tick its first comes at (5 to 10 seconds in) */
+	short ordnance_drops_made;
+	long first_ordnance_tick;
 
 	/* HUD banner state */
 	short banner_type;
@@ -910,6 +942,13 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor);
 weapons come out of it as it lands); and the last one forgotten */
 void firefight_ordnance_pod_update(void);
 void firefight_ordnance_pod_reset(void);
+/* (port) how long after the drop's time a pod is let go (its group's), and
+the last pod's: the same on every machine, from the pod's place and how many */
+long firefight_ordnance_pod_release_delay(short pod, short pod_count);
+long firefight_ordnance_drop_span_ticks(void);
+/* (port) the game time a pod lands at (NONE: no drop) */
+long firefight_ordnance_pod_land_time(short pod);
+boolean firefight_ordnance_pod_spent(short pod);
 /* Forge's TEST DROP (a drop area's): so many pods let go round `area` on this
 machine alone, without weapons, as a drop's would be (`area_object`, its
 marker, not in their way); how many found a spot. Its update each frame:

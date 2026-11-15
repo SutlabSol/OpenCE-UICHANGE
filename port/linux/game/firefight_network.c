@@ -66,6 +66,10 @@ struct firefight_net_packet
 	byte pad[1];
 	/* (mod version 104) the rest, a weapon a pod */
 	real_point3d more_ordnance_positions[FIREFIGHT_MAX_ORDNANCE_PODS - FIREFIGHT_ORDNANCE_PODS_BEFORE_104];
+	/* (mod version 105) each pod's player, what it brings, and those used up */
+	byte ordnance_pod_owners[FIREFIGHT_MAX_ORDNANCE_PODS];
+	byte ordnance_pod_kinds[FIREFIGHT_MAX_ORDNANCE_PODS];
+	unsigned long ordnance_pod_spent[(FIREFIGHT_MAX_ORDNANCE_PODS + 31) / 32];
 };
 
 /* (a host's or a replay's state from before the pods: all but them; and
@@ -144,6 +148,9 @@ long firefight_write_network_state(
 	pkt.ordnance_pod_drop_time = ff_state.ordnance_pod_drop_time;
 	pkt.ordnance_heavy = ff_state.last_ordnance_is_heavy ? 1 : 0;
 	pkt.ordnance_pods_per_player = (byte)PIN(ff_state.ordnance_pods_per_player, 0, 255);
+	csmemcpy(pkt.ordnance_pod_owners, ff_state.ordnance_pod_owners, sizeof(pkt.ordnance_pod_owners));
+	csmemcpy(pkt.ordnance_pod_kinds, ff_state.ordnance_pod_kinds, sizeof(pkt.ordnance_pod_kinds));
+	csmemcpy(pkt.ordnance_pod_spent, ff_state.ordnance_pod_spent, sizeof(pkt.ordnance_pod_spent));
 
 	csmemcpy(buffer, &pkt, sizeof(pkt));
 	return (long)sizeof(pkt);
@@ -237,7 +244,22 @@ boolean firefight_read_network_state(
 		ff_state.last_ordnance_position = pkt.ordnance_positions[0];
 		ff_state.last_ordnance_is_heavy = pkt.ordnance_heavy != 0;
 		ff_state.ordnance_pods_per_player = pkt.ordnance_pods_per_player;
+		/* (a host from before: weapons all, the sets by ordnance_pods_per_player) */
+		if (size >= (long)sizeof(pkt))
+		{
+			csmemcpy(ff_state.ordnance_pod_owners, pkt.ordnance_pod_owners, sizeof(ff_state.ordnance_pod_owners));
+			csmemcpy(ff_state.ordnance_pod_kinds, pkt.ordnance_pod_kinds, sizeof(ff_state.ordnance_pod_kinds));
+		}
+		else
+		{
+			csmemset(ff_state.ordnance_pod_owners, FIREFIGHT_ORDNANCE_POD_ANYONE, sizeof(ff_state.ordnance_pod_owners));
+			csmemset(ff_state.ordnance_pod_kinds, _ff_pod_kind_weapon, sizeof(ff_state.ordnance_pod_kinds));
+		}
 	}
+	if (size >= (long)sizeof(pkt))
+		csmemcpy(ff_state.ordnance_pod_spent, pkt.ordnance_pod_spent, sizeof(ff_state.ordnance_pod_spent));
+	else
+		csmemset(ff_state.ordnance_pod_spent, 0, sizeof(ff_state.ordnance_pod_spent));
 	ff_state.ordnance_pod_drop_time = pkt.ordnance_pod_drop_time;
 
 	return TRUE;
