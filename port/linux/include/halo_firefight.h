@@ -908,6 +908,10 @@ void firefight_ordnance_preview_refusals(char *text, long size);
 map's), there from the game's start and never taken away: any gone or
 destroyed is made again, at a round's start */
 void firefight_spawn_player_vehicles(void);
+/* wave enemies idle 10 s (not moved, fired nor hurt) put near the players,
+out of their sight, where they can walk; taken away after 4 such moves
+(firefight_spawner.c). The host's, each tick */
+void firefight_relocate_idle_enemies(void);
 /* MAP CONTENT's mode, as the game has it (_firefight_map_content_*) */
 byte firefight_map_content(void);
 /* what a map has of its own, outside the game's (FIREFIGHT_MAP_CONTENT_HAS_*):

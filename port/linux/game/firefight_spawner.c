@@ -136,6 +136,17 @@ static struct firefight_roster_entry g_roster[MAX_ROSTER_VARIANTS];
 static short g_roster_count = 0;
 
 static real_point3d g_spawn_points[MAX_SPAWN_POINTS];
+/* (each tracked enemy's follow, by its slot: firefight_relocate_idle_enemies) */
+static struct
+{
+	long unit_index;
+	real_point3d position;
+	real vitality;
+	long last_fired;
+	long active_tick;
+	short moves;
+} g_idle[FIREFIGHT_MAX_TRACKED_ENEMIES];
+static long g_idle_last_check;
 static real g_spawn_facings[MAX_SPAWN_POINTS];
 static short g_spawn_point_count = 0;
 /* the players' base: the map's starting location everyone spawns about
@@ -1662,6 +1673,11 @@ void firefight_spawner_dispose_map(void)
 	g_friendly_unit_count = 0;
 	g_queued_reinforcement_enemies = 0;
 	ff_state.enemies_queued = 0;
+	/* (the idle enemies' follow, and the walkable groups it kept) */
+	for (i = 0; i < FIREFIGHT_MAX_TRACKED_ENEMIES; i++)
+		g_idle[i].unit_index = NONE;
+	g_idle_last_check = 0;
+	reach_release();
 	ff_power_weapon_tag_count = 0;
 	ff_standard_weapon_tag_count = 0;
 	ff_ammo_tag_count = 0;
@@ -2459,6 +2475,290 @@ boolean firefight_actor_attacks_generator(long actor_index, long unit_index)
 		}
 	}
 	return FALSE;
+}
+
+/* ---------- Idle enemies brought to the players
+
+A wave enemy that has not moved (FF_IDLE_MOVE units), fired or been hurt for
+FF_IDLE_TICKS is taken to be stuck, or somewhere far, behind a long way
+round or a teleporter, the players will not find it: it is put where the
+players can walk to (on the ground of a walkable group a player stands on:
+the reach groups above), FF_RELOCATE_NEAREST to FF_RELOCATE_FARTHEST from
+the nearest player and out of every player's sight (behind walls, or behind
+them), with the insertion beacon's effect, its path forgotten and the
+players made known to it. FF_RELOCATE_PER_SECOND at most a second; one
+moved FF_RELOCATE_MOST times and idle again is taken away (its slot freed,
+as one killed, so the wave can end). An enemy riding a vehicle is let out
+of it first. The host's alone (the waves are); "firefight: relocated" lines
+in halo.log, with where it was. */
+
+#define FF_IDLE_TICKS (10 * TICKS_PER_SECOND)
+#define FF_IDLE_CHECK_TICKS TICKS_PER_SECOND
+#define FF_IDLE_MOVE 2.0f
+#define FF_RELOCATE_NEAREST 15.0f
+#define FF_RELOCATE_FARTHEST 32.0f
+#define FF_RELOCATE_WANTED 20.0f
+#define FF_RELOCATE_PER_SECOND 2
+#define FF_RELOCATE_MOST 4
+
+
+/* the tick a unit's weapon last fired (NONE: none, or never) */
+static long idle_unit_last_fired(long unit_index, struct unit_datum const *unit)
+{
+	long weapon_index = unit_inventory_get_weapon(unit_index, unit->unit.current_weapon_index);
+	struct weapon_datum *weapon = weapon_index == NONE ? NULL : weapon_try_and_get(weapon_index);
+
+	return weapon ? weapon->weapon.game_time_last_fired : NONE;
+}
+
+/* whether a spot is out of a player's sight: behind them, or the structure
+between */
+static boolean relocate_spot_unseen(real_point3d const *spot, long player_unit)
+{
+	struct unit_datum *unit = unit_try_and_get(player_unit);
+	struct collision_result collision;
+	real_point3d eye;
+	real_point3d target = *spot;
+	real_vector3d along;
+	real length;
+
+	if (!unit)
+		return TRUE;
+	object_get_origin(player_unit, &eye);
+	eye.z += 0.6f;
+	target.z += 0.6f;
+	vector_from_points3d(&eye, &target, &along);
+	length = magnitude3d(&along);
+	if (length > 0.001f &&
+		(along.i * unit->unit.aiming_vector.i + along.j * unit->unit.aiming_vector.j +
+			along.k * unit->unit.aiming_vector.k) / length < -0.25f)
+	{
+		return TRUE;
+	}
+	return collision_test_vector(FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
+		&eye, &along, NONE, &collision);
+}
+
+/* a spot for an idle enemy, near the players, as the header says; FALSE
+for none */
+static boolean relocate_spot(real_point3d const *players, long const *player_units, short player_count,
+	real_point3d const *taken, short taken_count, real_point3d *out)
+{
+	long groups[16];
+	real_point3d candidates[MAX_SPAWN_POINTS + 48];
+	short candidate_count = 0;
+	short group_count = 0;
+	real best_score = REAL_MAX;
+	boolean found = FALSE;
+	short i;
+	short p;
+
+	if (!g_reach.parent)
+		reach_build();
+	for (p = 0; p < player_count && group_count < (short)NUMBEROF(groups); p++)
+	{
+		long group = g_reach.parent ? reach_group_at(&players[p]) : NONE;
+
+		if (group != NONE)
+			groups[group_count++] = group;
+	}
+	for (i = 0; i < g_spawn_point_count && candidate_count < MAX_SPAWN_POINTS; i++)
+		candidates[candidate_count++] = g_spawn_points[i];
+	/* (and a ring round each player, a few of them) */
+	for (p = 0; p < MIN(player_count, 2); p++)
+	{
+		short ring;
+
+		for (ring = 0; ring < 3; ring++)
+		{
+			real radius = FF_RELOCATE_NEAREST + 5.0f * (real)ring;
+			short angle;
+
+			for (angle = 0; angle < 8 && candidate_count < (short)NUMBEROF(candidates); angle++)
+			{
+				real theta = (real)angle * (6.2831853f / 8.0f) + (real)ring * 0.4f;
+
+				candidates[candidate_count] = players[p];
+				candidates[candidate_count].x += radius * cosf(theta);
+				candidates[candidate_count].y += radius * sinf(theta);
+				candidates[candidate_count].z += 1.0f;
+				candidate_count++;
+			}
+		}
+	}
+	for (i = 0; i < candidate_count; i++)
+	{
+		real_point3d ground;
+		long surface_index = reach_ground(&candidates[i], &ground);
+		real nearest = REAL_MAX;
+		short nearest_player = NONE;
+		boolean unseen = TRUE;
+		boolean apart = TRUE;
+		real score;
+		short t;
+
+		if (surface_index == NONE || !point_is_in_valid_bsp(&ground))
+			continue;
+		if (group_count > 0)
+		{
+			long group = reach_walkable(surface_index) ? reach_root(surface_index) : NONE;
+			short g;
+
+			for (g = 0; g < group_count && groups[g] != group; g++)
+				;
+			if (g == group_count)
+				continue;
+		}
+		for (p = 0; p < player_count; p++)
+		{
+			real distance = (real)sqrt(distance_squared3d(&players[p], &ground));
+
+			if (distance < nearest)
+			{
+				nearest = distance;
+				nearest_player = p;
+			}
+		}
+		if (nearest_player == NONE || nearest < FF_RELOCATE_NEAREST || nearest > FF_RELOCATE_FARTHEST)
+			continue;
+		for (t = 0; t < taken_count && apart; t++)
+			apart = distance_squared3d(&taken[t], &ground) > 9.0f;
+		for (p = 0; p < player_count && unseen; p++)
+			unseen = relocate_spot_unseen(&ground, player_units[p]);
+		if (!apart || !unseen)
+			continue;
+		score = (real)fabs(nearest - FF_RELOCATE_WANTED) + (real)(spawner_rand() % 100) * 0.03f;
+		if (score < best_score)
+		{
+			best_score = score;
+			*out = ground;
+			found = TRUE;
+		}
+	}
+	return found;
+}
+
+/* (a slot's follow begun again: a new enemy in it, or one just moved) */
+static void idle_slot_reset(short slot, long unit_index, struct unit_datum const *unit, long now)
+{
+	if (g_idle[slot].unit_index != unit_index)
+		g_idle[slot].moves = 0;
+	g_idle[slot].unit_index = unit_index;
+	object_get_origin(unit_index, &g_idle[slot].position);
+	g_idle[slot].vitality = unit->object.body_vitality + unit->object.shield_vitality;
+	g_idle[slot].last_fired = idle_unit_last_fired(unit_index, unit);
+	g_idle[slot].active_tick = now;
+}
+
+void firefight_relocate_idle_enemies(void)
+{
+	real_point3d players[16];
+	long player_units[16];
+	real_point3d taken[FF_RELOCATE_PER_SECOND];
+	short taken_count = 0;
+	short player_count;
+	long now = game_time_get();
+	short slot;
+
+	if (now - g_idle_last_check < FF_IDLE_CHECK_TICKS && now >= g_idle_last_check)
+		return;
+	g_idle_last_check = now;
+	player_count = get_living_human_player_positions(players, player_units, 16);
+	for (slot = 0; slot < FIREFIGHT_MAX_TRACKED_ENEMIES; slot++)
+	{
+		long unit_index = ff_state.tracked_enemy_units[slot];
+		struct unit_datum *unit;
+		real_point3d position;
+		real vitality;
+		long fired;
+		real_point3d spot;
+		boolean active;
+
+		if (unit_index == NONE)
+		{
+			g_idle[slot].unit_index = NONE;
+			continue;
+		}
+		unit = unit_try_and_get(unit_index);
+		if (!unit || TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
+			continue;
+		if (g_idle[slot].unit_index != unit_index)
+		{
+			idle_slot_reset(slot, unit_index, unit, now);
+			continue;
+		}
+		object_get_origin(unit_index, &position);
+		vitality = unit->object.body_vitality + unit->object.shield_vitality;
+		fired = idle_unit_last_fired(unit_index, unit);
+		active = distance_squared3d(&position, &g_idle[slot].position) > FF_IDLE_MOVE * FF_IDLE_MOVE ||
+			vitality < g_idle[slot].vitality - 0.001f || fired != g_idle[slot].last_fired;
+		g_idle[slot].vitality = vitality;
+		g_idle[slot].last_fired = fired;
+		if (active)
+		{
+			g_idle[slot].position = position;
+			g_idle[slot].active_tick = now;
+			continue;
+		}
+		if (now - g_idle[slot].active_tick < FF_IDLE_TICKS || player_count <= 0 ||
+			taken_count >= FF_RELOCATE_PER_SECOND)
+		{
+			continue;
+		}
+		/* (moved as often as it may be: taken away, the wave's as one killed) */
+		if (g_idle[slot].moves >= FF_RELOCATE_MOST)
+		{
+			platform_log("firefight: relocated %s %d times and idle again at (%.1f %.1f %.1f): taken away",
+				tag_get_name(object_get(unit_index)->definition_index), (int)g_idle[slot].moves, position.x, position.y,
+				position.z);
+			if (unit->unit.actor_index != NONE)
+				actor_delete(unit->unit.actor_index, FALSE);
+			object_delete(unit_index);
+			ff_state.tracked_enemy_units[slot] = NONE;
+			ff_state.tracked_enemy_tiers[slot] = 0;
+			if (ff_state.enemies_alive > 0)
+				ff_state.enemies_alive--;
+			g_idle[slot].unit_index = NONE;
+			continue;
+		}
+		if (!relocate_spot(players, player_units, player_count, taken, taken_count, &spot))
+		{
+			/* (nowhere now: tried again in a while) */
+			g_idle[slot].active_tick = now - FF_IDLE_TICKS + 3 * TICKS_PER_SECOND;
+			continue;
+		}
+		if (unit->unit.parent_seat_index != NONE)
+			unit_exit_seat_end(unit_index);
+		if (unit->object.parent_object_index != NONE)
+			unit_detach_from_parent(unit_index);
+		spot.z += 0.1f;
+		object_set_position(unit_index, &spot, NULL, NULL);
+		taken[taken_count++] = spot;
+		g_idle[slot].moves++;
+		platform_log("firefight: relocated %s (%d of %d) from (%.1f %.1f %.1f) to (%.1f %.1f %.1f): idle %ld s",
+			tag_get_name(object_get(unit_index)->definition_index), (int)g_idle[slot].moves, FF_RELOCATE_MOST, position.x,
+			position.y, position.z, spot.x, spot.y, spot.z, (now - g_idle[slot].active_tick) / TICKS_PER_SECOND);
+		spawn_insertion_beacon_effect(&spot, unit_index, 0, FALSE);
+		if (unit->unit.actor_index != NONE)
+		{
+			struct actor_datum *actor = actor_try_and_get(unit->unit.actor_index);
+			short nearest = 0;
+			short p;
+
+			if (actor)
+			{
+				actor->control.path.path.valid = FALSE;
+				actor->control.path.at_destination = FALSE;
+			}
+			for (p = 1; p < player_count; p++)
+			{
+				if (distance_squared3d(&players[p], &spot) < distance_squared3d(&players[nearest], &spot))
+					nearest = p;
+			}
+			direct_actor_toward_unit(unit->unit.actor_index, player_units[nearest]);
+		}
+		idle_slot_reset(slot, unit_index, unit, now);
+	}
 }
 
 static long spawn_single_actor_at(

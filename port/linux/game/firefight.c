@@ -1454,7 +1454,7 @@ void firefight_variant_options_default(
 	options->firefight_unit_toggles = FIREFIGHT_UNIT_MASK_ALL;
 	options->firefight_set_escalation = _firefight_escalation_medium;
 	options->firefight_dropship_mode = _firefight_dropship_auto;
-	options->firefight_next_wave_mode = _firefight_next_wave_reach_default;
+	options->firefight_next_wave_mode = _firefight_next_wave_timer_60s;
 	options->firefight_player_faction_mode = _firefight_player_faction_spartan;
 	options->firefight_early_vehicle = _firefight_early_vehicle_warthog;
 	options->firefight_round2_vehicle = _firefight_early_vehicle_none;
@@ -1802,6 +1802,9 @@ static void firefight_update(
 	firefight_update_dropships_and_vehicles();
 	firefight_generators_update();
 	firefight_prune_dead_tracked_enemies();
+	/* (stuck or far-off wave enemies brought to the players) */
+	if (ff_state.phase_state == _ff_phase_wave_active)
+		firefight_relocate_idle_enemies();
 	ff_state.team_score = campaign_score_team_points();
 
 	/* Check wipe / defeat condition */
