@@ -45,9 +45,10 @@ map's combined space, the top bit set (a mod bitmap's keys have it clear: mod_bi
 go (mod_bitmaps_tags_unloaded) */
 int host_texture_cache_get(uint64_t key, uint32_t buffer, uint32_t size);
 void host_texture_cache_put(uint64_t key, uint32_t buffer, uint32_t size);
-void memory_watch_prepare_write(void *address, unsigned long size);
 #define CUSTOM_EDITION_TEXTURE_KEY(offset) ((1ull << 63) | (uint64_t)(unsigned long)(offset))
 #endif
+/* port: platform.h's (custom_edition_cache_read) */
+void memory_watch_prepare_write(void *address, unsigned long size);
 
 /* ---------- constants */
 
@@ -1652,6 +1653,13 @@ void custom_edition_cache_read(
 #endif
 		custom_edition_bitmap_pixels_arrived(globals->tag_cache, globals->loaded_bytes, tag_index, offset, buffer);
 	}
+	/* port: the pixels written (copied out of the staging buffer, then
+	converted in place) announced, where pages are tracked by their hashes
+	(macOS, the web, an emulator's Android): the texture cache reads a bitmap
+	into the pages of one evicted, and a draw of it in the same frame at the
+	same address, format and size took the other's image */
+	if (tag_index != NONE && size > 0)
+		memory_watch_prepare_write(buffer, (unsigned long)size);
 
 	return;
 }

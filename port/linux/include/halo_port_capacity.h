@@ -55,14 +55,15 @@ Xbox's own otherwise. Tables kept per page are as large as the largest
 cache (HALO_PORT_TEXTURE_CACHE_MAXIMUM_PAGE_COUNT). The cache is not part of
 the game state, so its size does not change saved games. 64-bit ARM Linux's
 window is 128 MB, as the web build's, and its cache the Xbox's; the x86-64
-guest's window and cache are the desktop's. */
+guest's window and cache are the desktop's, and so are macOS's (its guest
+image is linked well below the window: port/macos/host/host_memory_macos.c). */
 
 #ifdef HALO_ANDROID
 extern unsigned long platform_contiguous_size;
 #define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT \
 	(platform_contiguous_size > 0x08000000UL ? platform_contiguous_size / 2 / 0x4000 : 0x580) /* (0x580) */
 #define HALO_PORT_TEXTURE_CACHE_MAXIMUM_PAGE_COUNT 0x4000
-#elif defined(HALO_WEB) || (defined(HALO_GUEST) && defined(__aarch64__))
+#elif defined(HALO_WEB) || (defined(HALO_GUEST) && defined(__aarch64__) && !defined(HALO_MACOS))
 #define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x580 /* (0x580) */
 #define HALO_PORT_TEXTURE_CACHE_MAXIMUM_PAGE_COUNT HALO_PORT_TEXTURE_CACHE_PAGE_COUNT
 #else
@@ -81,7 +82,7 @@ campaign map's dialogue and music did, "SOUND CACHE BLOWN" in debug.txt).
 The desktop builds' cache is 16 MB (the x86-64 guest's too); the 128 MB
 windows of the AArch64 guests and the web build keep the Xbox's. */
 
-#if defined(HALO_WEB) || (defined(HALO_GUEST) && defined(__aarch64__))
+#if defined(HALO_WEB) || (defined(HALO_GUEST) && defined(__aarch64__) && !defined(HALO_MACOS))
 #define HALO_PORT_SOUND_CACHE_SIZE 0x400000 /* (0x400000) */
 #else
 #define HALO_PORT_SOUND_CACHE_SIZE 0x1000000 /* (0x400000) */

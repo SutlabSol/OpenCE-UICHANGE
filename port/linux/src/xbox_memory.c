@@ -54,7 +54,11 @@ typedef char window_is_the_hosts[
 #ifndef HALO_MOVABLE_WINDOW
 	PLATFORM_CONTIGUOUS_BASE == HALO_GUEST_WINDOW_BASE &&
 #endif
+#ifdef HALO_MACOS
+	PLATFORM_CONTIGUOUS_SIZE == HALO_GUEST_WINDOW_MAXIMUM ? 1 : -1];
+#else
 	PLATFORM_CONTIGUOUS_SIZE == HALO_GUEST_WINDOW_SIZE ? 1 : -1];
+#endif
 #endif
 /* the texture and sound caches, which the window hands out top-down, fit
 above the game state (halo_port_capacity.h; measured from where the game

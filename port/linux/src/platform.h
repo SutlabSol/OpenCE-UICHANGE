@@ -176,7 +176,7 @@ large as the largest */
 extern unsigned long platform_contiguous_size;
 #define PLATFORM_CONTIGUOUS_SIZE (platform_contiguous_size)
 #define PLATFORM_CONTIGUOUS_MAXIMUM 0x20000000UL
-#elif defined(HALO_WEB) || (defined(HALO_GUEST) && defined(__aarch64__))
+#elif defined(HALO_WEB) || (defined(HALO_GUEST) && defined(__aarch64__) && !defined(HALO_MACOS))
 /* 128 MB, a development kit's: 64-bit ARM Linux's guest image is linked
 just above the window, and the web build's WebAssembly memory ends with it
 (tools/web_build.py). The guests' host reserves HALO_GUEST_WINDOW_SIZE
@@ -187,7 +187,9 @@ halo_port_capacity.h's test of the same builds. */
 #else
 /* 512 MB on the desktop builds, whose caches outgrow the Xbox's (Custom
 Edition maps' textures and geometry: halo_port_capacity.h), the x86-64
-guest's too, whose image is linked below the window. Its pages are backed
+guest's too, whose image is linked below the window, and macOS's AArch64
+guest's, whose host reserves HALO_GUEST_WINDOW_MAXIMUM
+(port/macos/host/host_memory_macos.c). Its pages are backed
 as they are used. port/windows/src/win32_memory_watch.c has the same
 size. */
 #define PLATFORM_CONTIGUOUS_SIZE 0x20000000UL

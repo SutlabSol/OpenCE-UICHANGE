@@ -175,7 +175,12 @@ int host_memory_initialize(uint32_t preferred_base, uint32_t size, uint32_t *bas
 	image_base = preferred_base;
 	image_end = preferred_base + round_up(size, HOST_PAGE);
 	window_base = HALO_GUEST_WINDOW_BASE;
-	window_size = HALO_GUEST_WINDOW_SIZE;
+	/* (the largest, as Android's when it finds room: nothing else lives in
+	it here (linked_range), and what is above the Xbox's own layout is the
+	texture cache's (halo_port_capacity.h). The 128 MB least left it 22 MB,
+	which a Custom Edition map with many bitmaps overflowed within a frame:
+	pixels read over before they were drawn) */
+	window_size = HALO_GUEST_WINDOW_MAXIMUM;
 	window_end = window_base + window_size;
 	set_used(image_base, image_end - image_base, 1);
 	pthread_mutex_unlock(&memory_lock);
@@ -598,10 +603,18 @@ uint32_t host_memory_watch_generation(uint32_t address, uint32_t size)
 	return watch_hash_generation(&page_hashes, first, last);
 }
 
+/* (the pages hashed again at their next query, even in this frame, and the
+serial changed: without it, a bitmap the texture cache reads into the pages
+of one drawn this frame, at the same address, format and size, kept the
+other's image (host_watch_hash.c's watch_hash_prepare_write)) */
 void host_memory_watch_prepare_write(uint32_t address, uint32_t size)
 {
-	(void)address;
-	(void)size;
+	uint32_t first, last;
+
+	if (!watch_active || !size || !in_window(address))
+		return;
+	watch_pages(address, size, &first, &last);
+	watch_hash_prepare_write(&page_hashes, first, last);
 }
 
 void host_memory_watch_forget(uint32_t address, uint32_t size)

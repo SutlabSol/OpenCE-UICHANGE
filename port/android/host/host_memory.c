@@ -1293,13 +1293,14 @@ uint32_t host_memory_watch_generation(uint32_t address, uint32_t size)
 }
 
 /* memory_watch_prepare_write: unprotects the pages the host itself is about
-to write into. Nothing under hashing: the write shows in the next hash and
-there is no protection to fault on. */
+to write into. Under hashing, the pages are hashed again at their next query,
+even in this frame (watch_hash_prepare_write: a bitmap read into the pages of
+one drawn this frame would otherwise keep the other's image). */
 void host_memory_watch_prepare_write(uint32_t address, uint32_t size)
 {
 	uint64_t start = address, first, last, page;
 
-	if (!watch_active || watch_hashing || !size)
+	if (!watch_active || !size)
 		return;
 	if (start + size <= window_base || start >= window_end)
 		return;
@@ -1309,6 +1310,11 @@ void host_memory_watch_prepare_write(uint32_t address, uint32_t size)
 	last = watch_page((uint64_t)address + size - 1);
 	if (last >= WATCH_PAGE_COUNT)
 		last = WATCH_PAGE_COUNT - 1;
+	if (watch_hashing)
+	{
+		watch_hash_prepare_write(&page_hashes, (uint32_t)first, (uint32_t)last);
+		return;
+	}
 	for (page = first; page <= last; page++)
 	{
 		if (page_protected[page] == 1)

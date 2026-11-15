@@ -419,8 +419,12 @@ int host_update_download(const char *url, const char *path, uint32_t progress, u
 {
 	struct download_progress binding = { progress, context };
 
-	/* (0: no limit on the download's size) */
-	return update_download(url, path, 0, progress ? download_progress : NULL, &binding, error, error_size);
+	/* (the guest checks its own limit once the file is here, guest_desktop.c;
+	this one only keeps a runaway download off the disk. posix_update.c takes
+	its maximum literally: the 0 given here before refused every download,
+	the check for a new version too) */
+	return update_download(url, path, 1024ULL * 1024 * 1024, progress ? download_progress : NULL, &binding,
+		error, error_size);
 }
 
 int host_update_executable_path(char *path, int size)
