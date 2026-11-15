@@ -447,3 +447,25 @@ int host_update_launch(const char *path)
 {
 	return update_launch(path);
 }
+
+/* (macOS's app bundle, replaced whole: updater.c) */
+int host_update_install_app(const char *zip_path, const char *app_path, char *error, int error_size)
+{
+#ifdef __APPLE__
+	return update_install_app(zip_path, app_path, error, error_size);
+#else
+	(void)zip_path;
+	(void)app_path;
+	SDL_snprintf(error, (size_t)error_size, "an app bundle is macOS's");
+	return 0;
+#endif
+}
+
+void host_update_delete_tree(const char *path)
+{
+#ifdef __APPLE__
+	update_delete_tree(path);
+#else
+	update_delete_file(path);
+#endif
+}

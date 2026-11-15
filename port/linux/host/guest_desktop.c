@@ -73,6 +73,8 @@ int host_update_replace_file(const char *path, const char *new_path, const char 
 void host_update_delete_file(const char *path);
 int host_update_make_directory(const char *path);
 int host_update_launch(const char *path);
+int host_update_install_app(const char *zip_path, const char *app_path, char *error, int error_size);
+void host_update_delete_tree(const char *path);
 
 /* ---------- general */
 
@@ -165,6 +167,8 @@ struct guest_sdl_thread
 	SDL_ThreadFunction function;
 	void *data;
 	int status;
+	/* (1 once the thread is done or detached: whichever comes second frees it) */
+	int finished_or_detached;
 };
 
 static void *guest_sdl_thread_start(void *argument)
@@ -172,6 +176,8 @@ static void *guest_sdl_thread_start(void *argument)
 	struct guest_sdl_thread *thread = argument;
 
 	thread->status = thread->function(thread->data);
+	if (__atomic_exchange_n(&thread->finished_or_detached, 1, __ATOMIC_ACQ_REL))
+		free(thread);
 	return NULL;
 }
 
@@ -194,6 +200,18 @@ SDL_Thread *SDL_CreateThreadRuntime(SDL_ThreadFunction function, const char *nam
 		return NULL;
 	}
 	return (SDL_Thread *)thread;
+}
+
+/* (the updater's check runs detached: updater.c) */
+void SDL_DetachThread(SDL_Thread *handle)
+{
+	struct guest_sdl_thread *thread = (struct guest_sdl_thread *)handle;
+
+	if (!thread)
+		return;
+	pthread_detach(thread->thread);
+	if (__atomic_exchange_n(&thread->finished_or_detached, 1, __ATOMIC_ACQ_REL))
+		free(thread);
 }
 
 void SDL_WaitThread(SDL_Thread *handle, int *status)
@@ -1026,4 +1044,14 @@ int update_make_directory(const char *path)
 int update_launch(const char *path)
 {
 	return host_update_launch(path);
+}
+
+int update_install_app(const char *zip_path, const char *app_path, char *error, int error_size)
+{
+	return host_update_install_app(zip_path, app_path, error, error_size);
+}
+
+void update_delete_tree(const char *path)
+{
+	host_update_delete_tree(path);
 }

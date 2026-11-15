@@ -654,3 +654,23 @@ int host_update_launch(const char *path)
 	unavailable(&logged, "starting the new version");
 	return 0;
 }
+
+int host_update_install_app(const char *zip_path, const char *app_path, char *error, int error_size)
+{
+	static int logged;
+
+	(void)zip_path;
+	(void)app_path;
+	if (error_size > 0)
+		error[0] = 0;
+	unavailable(&logged, "installing an app bundle");
+	return 0;
+}
+
+void host_update_delete_tree(const char *path)
+{
+	static int logged;
+
+	(void)path;
+	unavailable(&logged, "deleting a folder");
+}

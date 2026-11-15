@@ -21,8 +21,9 @@ was downloaded is in steam/downloads.txt: "shared <manifest>" and
 
 The servers' curated lists (SERVER LISTS) come from the community server
 (community_net.h's address; api-opence's /workshop/lists, its text format),
-asked for by a thread of their own, the lists thread: Steam is not needed to
-look at them, only to download what they hold. Their items carry no
+asked for by a thread of their own, the lists thread. They are shown only
+once signed in to Steam (the hub signed out has the ways to sign in alone),
+though Steam is needed only to download what they hold. Their items carry no
 manifest; the files thread asks Steam for an item's when it takes it, as it
 does for an item a host's game named (steam_downloads_want_item).
 */
@@ -2331,9 +2332,7 @@ static enum row_kind row_kind(int place, int *index)
 		{
 			if (steam.state == SESSION_UNAVAILABLE)
 				return place == 0 ? ROW_SIGN_IN_QR : ROW_NONE;
-			/* (the lists are the community server's: looked at signed out too) */
-			if (place == 2)
-				return ROW_HOME_LISTS;
+			/* (no SERVER LISTS until signed in) */
 			if (place > 1)
 				return ROW_NONE;
 			return (place == 0) == !account_first() ? ROW_SIGN_IN_QR : ROW_SIGN_IN_ACCOUNT;
@@ -2411,7 +2410,7 @@ static int rows_count(void)
 	switch (steam.view)
 	{
 	case VIEW_HOME:
-		return steam.state == SESSION_IN ? 4 : steam.state == SESSION_UNAVAILABLE ? 1 : 3;
+		return steam.state == SESSION_IN ? 4 : steam.state == SESSION_UNAVAILABLE ? 1 : 2;
 	case VIEW_LISTS: return 1 + steam.list_count;
 	case VIEW_LIST: return list_shown() ? 1 + list_shown()->count : 0;
 	case VIEW_ACCOUNT: return 2;
@@ -3301,8 +3300,8 @@ int steam_downloads_poll(void)
 		return 0;
 	rescan = steam.rescan;
 	steam.rescan = 0;
-	/* (signed out, or never in: the hub alone, and the servers' lists) */
-	if (steam.state != SESSION_IN && steam.view != VIEW_HOME && steam.view != VIEW_LISTS && steam.view != VIEW_LIST)
+	/* (signed out, or never in: the hub alone; the servers' lists wait for the sign-in) */
+	if (steam.state != SESSION_IN && steam.view != VIEW_HOME)
 		view_open(VIEW_HOME);
 	/* (a host's item asked for: its download shown, at the top of MCC FILE
 	STATUS, as soon as the account is in) */

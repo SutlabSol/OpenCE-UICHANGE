@@ -43,6 +43,17 @@ Built with the host's ABI, as the other posix_*.c.
 #include <sys/types.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#include <ftw.h>
+#include <limits.h>
+#include <mach-o/dyld.h>
+#include <spawn.h>
+#include <stdint.h>
+#include <sys/wait.h>
+
+extern char **environ;
+#endif
+
 #define UPDATE_USER_AGENT "halo-ce-universal-updater"
 #define MAXIMUM_REDIRECTS 8
 #define TIMEOUT_MILLISECONDS 20000
@@ -882,14 +893,159 @@ int update_https_request(const char *method, const char *url, const char *header
 
 /* ---------- files and processes */
 
+#ifdef __APPLE__
+/* runs the program arguments[0] with arguments, none of this process's files
+(its sockets hold the game's ports), and waits for it: its exit status, or -1
+if it could not run */
+static int update_spawn_and_wait(const char *const arguments[])
+{
+	posix_spawnattr_t attributes;
+	pid_t child;
+	int status = 0, result;
+
+	if (posix_spawnattr_init(&attributes) != 0)
+		return -1;
+	posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT);
+	result = posix_spawn(&child, arguments[0], NULL, &attributes, (char *const *)arguments, environ);
+	posix_spawnattr_destroy(&attributes);
+	if (result != 0)
+		return -1;
+	while (waitpid(child, &status, 0) < 0)
+	{
+		if (errno != EINTR)
+			return -1;
+	}
+	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static int update_delete_entry(const char *path, const struct stat *information, int kind, struct FTW *walk)
+{
+	(void)information;
+	(void)walk;
+	if (kind == FTW_DP)
+		rmdir(path);
+	else
+		unlink(path);
+	return 0;
+}
+
+void update_delete_tree(const char *path)
+{
+	struct stat information;
+
+	if (lstat(path, &information) != 0)
+		return;
+	if (!S_ISDIR(information.st_mode))
+		unlink(path);
+	else
+		nftw(path, update_delete_entry, 16, FTW_DEPTH | FTW_PHYS);
+}
+
+/* the folder at path's last component's parent, in parent */
+static int update_parent(const char *path, char *parent, size_t size)
+{
+	const char *slash = strrchr(path, '/');
+
+	if (!slash || slash == path || (size_t)(slash - path) >= size)
+		return 0;
+	memcpy(parent, path, (size_t)(slash - path));
+	parent[slash - path] = 0;
+	return 1;
+}
+
+int update_install_app(const char *zip_path, const char *app_path, char *error, int error_size)
+{
+	char folder[PATH_MAX], unpacked[PATH_MAX], new_app[PATH_MAX], old_app[PATH_MAX], check[PATH_MAX];
+	/* (the release's name for it, whatever the player named theirs) */
+	static const char name[] = "Halo Content Evolved.app";
+	struct stat information;
+
+	if (error_size > 0)
+		error[0] = 0;
+	/* (an app started from where it was unpacked, still quarantined, runs
+	from a read-only copy macOS makes: App Translocation) */
+	if (strstr(app_path, "/AppTranslocation/"))
+	{
+		snprintf(error, (size_t)error_size, "macOS runs this copy of the app read-only: move Halo Content Evolved "
+			"to the Applications folder (or any other), start it from there and update again");
+		return 0;
+	}
+	if (!update_parent(zip_path, folder, sizeof(folder)))
+	{
+		snprintf(error, (size_t)error_size, "the download's path is not one this build can read");
+		return 0;
+	}
+	snprintf(unpacked, sizeof(unpacked), "%s/unpacked", folder);
+	snprintf(old_app, sizeof(old_app), "%s/old.app", folder);
+	update_delete_tree(unpacked);
+	update_delete_tree(old_app);
+	/* (ditto, which made the zip, keeps the bundle as codesign left it) */
+	{
+		const char *const arguments[] = { "/usr/bin/ditto", "-x", "-k", zip_path, unpacked, NULL };
+
+		if (update_spawn_and_wait(arguments) != 0)
+		{
+			snprintf(error, (size_t)error_size, "could not unpack the download");
+			return 0;
+		}
+	}
+	snprintf(new_app, sizeof(new_app), "%s/%s", unpacked, name);
+	snprintf(check, sizeof(check), "%s/Contents/MacOS/halo", new_app);
+	if (stat(check, &information) != 0 || !(information.st_mode & S_IXUSR))
+	{
+		snprintf(error, (size_t)error_size, "the download has no %s", name);
+		return 0;
+	}
+	/* (a file macOS marked as from the internet would ask the player again) */
+	{
+		const char *const arguments[] = { "/usr/bin/xattr", "-dr", "com.apple.quarantine", new_app, NULL };
+
+		update_spawn_and_wait(arguments);
+	}
+	/* (the running app's bundle moved aside, as a running executable may be,
+	and the new one put in its place; the old one deleted at the next start) */
+	if (rename(app_path, old_app) != 0)
+	{
+		snprintf(error, (size_t)error_size, "could not move %s aside (%s): is its folder one this account can "
+			"write to?", app_path, strerror(errno));
+		return 0;
+	}
+	if (rename(new_app, app_path) != 0)
+	{
+		int why = errno;
+
+		rename(old_app, app_path);
+		snprintf(error, (size_t)error_size, "could not put the new app in place (%s)", strerror(why));
+		return 0;
+	}
+	update_delete_tree(unpacked);
+	return 1;
+}
+#endif
+
 int update_executable_path(char *path, int size)
 {
+#ifdef __APPLE__
+	/* (macOS has no /proc: the loader's own, its links resolved) */
+	char found[PATH_MAX];
+	uint32_t found_size = sizeof(found);
+	char resolved[PATH_MAX];
+
+	if (_NSGetExecutablePath(found, &found_size) != 0 || !realpath(found, resolved) ||
+		strlen(resolved) >= (size_t)size)
+	{
+		return 0;
+	}
+	strcpy(path, resolved);
+	return 1;
+#else
 	ssize_t length = readlink("/proc/self/exe", path, (size_t)size - 1);
 
 	if (length <= 0)
 		return 0;
 	path[length] = 0;
 	return 1;
+#endif
 }
 
 int update_replace_file(const char *path, const char *new_path, const char *old_path)
@@ -924,7 +1080,23 @@ int update_make_directory(const char *path)
 
 int update_launch(const char *path)
 {
-	pid_t child = fork();
+	pid_t child;
+
+#ifdef __APPLE__
+	/* (an app bundle is opened as the Finder would, a new instance of it:
+	this one, of the same bundle, still runs until it quits) */
+	{
+		size_t length = strlen(path);
+
+		if (length > 4 && !strcmp(path + length - 4, ".app"))
+		{
+			const char *const arguments[] = { "/usr/bin/open", "-n", path, NULL };
+
+			return update_spawn_and_wait(arguments) == 0;
+		}
+	}
+#endif
+	child = fork();
 
 	if (child == 0)
 	{

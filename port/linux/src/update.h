@@ -74,7 +74,17 @@ void update_delete_file(const char *path);
 /* makes the directory at path, if there is none; 1 when it is there */
 int update_make_directory(const char *path);
 
-/* starts the executable at path as a process of its own, with no arguments,
+/* macOS: the app bundle in the release's zip at zip_path (unpacked in a
+folder beside the zip, by ditto) put in place of the app at app_path, the
+old one moved into the zip's folder (old.app); 1 on success, else 0 and why
+in error. Not on other systems */
+int update_install_app(const char *zip_path, const char *app_path, char *error, int error_size);
+
+/* deletes the file or folder at path, and all in it; macOS only */
+void update_delete_tree(const char *path);
+
+/* starts the executable at path (on macOS, an app bundle's path: a new
+instance of it opened) as a process of its own, with no arguments,
 this process's environment and none of its files; 1 on success */
 int update_launch(const char *path);
 
