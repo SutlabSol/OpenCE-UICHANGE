@@ -55,6 +55,7 @@ links port/third_party/qrcodegen, and those that do have it as it is) */
 #define qrcodegen_makeNumeric steam_qrcodegen_makeNumeric
 #include "../../third_party/qrcodegen/qrcodegen.c"
 
+#include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -427,12 +428,99 @@ static void remove_tree(char const *path)
 		remove(path);
 }
 
-/* from to to, which must not be there (posix_mcc_share_publish's, else a rename) */
+/* a file from from to to: a rename, else a copy (then from removed) */
+static int move_file(char const *from, char const *to)
+{
+	FILE *in, *out;
+	char buffer[65536];
+	size_t count;
+	int ok = 1;
+
+	if (rename(from, to) == 0)
+		return 1;
+	in = fopen(from, "rb");
+	if (!in)
+		return 0;
+	out = fopen(to, "wb");
+	if (!out)
+	{
+		fclose(in);
+		return 0;
+	}
+	while (ok && (count = fread(buffer, 1, sizeof(buffer), in)) > 0)
+		ok = fwrite(buffer, 1, count, out) == count;
+	ok = ok && !ferror(in);
+	fclose(in);
+	ok = fclose(out) == 0 && ok;
+	if (!ok)
+	{
+		remove(to);
+		return 0;
+	}
+	remove(from);
+	return 1;
+}
+
+/* from's contents moved one by one into to (made here when make is set; its
+folders made as they are missing), from removed once it is all moved:
+Android's storage daemon (FUSE under Android/data) refuses renameat2's
+RENAME_NOREPLACE and, on some phones, a folder's rename too */
+static int move_folder_contents(char const *from, char const *to, int make)
+{
+	void *directory;
+	char name[256];
+	int ok = 1;
+
+	if (make && posix_make_directory(to) != 0)
+		return 0;
+	directory = posix_directory_open(from);
+	if (!directory)
+		return 0;
+	while (ok && posix_directory_next(directory, name, sizeof(name)))
+	{
+		char source[1100];
+		char target[1100];
+		int is_directory = 0;
+
+		snprintf(source, sizeof(source), "%s/%s", from, name);
+		snprintf(target, sizeof(target), "%s/%s", to, name);
+		if (!path_exists(source, &is_directory))
+			continue;
+		ok = is_directory ? move_folder_contents(source, target, make || !path_exists(target, NULL)) :
+			move_file(source, target);
+		if (!ok)
+			platform_log("steam: %s could not be moved to %s (errno %d: %s)", source, target, errno,
+				strerror(errno));
+	}
+	posix_directory_close(directory);
+	if (ok)
+		remove_tree(from);
+	return ok;
+}
+
+/* from to to, which must not be there (posix_mcc_share_publish's, else a rename,
+else its contents moved one by one) */
 static int move_folder(char const *from, char const *to)
 {
 	if (path_exists(to, NULL))
+	{
+		platform_log("steam: %s is there already", to);
 		return 0;
-	return posix_mcc_share_publish(from, to) || rename(from, to) == 0;
+	}
+	if (posix_mcc_share_publish(from, to) || rename(from, to) == 0)
+		return 1;
+	platform_log("steam: %s could not be renamed to %s (errno %d: %s); moving its files one by one", from, to,
+		errno, strerror(errno));
+	/* (to made here, so never anything that was there before) */
+	if (posix_make_directory(to) != 0)
+		return 0;
+	if (move_folder_contents(from, to, 0))
+		return 1;
+	/* (what was moved, back in from, as far as it goes: an older copy kept
+	whole if it can be) */
+	move_folder_contents(to, from, 0);
+	remove_tree(to);
+	return 0;
 }
 
 static void session_save(void)

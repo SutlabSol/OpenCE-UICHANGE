@@ -409,6 +409,7 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries/cseries.h"
+#include "cseries/errors.h" /* port: hs_parse_ai_cut_squad */
 #include "cache/cache_files.h"
 #include "ai/ai_script.h"
 #include "hs/hs.h"
@@ -1645,6 +1646,34 @@ static boolean hs_parse_device_group(
 		scenario_device_group_size);
 }
 
+/* port: a map's encounter/squad whose squad the AI's per-map limits cut
+(encounter_definition_fit: past MAXIMUM_SQUADS_PER_MAP, its squads are let
+go of), as none, while the map's own compiled scripts are linked: those named
+it when it was there, and the rest of the map's scripts run. Anything else
+(the console's, a name that is no encounter's) stays an error */
+static boolean hs_parse_ai_cut_squad(
+	char const *ai_string,
+	long *ai_reference)
+{
+	char encounter_name[TAG_STRING_LENGTH+1];
+	char const *separator;
+	long length;
+
+	if (!hs_compile_globals.variables_predetermined || !ai_string)
+		return FALSE;
+	separator = strrchr(ai_string, '/');
+	length = separator ? (long)(separator - ai_string) : 0;
+	if (!separator || length <= 0 || length > TAG_STRING_LENGTH)
+		return FALSE;
+	csstrncpy(encounter_name, ai_string, length);
+	encounter_name[length] = 0;
+	if (scenario_get_encounter_by_name(global_scenario_get(), encounter_name) == NONE)
+		return FALSE;
+	error(_error_silent, "%s: this squad is past the map's AI limits; its scripts take it as none", ai_string);
+	*ai_reference = NONE;
+	return TRUE;
+}
+
 static boolean hs_parse_ai(
 	long expression_index)
 {
@@ -1664,6 +1693,10 @@ static boolean hs_parse_ai(
 		global_scenario_get(),
 		hs_compile_globals.compiled_source + expression->source_offset,
 		&expression->data);
+	if (!result)
+		result = hs_parse_ai_cut_squad(
+			hs_compile_globals.compiled_source + expression->source_offset,
+			&expression->data);
 	if (!result)
 	{
 		hs_compile_globals.error = "this is not a valid ai encounter or squad.";
@@ -2239,6 +2272,12 @@ static boolean hs_parse_primitive(
 	{
 		int mcc_result = mcc_script_parse_ai(expression,
 			hs_compile_globals.compiled_source);
+		if (mcc_result == 0 && hs_parse_ai_cut_squad(
+			hs_compile_globals.compiled_source + expression->source_offset,
+			&expression->data))
+		{
+			mcc_result = 1;
+		}
 		if (mcc_result >= 0)
 		{
 			if (!mcc_result)
