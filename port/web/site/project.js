@@ -385,6 +385,9 @@
     { key: 'switch', label: 'Nintendo Switch', matches: (name) => /switch/i.test(name) && /\.zip$/i.test(name) && !/debug/i.test(name) },
     { key: 'web', label: 'Web', matches: (name) => /web/i.test(name) && /\.zip$/i.test(name) && !/debug/i.test(name) },
     { key: 'windows', label: 'Windows', matches: (name) => /windows/i.test(name) && /\.zip$/i.test(name) && !/debug/i.test(name) },
+    // (from build-137 on; older releases carry neither, and the dialog leaves them out)
+    { key: 'macos', label: 'macOS', matches: (name) => /macos/i.test(name) && /\.zip$/i.test(name) && !/debug/i.test(name) },
+    { key: 'linux', label: 'Linux', matches: (name) => /linux/i.test(name) && /\.zip$/i.test(name) && !/debug/i.test(name) },
   ];
 
   function validReleaseAsset(asset) {
