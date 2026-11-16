@@ -23228,8 +23228,9 @@ static void mp_type_screen_update(struct widget_instance *list)
 	struct widget_instance *gametypes_item = list ? named(list, "multiplayer_type_gametypes_item", 0) : NULL;
 	struct widget_instance *desc = list ? list->parameters.list.extended_description : NULL;
 	boolean is_standard = multiplayer.gamemode == _gamemode_standard;
-	/* (Firefight's list is its variants alone: gametype_edit_gather) */
-	boolean can_edit_gametypes = multiplayer.gamemode != _gamemode_forge;
+	/* (Firefight's list is its variants alone: gametype_edit_gather; plain
+	multiplayer and Forge have none here) */
+	boolean can_edit_gametypes = multiplayer.gamemode == _gamemode_firefight;
 	struct widget_instance *local_item = list ? named(list, "multiplayer_type_create_local_item", 0) : NULL;
 
 	if (screen)
@@ -23238,6 +23239,8 @@ static void mp_type_screen_update(struct widget_instance *list)
 		visible_set(named(screen, "header_standard", 0), multiplayer.gamemode == _gamemode_standard);
 		visible_set(named(screen, "header_firefight", 0), multiplayer.gamemode == _gamemode_firefight);
 		visible_set(named(screen, "header_forge", 0), multiplayer.gamemode == _gamemode_forge);
+		/* (the line over EDIT GAMETYPES, with it) */
+		visible_set(named(screen, "blueline", 0), can_edit_gametypes);
 	}
 	if (coop_item)
 	{

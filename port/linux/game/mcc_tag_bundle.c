@@ -1071,6 +1071,10 @@ void *mcc_tag_bundle_open(char const *level_name, unsigned char const *wanted, l
 	bundle_put_u32(header + BUNDLE_HEADER_INSTANCES_OFFSET, (uint32_t)(uintptr_t)runtime->tag_index);
 	bundle_put_u32(header + BUNDLE_HEADER_TAG_COUNT_OFFSET, runtime->report.tag_count);
 	bundle_put_u32(header + BUNDLE_HEADER_SIGNATURE_OFFSET, 'tags');
+	/* (the validator reads the header as MCC's/Xbox's, whose signature is at
+	0x20, where Custom Edition's has its model data size: written there too
+	for the check, the size put in its place after it) */
+	bundle_put_u32(header + BUNDLE_HEADER_MODEL_DATA_SIZE_OFFSET, 'tags');
 	mcc_bundle.ranges[0].offset = 0;
 	mcc_bundle.ranges[0].size = (unsigned long)MIN(runtime->source.size, (uint64_t)0x50000000u);
 	mcc_bundle.ranges[1].offset = mcc_bundle.bitmaps_base;

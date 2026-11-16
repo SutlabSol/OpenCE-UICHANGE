@@ -274,7 +274,12 @@ static int mcc_is_group(struct mcc_validation_instance const *instance, unsigned
 {
     if (!groups) return 1;
     for (; *groups; ++groups)
+    {
         if (instance->group == *groups || instance->parents[0] == *groups || instance->parents[1] == *groups) return 1;
+        /* (a bundle's models are gbxmodels still, where the Xbox schema names
+         * models: mcc_tags_validate_bundle) */
+        if (mcc_validation_bundle.active && *groups == 'mode' && instance->group == 'mod2') return 1;
+    }
     return 0;
 }
 
