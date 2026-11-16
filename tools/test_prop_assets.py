@@ -127,9 +127,10 @@ def test_forge_has_a_firefight_category_last():
     engine = (ROOT / "port/forge/include/forge_engine.h").read_text()
     tags = (ROOT / "port/forge/src/forge_runtime_tags.c").read_text()
     assert "_forge_cat_ai_squads,\n" in engine
+    # (new tabs go after it: the pack's palette file names categories by number)
     assert engine.index("_forge_cat_ai_squads,") < engine.index("_forge_cat_firefight,") < engine.index(
-        "NUMBER_OF_FORGE_PALETTE_CATEGORIES")
-    assert "\"ACTORS\",\n\t\t\"FIREFIGHT\"\n\t};" in (ROOT / "port/forge/src/forge_3d_mode.c").read_text()
+        "_forge_cat_teleporters,") < engine.index("NUMBER_OF_FORGE_PALETTE_CATEGORIES")
+    assert "\"ACTORS\",\n\t\t\"FIREFIGHT\",\n\t\t\"TELEPORTERS\"\n\t};" in (ROOT / "port/forge/src/forge_3d_mode.c").read_text()
     assert "add_catalog_entry('ffsp', _forge_cat_firefight," in tags
     assert "\"objective\\\\firefight_generator\"" in tags
     assert "add_catalog_entry('flag', _forge_cat_firefight, 1, \"objective\\\\firefight_generator\"" in tags

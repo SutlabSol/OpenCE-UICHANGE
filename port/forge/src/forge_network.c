@@ -518,6 +518,9 @@ void forge_network_sync_tick(void)
 				}
 				else if (!inst->is_default_scenario_object)
 				{
+					int tele_usage = forge_3d_teleporter_net_usage(idx);
+
+					/* (a teleporter's scenery: its role and channel as its team) */
 					forge_format_host_spawn_packet(
 						msg,
 						sizeof(msg),
@@ -527,7 +530,7 @@ void forge_network_sync_tick(void)
 						inst->object_index,
 						inst->x, inst->y, inst->z,
 						inst->yaw, inst->pitch, inst->roll,
-						inst->team_designator);
+						(tele_usage >= 0 && inst->group_tag != 'tele') ? (int16_t)tele_usage : inst->team_designator);
 					forge_send_packet_to_machine(m, msg);
 					packets_sent++;
 				}
@@ -548,6 +551,13 @@ void forge_network_sync_tick(void)
 						(int)(inst->pitch * 100.0f),
 						(int)(inst->roll * 100.0f),
 						is_held);
+					forge_send_packet_to_machine(m, msg);
+					packets_sent++;
+				}
+				/* (a map's own teleporter, as it is set now) */
+				if (inst->active && inst->is_default_scenario_object && forge_3d_teleporter_net_usage(idx) >= 0)
+				{
+					snprintf(msg, sizeof(msg), "!FU:%d:%d", (int)idx, forge_3d_teleporter_net_usage(idx));
 					forge_send_packet_to_machine(m, msg);
 					packets_sent++;
 				}

@@ -2722,6 +2722,259 @@ static char const *forge_ff_wave_filter_label(int wav)
 	}
 }
 
+/* ---------- Teleporters: a 'tele' node (a marker) or a teleporter's scenery
+(forge_teleporter_scenery_tag), which carries its netgame flag with it. Each
+sends (a teleporter_source flag) or receives (a teleporter_target), or, a
+scenery only, is OFF: just a model. A sender takes a player to the first
+receiver of its channel (game_engine.c) */
+
+static void sync_live_netgame_flags_to_scenario(void);
+
+/* how far above a teleporter scenery its flag stands: a map's own pair's
+(forge_tele_absorb_node), else about its pad's top */
+static float s_tele_default_dz = 0.1f;
+
+static int forge_tele_is(struct forge_live_instance const *inst)
+{
+	return inst->active &&
+		(inst->group_tag == 'tele' || forge_teleporter_scenery_tag(inst->group_tag, inst->tag_path));
+}
+
+/* 1 sender, 2 receiver, 0 off */
+static int forge_tele_role(struct forge_live_instance const *inst)
+{
+	if (inst->group_tag == 'tele')
+		return inst->netgame_flag_type == _netgame_flag_teleporter_target ? 2 : 1;
+	return inst->netgame_flag_type == _netgame_flag_teleporter_source ? 1 :
+		(inst->netgame_flag_type == _netgame_flag_teleporter_target ? 2 : 0);
+}
+
+static int forge_tele_channel(struct forge_live_instance const *inst)
+{
+	return (inst->team_designator >= 0 && inst->team_designator < FORGE_TELE_CHANNELS) ?
+		inst->team_designator : 0;
+}
+
+static char const *forge_tele_role_name(int role)
+{
+	return role == 1 ? "SENDER" : (role == 2 ? "RECEIVER" : "OFF");
+}
+
+/* the teleporters of `role` on `channel`, but `except` */
+static int forge_tele_count(int role, int channel, int32_t except)
+{
+	int i, count = 0;
+
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *inst = &g_forge.live_instances[i];
+
+		if (i != except && forge_tele_is(inst) && forge_tele_role(inst) == role && forge_tele_channel(inst) == channel)
+			count++;
+	}
+	return count;
+}
+
+/* its other ends: the receivers of a sender's channel, or the senders of a receiver's */
+static int forge_tele_other_ends(int32_t live_idx, int32_t *out, int max_out)
+{
+	struct forge_live_instance const *inst = &g_forge.live_instances[live_idx];
+	int role = forge_tele_role(inst);
+	int i, count = 0;
+
+	if (!forge_tele_is(inst) || role == 0)
+		return 0;
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *other = &g_forge.live_instances[i];
+
+		if (i == live_idx || !forge_tele_is(other) || forge_tele_role(other) != 3 - role ||
+			forge_tele_channel(other) != forge_tele_channel(inst))
+		{
+			continue;
+		}
+		if (out && count < max_out)
+			out[count] = i;
+		count++;
+	}
+	return count;
+}
+
+/* a new one's channel and role (`want_role` 0: either): the other end of a
+channel that has one end only, else the first channel no one uses */
+static int forge_tele_auto_pick(int32_t except, int want_role, int *out_role)
+{
+	int c;
+
+	for (c = 0; c < FORGE_TELE_CHANNELS; c++)
+	{
+		int senders = forge_tele_count(1, c, except);
+		int receivers = forge_tele_count(2, c, except);
+
+		if (want_role != 1 && senders > 0 && receivers == 0)
+		{
+			*out_role = 2;
+			return c;
+		}
+		if (want_role == 1 && receivers > 0 && senders == 0)
+		{
+			*out_role = 1;
+			return c;
+		}
+	}
+	*out_role = want_role ? want_role : 1;
+	for (c = 0; c < FORGE_TELE_CHANNELS; c++)
+	{
+		if (forge_tele_count(1, c, except) == 0 && forge_tele_count(2, c, except) == 0)
+			return c;
+	}
+	return 0;
+}
+
+/* (no network: forge_tele_set) */
+static void forge_tele_apply(int32_t live_idx, int role, int channel)
+{
+	struct forge_live_instance *inst = &g_forge.live_instances[live_idx];
+
+	if (channel < 0 || channel >= FORGE_TELE_CHANNELS)
+		channel = 0;
+	if (inst->group_tag == 'tele')
+	{
+		/* (a node is always one or the other, its marker the role's) */
+		if (role != 2)
+			role = 1;
+		snprintf(inst->tag_path, sizeof(inst->tag_path), "%s",
+			role == 2 ? "teleporter\\destination" : "teleporter\\origin");
+	}
+	inst->netgame_flag_type = (int16_t)(role == 1 ? _netgame_flag_teleporter_source :
+		(role == 2 ? _netgame_flag_teleporter_target : -1));
+	inst->team_designator = (int16_t)channel;
+	/* (a placed scenery's saved team is its usage: an unbaked one comes back as it was) */
+	if (inst->group_tag != 'tele' && !inst->is_default_scenario_object &&
+		inst->edit_entry_index >= 0 && inst->edit_entry_index < (int)g_forge.edit_state.placed_object_count)
+	{
+		g_forge.edit_state.placed_objects[inst->edit_entry_index].team_index = FORGE_TELE_USAGE(role, channel);
+	}
+	sync_live_netgame_flags_to_scenario();
+}
+
+int forge_3d_teleporter_net_usage(int32_t live_idx)
+{
+	struct forge_live_instance const *inst;
+
+	if (live_idx < 0 || live_idx >= g_forge.live_instance_count)
+		return -1;
+	inst = &g_forge.live_instances[live_idx];
+	if (!forge_tele_is(inst))
+		return -1;
+	return FORGE_TELE_USAGE(forge_tele_role(inst), forge_tele_channel(inst));
+}
+
+static void forge_tele_set(int32_t live_idx, int role, int channel)
+{
+	forge_tele_apply(live_idx, role, channel);
+	forge_network_send_marker_usage(live_idx, (int16_t)forge_3d_teleporter_net_usage(live_idx));
+}
+
+/* a teleporter scenery standing on a node takes the node's place: its role,
+channel and where its flag stands. A map's own pairs (Blood Gulch's) are
+nodes on their scenery, so moving the scenery moves the teleporter. Every
+machine does this alike, as the map loads and as a scenery is placed */
+static int forge_tele_absorb_node(int32_t scenery_idx)
+{
+	struct forge_live_instance *sc = &g_forge.live_instances[scenery_idx];
+	float best_d2 = 0.6f * 0.6f;
+	int32_t best = -1;
+	int i;
+
+	if (!sc->active || sc->group_tag == 'tele' || !forge_teleporter_scenery_tag(sc->group_tag, sc->tag_path))
+		return 0;
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *node = &g_forge.live_instances[i];
+		float dx = node->x - sc->x;
+		float dy = node->y - sc->y;
+		float dz = node->z - sc->z;
+
+		if (!node->active || node->group_tag != 'tele' || dz < -0.5f || dz > 1.5f)
+			continue;
+		if (dx * dx + dy * dy < best_d2)
+		{
+			best_d2 = dx * dx + dy * dy;
+			best = i;
+		}
+	}
+	if (best < 0)
+		return 0;
+	{
+		struct forge_live_instance *node = &g_forge.live_instances[best];
+
+		sc->tele_dz = node->z - sc->z;
+		sc->tele_dyaw = node->yaw - sc->yaw;
+		s_tele_default_dz = sc->tele_dz;
+		node->active = 0;
+		forge_tele_apply(scenery_idx, forge_tele_role(node), forge_tele_channel(node));
+	}
+	return 1;
+}
+
+/* a placed teleporter scenery: what it was if another machine or the map's
+saved state says (`usage`, -1 for none: a palette's or a copy's), else a
+node under it, else paired */
+static void forge_tele_scenery_placed(int32_t live_idx, int usage)
+{
+	struct forge_live_instance *inst = &g_forge.live_instances[live_idx];
+
+	inst->tele_dz = s_tele_default_dz;
+	inst->tele_dyaw = 0.0f;
+	if (usage >= 0)
+		forge_tele_apply(live_idx, (usage >> 8) & 3, usage & 0xFF);
+	if (forge_tele_absorb_node(live_idx))
+		return;
+	if (usage < 0)
+	{
+		int role = 1;
+		int channel = forge_tele_auto_pick(live_idx, 0, &role);
+
+		forge_tele_apply(live_idx, role, channel);
+	}
+}
+
+/* what a teleporter does, for the status line */
+static void forge_tele_describe(int32_t live_idx, char *out, size_t out_size)
+{
+	struct forge_live_instance const *inst = &g_forge.live_instances[live_idx];
+	int role = forge_tele_role(inst);
+	int channel = forge_tele_channel(inst);
+	int ends = forge_tele_other_ends(live_idx, NULL, 0);
+
+	if (role == 0)
+		snprintf(out, out_size, "Teleporter OFF: set it to SENDER or RECEIVER");
+	else if (ends == 0)
+		snprintf(out, out_size, "Teleporter %s #%d: no %s on channel #%d yet",
+			forge_tele_role_name(role), channel, role == 1 ? "receiver" : "sender", channel);
+	else
+		snprintf(out, out_size, "Teleporter %s #%d: linked to %d %s%s",
+			forge_tele_role_name(role), channel, ends, role == 1 ? "receiver" : "sender", ends == 1 ? "" : "s");
+}
+
+/* the teleporter scenery that is this object, or -1 */
+static int32_t forge_tele_of_object(long object_index)
+{
+	int i;
+
+	if (object_index == NONE)
+		return -1;
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *inst = &g_forge.live_instances[i];
+
+		if (inst->object_index == object_index)
+			return (inst->group_tag != 'tele' && forge_tele_is(inst)) ? i : -1;
+	}
+	return -1;
+}
+
 /* Syncs all active 'tele', 'flag', and 'ffsp' live_instances into the in-memory scenario->netgame_flags
  * AND into g_forge.edit_state.netgame_flags so teleporters, objectives, and Firefight spawns work live and save cleanly. */
 static void sync_live_netgame_flags_to_scenario(void)
@@ -2734,7 +2987,28 @@ static void sync_live_netgame_flags_to_scenario(void)
 	{
 		struct forge_live_instance *inst = &g_forge.live_instances[i];
 		struct forge_netgame_flag_entry *nf;
-		if (!inst->active || (inst->group_tag != 'tele' && inst->group_tag != 'flag' && inst->group_tag != 'ffsp'))
+		int is_tele_scenery;
+		if (!inst->active)
+			continue;
+		/* (a teleporter's scenery, its flag with it: forge_tele_*) */
+		is_tele_scenery = inst->group_tag != 'tele' && inst->group_tag != 'flag' && inst->group_tag != 'ffsp' &&
+			forge_teleporter_scenery_tag(inst->group_tag, inst->tag_path);
+		if (is_tele_scenery)
+		{
+			if (forge_tele_role(inst) == 0)
+				continue;
+			nf = &g_forge.edit_state.netgame_flags[out_count];
+			memset(nf, 0, sizeof(*nf));
+			nf->x = inst->x;
+			nf->y = inst->y;
+			nf->z = inst->z + inst->tele_dz;
+			nf->yaw = inst->yaw + inst->tele_dyaw;
+			nf->type = inst->netgame_flag_type;
+			nf->usage_id = (int16_t)forge_tele_channel(inst);
+			out_count++;
+			continue;
+		}
+		if (inst->group_tag != 'tele' && inst->group_tag != 'flag' && inst->group_tag != 'ffsp')
 			continue;
 
 		if (inst->group_tag == 'ffsp')
@@ -3084,12 +3358,16 @@ int32_t forge_3d_spawn_object_at_slot(
 	else if (group_tag == 'tele')
 	{
 		/* _netgame_flag_teleport_from = 6, _netgame_flag_teleport_to = 7 */
-		inst->netgame_flag_type = strstr(tag_path, "destination") ? 7 : 6;
-		inst->team_designator = (team_designator >= 0 && team_designator < 16) ? team_designator : 0;
-		sync_live_netgame_flags_to_scenario();
-		forge_set_status("Placed Teleporter %s [Ref #%d]",
-			inst->netgame_flag_type == 6 ? "IN (Origin)" : "OUT (Destination)",
-			(int)inst->team_designator);
+		int role = strstr(tag_path, "destination") ? 2 : 1;
+		int channel = (team_designator >= 0 && team_designator < FORGE_TELE_CHANNELS) ? team_designator : 0;
+		char what[96];
+
+		/* (placed here from the palette: paired with a lone end, or on a channel of its own) */
+		if (broadcast_net && team_designator == 0)
+			channel = forge_tele_auto_pick(live_idx, role, &role);
+		forge_tele_apply(live_idx, role, channel);
+		forge_tele_describe(live_idx, what, sizeof(what));
+		forge_set_status("Placed %s", what);
 	}
 	else if (group_tag == 'flag')
 	{
@@ -3209,6 +3487,19 @@ int32_t forge_3d_spawn_object_at_slot(
 			forge_set_status("Missing tag '%s': it stays in the map, but cannot be shown", tag_path);
 		else
 			forge_set_status("Placed '%s' at (%.1f, %.1f, %.1f)", tag_path, x, y, z);
+
+		/* (a teleporter's scenery is one: paired here, as it was elsewhere; the other
+		machines hear its role and channel as its team) */
+		if (forge_teleporter_scenery_tag(group_tag, tag_path))
+		{
+			char what[96];
+
+			forge_tele_scenery_placed(live_idx,
+				(team_designator & FORGE_TELE_USAGE_SET) ? (int)(uint16_t)team_designator : -1);
+			team_designator = (int16_t)forge_3d_teleporter_net_usage(live_idx);
+			forge_tele_describe(live_idx, what, sizeof(what));
+			forge_set_status("Placed %s", what);
+		}
 
 		if (broadcast_net && forge_is_multiplayer_session())
 		{
@@ -3377,6 +3668,9 @@ void forge_3d_move_instance_ext(
 		}
 	}
 
+	/* (a teleporter's scenery is saved as an object, and its flag goes with it) */
+	if (forge_teleporter_scenery_tag(inst->group_tag, inst->tag_path))
+		sync_live_netgame_flags_to_scenario();
 	if (inst->group_tag == 'tele' || inst->group_tag == 'flag' || inst->group_tag == 'ffsp')
 	{
 		sync_live_netgame_flags_to_scenario();
@@ -3480,6 +3774,9 @@ void forge_3d_delete_instance(int32_t live_idx, int broadcast_net)
 	}
 	inst->active = 0;
 
+	/* (a teleporter's scenery is saved as an object, and its flag goes with it) */
+	if (forge_teleporter_scenery_tag(inst->group_tag, inst->tag_path))
+		sync_live_netgame_flags_to_scenario();
 	if (inst->group_tag == 'tele' || inst->group_tag == 'flag' || inst->group_tag == 'ffsp')
 	{
 		sync_live_netgame_flags_to_scenario();
@@ -3545,6 +3842,12 @@ void forge_3d_marker_usage_apply(int32_t live_idx, int16_t usage)
 {
 	if (live_idx < 0 || live_idx >= g_forge.live_instance_count)
 		return;
+	/* (a teleporter's: its role and channel, FORGE_TELE_USAGE) */
+	if (forge_tele_is(&g_forge.live_instances[live_idx]))
+	{
+		forge_tele_apply(live_idx, ((uint16_t)usage >> 8) & 3, usage & 0xFF);
+		return;
+	}
 	if (!g_forge.live_instances[live_idx].active || g_forge.live_instances[live_idx].group_tag != 'ffsp')
 		return;
 	g_forge.live_instances[live_idx].team_designator = usage;
@@ -4539,6 +4842,11 @@ void forge_init_map_scenario_entities(void)
 		}
 	}
 
+	/* 3b. A map's own teleporters: a node on a teleporter's scenery is that
+	scenery's from now on, and goes where it is moved (forge_tele_absorb_node) */
+	for (i = 0; i < g_forge.live_instance_count; i++)
+		forge_tele_absorb_node((int32_t)i);
+
 	/* 2. Points 7 & 13: In Single Player mode (!game_engine_running()), the engine skips spawning
 	 *    netgame_equipment (weapons/grenades/powerups) and multiplayer-flagged vehicles.
 	 *    Force every weapon, item, and vehicle present on the map to spawn! */
@@ -4706,6 +5014,34 @@ static void format_clean_uppercase_item_name(char const *display_name, char *out
 
 /* whether the object held has Object Properties' SNAP POINTS row: a stock
 scenery's or door's tag (a profile's has its page in the Tag Injector) */
+/* the palette's tabs in the order shown: the enum's is the pack's palette
+file's numbers, so TELEPORTERS, added last, shows after SPAWNS */
+static enum forge_palette_category forge_palette_category_step(enum forge_palette_category category, int dir)
+{
+	static enum forge_palette_category const s_order[NUMBER_OF_FORGE_PALETTE_CATEGORIES] = {
+		_forge_cat_weapons,
+		_forge_cat_equipment,
+		_forge_cat_vehicles,
+		_forge_cat_bipeds,
+		_forge_cat_scenery,
+		_forge_cat_barriers_devices,
+		_forge_cat_lights,
+		_forge_cat_spawns,
+		_forge_cat_teleporters,
+		_forge_cat_objectives,
+		_forge_cat_ai_squads,
+		_forge_cat_firefight
+	};
+	int i;
+
+	for (i = 0; i < NUMBER_OF_FORGE_PALETTE_CATEGORIES; i++)
+	{
+		if (s_order[i] == category)
+			return s_order[(i + NUMBER_OF_FORGE_PALETTE_CATEGORIES + dir) % NUMBER_OF_FORGE_PALETTE_CATEGORIES];
+	}
+	return _forge_cat_weapons;
+}
+
 static int forge_props_snap_row(struct forge_live_instance const *inst)
 {
 	return (inst->group_tag == 'scen' || inst->group_tag == 'mach' || inst->group_tag == 'ctrl') &&
@@ -5926,6 +6262,94 @@ static void forge_props_open(void)
 	}
 }
 
+/* TELEPORT TO OTHER END: the camera behind the teleporter's other end, as
+a player comes out of it, with that end's settings open on the same row, so
+the same press goes back. A channel's several other ends in turn */
+static void forge_tele_jump(int32_t live_idx)
+{
+	static int32_t s_last_target[FORGE_TELE_CHANNELS][3];
+	static int s_last_target_set;
+	struct forge_live_instance const *from = &g_forge.live_instances[live_idx];
+	struct forge_live_instance const *dest;
+	int32_t ends[64];
+	int count = forge_tele_other_ends(live_idx, ends, 64);
+	int role = forge_tele_role(from);
+	int channel = forge_tele_channel(from);
+	int32_t target;
+	int k, rank = 0;
+	float facing, pad_z, back = 2.5f, rise = 1.3f;
+	real_point3d cam;
+
+	if (!s_last_target_set)
+	{
+		int c;
+
+		for (c = 0; c < FORGE_TELE_CHANNELS; c++)
+			s_last_target[c][0] = s_last_target[c][1] = s_last_target[c][2] = -1;
+		s_last_target_set = 1;
+	}
+	if (count <= 0)
+	{
+		char what[96];
+
+		forge_tele_describe(live_idx, what, sizeof(what));
+		forge_set_status("%s", what);
+		return;
+	}
+	if (count > 64)
+		count = 64;
+	/* (the one after the last this channel's end went to) */
+	target = ends[0];
+	for (k = 0; k < count; k++)
+	{
+		if (ends[k] > s_last_target[channel][role])
+		{
+			target = ends[k];
+			rank = k;
+			break;
+		}
+	}
+	s_last_target[channel][role] = target;
+
+	/* (let go of this one where it is) */
+	if (g_forge.grabbed_for_settings)
+		forge_settings_selection_end();
+	else
+		forge_place_held_item();
+	g_forge.active_modal = _forge_modal_none;
+
+	dest = &g_forge.live_instances[target];
+	facing = dest->yaw + (dest->group_tag == 'tele' ? 0.0f : dest->tele_dyaw);
+	pad_z = dest->z + (dest->group_tag == 'tele' ? 0.0f : dest->tele_dz);
+	cam.x = dest->x - (float)cos((double)facing) * back;
+	cam.y = dest->y - (float)sin((double)facing) * back;
+	cam.z = pad_z + rise;
+	/* (no room behind it: above it, looking down) */
+	if (scenario_leaf_index_from_point(&cam) == NONE)
+	{
+		cam.x = dest->x;
+		cam.y = dest->y;
+		cam.z = pad_z + 1.8f;
+		back = 0.35f;
+		rise = 1.8f;
+	}
+	g_forge.cam_x = cam.x;
+	g_forge.cam_y = cam.y;
+	g_forge.cam_z = cam.z;
+	g_forge.cam_yaw = facing;
+	g_forge.cam_pitch = -(float)atan2((double)rise, (double)back);
+
+	forge_select_instance(target);
+	g_forge.grabbed_for_settings = 1;
+	forge_props_open();
+	g_forge.props_cursor = 2;
+	if (count > 1)
+		forge_set_status("At %s #%d (%d of %d)", forge_tele_role_name(forge_tele_role(dest)), forge_tele_channel(dest),
+			rank + 1, count);
+	else
+		forge_set_status("At %s #%d", forge_tele_role_name(forge_tele_role(dest)), forge_tele_channel(dest));
+}
+
 /* the properties back as forge_props_open found them, which stay open */
 static void forge_props_undo(void)
 {
@@ -5956,6 +6380,10 @@ static void forge_props_undo(void)
 			forge_ff_route_set_leg_style(route_id, FF_ROUTE_APPROACH, s_props_opened.leg_style[0]);
 			forge_ff_route_set_leg_style(route_id, FF_ROUTE_DEPARTURE, s_props_opened.leg_style[1]);
 		}
+	}
+	else if (forge_tele_is(inst))
+	{
+		forge_tele_set(live_idx, forge_tele_role(was), forge_tele_channel(was));
 	}
 	else
 	{
@@ -6681,8 +7109,7 @@ void forge_3d_update(float dt)
 		if (cur_left && !prev_left)
 		{
 			do {
-				g_forge.current_category = (enum forge_palette_category)(
-					(g_forge.current_category + NUMBER_OF_FORGE_PALETTE_CATEGORIES - 1) % NUMBER_OF_FORGE_PALETTE_CATEGORIES);
+				g_forge.current_category = forge_palette_category_step(g_forge.current_category, -1);
 			} while ((g_forge.current_category == _forge_cat_bipeds ||
 					  g_forge.current_category == _forge_cat_ai_squads) &&
 					 get_filtered_catalog_indices_for_cat(g_forge.current_category, NULL, 1) <= 0);
@@ -6692,8 +7119,7 @@ void forge_3d_update(float dt)
 		if (cur_right && !prev_right)
 		{
 			do {
-				g_forge.current_category = (enum forge_palette_category)(
-					(g_forge.current_category + 1) % NUMBER_OF_FORGE_PALETTE_CATEGORIES);
+				g_forge.current_category = forge_palette_category_step(g_forge.current_category, 1);
 			} while ((g_forge.current_category == _forge_cat_bipeds ||
 					  g_forge.current_category == _forge_cat_ai_squads) &&
 					 get_filtered_catalog_indices_for_cat(g_forge.current_category, NULL, 1) <= 0);
@@ -6893,9 +7319,11 @@ void forge_3d_update(float dt)
 		int is_zone = forge_ff_is_dropship_zone(inst);
 		int snap_row = forge_props_snap_row(inst);
 		int is_ai_spawn = (inst->group_tag == FORGE_GROUP_AI_SPAWN);
+		/* (a teleporter's: TYPE, CHANNEL, TELEPORT TO OTHER END, then the usual) */
+		int is_tele = forge_tele_is(inst);
 		/* (a drop area's TEST DROP, after its other rows) */
 		int test_drop_row = forge_is_drop_area(inst) ? (snap_row ? 6 : 5) : -1;
-		int max_props_row = is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS - 1 :
+		int max_props_row = is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS - 1 : is_tele ? (snap_row ? 6 : 5) :
 			(is_zone ? (FF_ROUTE_ID(inst->team_designator) != 0 ? 9 : 7) :
 				(is_route_point ? 6 : (test_drop_row >= 0 ? test_drop_row : ((is_ff_spawn || snap_row) ? 5 : 4))));
 		/* (DONE and UNDO, side by side under the rows) */
@@ -6967,6 +7395,56 @@ void forge_3d_update(float dt)
 					g_forge.grabbed_object_index = NONE;
 					g_forge.active_modal = _forge_modal_none;
 					goto update_prev_keys;
+				}
+			}
+			else if (is_tele)
+			{
+				int role = forge_tele_role(inst);
+				int channel = forge_tele_channel(inst);
+				char what[96];
+
+				if (g_forge.props_cursor == 0 || g_forge.props_cursor == 1)
+				{
+					if (g_forge.props_cursor == 0)
+					{
+						/* (a node sends or receives; a scenery may also be just a model) */
+						role = inst->group_tag == 'tele' ? 3 - role : (role + 3 + dir) % 3;
+					}
+					else
+					{
+						channel = (channel + FORGE_TELE_CHANNELS + dir) % FORGE_TELE_CHANNELS;
+					}
+					forge_tele_set(g_forge.grabbed_live_index, role, channel);
+					forge_tele_describe(g_forge.grabbed_live_index, what, sizeof(what));
+					forge_set_status("%s", what);
+				}
+				else if (g_forge.props_cursor == 2)
+				{
+					if (cur_enter && !prev_enter)
+					{
+						forge_tele_jump(g_forge.grabbed_live_index);
+						goto update_prev_keys;
+					}
+				}
+				else if (g_forge.props_cursor == 3)
+				{
+					g_forge.snap_mode = (enum forge_snap_angle_mode)((g_forge.snap_mode + NUMBER_OF_FORGE_SNAP_MODES + dir) % NUMBER_OF_FORGE_SNAP_MODES);
+				}
+				else if (g_forge.props_cursor == 4)
+				{
+					cur_z = 1;
+				}
+				else if (g_forge.props_cursor == 5 && cur_enter && !prev_enter)
+				{
+					forge_3d_delete_instance(g_forge.grabbed_live_index, 1);
+					g_forge.grabbed_live_index = -1;
+					g_forge.grabbed_object_index = NONE;
+					g_forge.active_modal = _forge_modal_none;
+					goto update_prev_keys;
+				}
+				else if (g_forge.props_cursor == 6 && snap_row)
+				{
+					forge_snap_tag_layout_step(inst->group_tag, inst->tag_path, dir);
 				}
 			}
 			else if (is_ff_spawn)
@@ -7709,11 +8187,8 @@ void forge_3d_update(float dt)
 				}
 				else if (inst->group_tag == 'tele')
 				{
-					int is_sender = (inst->netgame_flag_type == _netgame_flag_teleporter_source ||
-						strstr(inst->tag_path, "sender") != NULL ||
-						strstr(inst->tag_path, "origin") != NULL);
-					snprintf(g_forge.hovered_object_label, sizeof(g_forge.hovered_object_label),
-						"Teleporter %s (Ref #%d)", is_sender ? "In [^]" : "Out [v]", (int)inst->team_designator);
+					forge_tele_describe(g_forge.hovered_live_index,
+						g_forge.hovered_object_label, sizeof(g_forge.hovered_object_label));
 				}
 				else if (inst->group_tag == 'flag')
 				{
@@ -7756,8 +8231,12 @@ void forge_3d_update(float dt)
 					{
 						char const *tname = tag_get_name(hobj->definition_index);
 						char const *slash = tname ? strrchr(tname, '\\') : NULL;
+						int32_t tele_idx = forge_tele_of_object(g_forge.hovered_object_index);
 						snprintf(g_forge.hovered_object_label, sizeof(g_forge.hovered_object_label),
 							"%s", slash ? (slash + 1) : (tname ? tname : "map_object"));
+						/* (a teleporter's scenery: what it does) */
+						if (tele_idx >= 0)
+							forge_tele_describe(tele_idx, g_forge.hovered_object_label, sizeof(g_forge.hovered_object_label));
 					}
 				}
 				else
@@ -8466,10 +8945,11 @@ static void draw_teleporter_and_objective_markers(
 		if (!inst->active)
 			continue;
 		if (inst->group_tag != 'spwn' && inst->group_tag != 'tele' && inst->group_tag != 'flag' && inst->group_tag != 'ffsp' &&
-			inst->group_tag != FORGE_GROUP_AI_SPAWN)
+			inst->group_tag != FORGE_GROUP_AI_SPAWN && !forge_tele_is(inst))
 			continue;
 
-		is_hi = (i == g_forge.grabbed_live_index || i == g_forge.hovered_live_index);
+		is_hi = (i == g_forge.grabbed_live_index || i == g_forge.hovered_live_index ||
+			(inst->object_index != NONE && inst->object_index == g_forge.hovered_object_index));
 		if (!is_hi)
 			continue;
 
@@ -8566,15 +9046,20 @@ static void draw_teleporter_and_objective_markers(
 			continue;
 
 		set_forge_hud_ui_scale(FORGE_IN_MATCH_HUD_SCALE, (float)sx, (float)sy);
-		if (inst->group_tag == 'tele')
+		if (forge_tele_is(inst))
 		{
-			int is_sender = (inst->netgame_flag_type == _netgame_flag_teleporter_source ||
-				strstr(inst->tag_path, "sender") != NULL ||
-				strstr(inst->tag_path, "origin") != NULL);
+			int role = forge_tele_role(inst);
+			int linked = forge_tele_other_ends(i, NULL, 0) > 0;
 			char lbl[64];
 
-			snprintf(lbl, sizeof(lbl), "%s #%d", is_sender ? "TELE ORIGIN" : "TELE DEST", (int)inst->team_designator);
-			draw_ce_menu_str_box(0, font_index, (short)(sx - 90), (short)(sy + 8), (short)(sx + 90), (short)(sy + 34), 2, lbl, 0xFFFFFFFFu);
+			if (role == 0)
+				snprintf(lbl, sizeof(lbl), "TELEPORTER OFF");
+			else
+				snprintf(lbl, sizeof(lbl), "%s #%d%s", forge_tele_role_name(role), forge_tele_channel(inst),
+					linked ? "" : " (NOT LINKED)");
+			/* (green linked, amber not) */
+			draw_ce_menu_str_box(0, font_index, (short)(sx - 110), (short)(sy + 8), (short)(sx + 110), (short)(sy + 34), 2, lbl,
+				role != 0 && linked ? 0xFF24FF54u : 0xFFFFC824u);
 		}
 		else if (inst->group_tag == 'flag')
 		{
@@ -8730,7 +9215,8 @@ void forge_3d_draw_hud(
 		"SPAWNS",
 		"OBJECTIVES",
 		"ACTORS",
-		"FIREFIGHT"
+		"FIREFIGHT",
+		"TELEPORTERS"
 	};
 	static char const *const snap_names[4] = { "OFF", "15 DEG", "45 DEG", "90 DEG" };
 	char buf[256];
@@ -8992,8 +9478,9 @@ void forge_3d_draw_hud(
 			int is_zone = forge_ff_is_dropship_zone(inst);
 			int snap_row = forge_props_snap_row(inst);
 			int is_ai_spawn = (inst->group_tag == FORGE_GROUP_AI_SPAWN);
+			int is_tele = forge_tele_is(inst);
 			int test_drop_row = forge_is_drop_area(inst) ? (snap_row ? 6 : 5) : -1;
-			int row_count = is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS :
+			int row_count = is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS : is_tele ? (snap_row ? 7 : 6) :
 				(is_zone ? (FF_ROUTE_ID(inst->team_designator) != 0 ? 10 : 8) :
 					(is_route_point ? 7 : (test_drop_row >= 0 ? test_drop_row + 1 : ((is_ff_spawn || snap_row) ? 6 : 5))));
 			short box_w = (short)(is_ai_spawn ? 372 : 312);
@@ -9012,7 +9499,8 @@ void forge_3d_draw_hud(
 			draw_ce_pause_box(px0, py0, box_w, box_h, 1);
 
 			draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 4),
-				is_ai_spawn ? "AI SPAWN" : (is_route_point ? "DROPSHIP ROUTE" : (is_ff_spawn ? "FIREFIGHT SPAWN" : "OBJECT PROPERTIES")), 0xFFFFFFFFu);
+				is_ai_spawn ? "AI SPAWN" : (is_tele ? "TELEPORTER" :
+					(is_route_point ? "DROPSHIP ROUTE" : (is_ff_spawn ? "FIREFIGHT SPAWN" : "OBJECT PROPERTIES"))), 0xFFFFFFFFu);
 
 			if (is_ai_spawn)
 			{
@@ -9027,6 +9515,38 @@ void forge_3d_draw_hud(
 				values[_forge_ai_row_floor][0] = 0;
 				snprintf(labels[_forge_ai_row_delete], sizeof(labels[0]), "DELETE OBJECT");
 				values[_forge_ai_row_delete][0] = 0;
+			}
+			else if (is_tele)
+			{
+				int role = forge_tele_role(inst);
+				int ends = forge_tele_other_ends(g_forge.grabbed_live_index, NULL, 0);
+
+				snprintf(labels[0], sizeof(labels[0]), "TYPE:");
+				snprintf(values[0], sizeof(values[0]), "%s", forge_tele_role_name(role));
+				snprintf(labels[1], sizeof(labels[1]), "CHANNEL:");
+				if (role == 0)
+					snprintf(values[1], sizeof(values[1]), "#%d", forge_tele_channel(inst));
+				else if (ends == 0)
+					snprintf(values[1], sizeof(values[1]), "#%d - NOT LINKED", forge_tele_channel(inst));
+				else
+					snprintf(values[1], sizeof(values[1]), "#%d - %d %s%s", forge_tele_channel(inst), ends,
+						role == 1 ? "RECEIVER" : "SENDER", ends == 1 ? "" : "S");
+				if (role == 0 || ends == 0)
+					snprintf(labels[2], sizeof(labels[2]), "TELEPORT TO OTHER END");
+				else
+					snprintf(labels[2], sizeof(labels[2]), "TELEPORT TO %s", role == 1 ? "RECEIVER" : "SENDER");
+				values[2][0] = 0;
+				snprintf(labels[3], sizeof(labels[3]), "ROT SNAP:");
+				snprintf(values[3], sizeof(values[3]), "%s", snap_names[g_forge.snap_mode]);
+				snprintf(labels[4], sizeof(labels[4]), "DROP TO FLOOR");
+				values[4][0] = 0;
+				snprintf(labels[5], sizeof(labels[5]), "DELETE OBJECT");
+				values[5][0] = 0;
+				if (snap_row)
+				{
+					snprintf(labels[6], sizeof(labels[6]), "SNAP POINTS:");
+					forge_snap_tag_layout_text(inst->group_tag, inst->tag_path, values[6], sizeof(values[6]));
+				}
 			}
 			else if (is_route_point)
 			{

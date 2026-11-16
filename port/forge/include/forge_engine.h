@@ -145,12 +145,15 @@ enum forge_palette_category
 	_forge_cat_scenery,
 	_forge_cat_barriers_devices,
 	_forge_cat_lights,
-	_forge_cat_spawns_teleporters,
+	_forge_cat_spawns,
 	_forge_cat_objectives,
 	_forge_cat_ai_squads,
 	/* Firefight's: its spawns, generators, drop areas and resupply racks
-	(last: the pack's palette file names categories by number) */
+	(after the rest: the pack's palette file names categories by number) */
 	_forge_cat_firefight,
+	/* the teleporter nodes and every teleporter scenery (after Firefight for
+	the same reason; the palette shows it after SPAWNS: forge_3d_mode.c) */
+	_forge_cat_teleporters,
 	NUMBER_OF_FORGE_PALETTE_CATEGORIES
 };
 
@@ -256,6 +259,9 @@ struct forge_live_instance
 	uint16_t gametype_flags;   /* 0 = All Modes, bit0=CTF, bit1=Slayer, bit2=Oddball, bit3=KOTH, bit4=Race */
 	int16_t netgame_flag_type; /* Scenario netgame_flag type (6=tele_from, 7=tele_to, 8=hill, 2=oddball, 0=ctf) or -1 */
 	int16_t team_designator;   /* Reference/Channel ID or Team Index */
+	/* a teleporter scenery's netgame flag (netgame_flag_type 6 or 7): where it
+	stands from the object, up and turned (forge_tele_*) */
+	float tele_dz, tele_dyaw;
 	float orig_x, orig_y, orig_z; /* Original scenario position if is_default_scenario_object == 1 */
 	float x, y, z;
 	float yaw, pitch, roll;
@@ -630,6 +636,16 @@ void forge_3d_move_instance(int32_t live_idx, float x, float y, float z, float y
 void forge_3d_move_instance_ext(int32_t live_idx, float x, float y, float z, float yaw, float pitch, float roll, int is_held, int broadcast_net);
 void forge_3d_delete_instance(int32_t live_idx, int broadcast_net);
 void forge_3d_marker_usage_apply(int32_t live_idx, int16_t usage);
+/* ---------- Teleporters: the 'tele' nodes and teleporter scenery. Each is a
+SENDER (netgame flag 6), a RECEIVER (7) or, scenery only, OFF, on a channel
+0..15. On the network, as !FU's usage and a scenery's !FH/!FS team: the
+channel, with the role (0 off, 1 sender, 2 receiver) at bit 8 and
+FORGE_TELE_USAGE_SET, which a palette's team (0) or a node's channel has not */
+#define FORGE_TELE_CHANNELS 16
+#define FORGE_TELE_USAGE_SET 0x400
+#define FORGE_TELE_USAGE(role, channel) ((int16_t)(FORGE_TELE_USAGE_SET | ((role) << 8) | ((channel) & 0xFF)))
+int forge_teleporter_scenery_tag(uint32_t group_tag, char const *tag_path);
+int forge_3d_teleporter_net_usage(int32_t live_idx);
 void forge_3d_dropship_routes_render(void (*draw_piece)(float const *from, float const *to, int kind));
 int forge_is_unit_in_monitor_mode(long unit_index);
 int forge_get_local_player_abs_index(void);

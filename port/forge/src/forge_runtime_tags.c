@@ -550,6 +550,25 @@ static int is_forge_light_beacon_emitter_tag(uint32_t grp, char const *tag_path)
 	return 0;
 }
 
+/* a scenery that is a teleporter's: one placed sends or receives (forge_3d_mode.c's forge_tele_*).
+The stock one is scenery\teleporter_base\teleporter_base; its shield is an effect, left out */
+int forge_teleporter_scenery_tag(uint32_t group_tag, char const *tag_path)
+{
+	char lower_buf[260];
+	size_t i;
+
+	if ((group_tag != 'scen' && group_tag != 'mach') || !tag_path || !tag_path[0])
+		return 0;
+	for (i = 0; tag_path[i] && i + 1 < sizeof(lower_buf); i++)
+	{
+		char ch = tag_path[i];
+
+		lower_buf[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
+	}
+	lower_buf[i] = '\0';
+	return strstr(lower_buf, "teleporter") != NULL && strstr(lower_buf, "shield") == NULL;
+}
+
 static int is_excluded_scenery_or_effect_tag(char const *tag_path)
 {
 	static char const *const s_excluded_substrings[] = {
@@ -874,6 +893,9 @@ static void add_catalog_entry(
 
 	if (!tag_path || !tag_path[0] || g_forge.catalog_count >= FORGE_MAX_CATALOG_ENTRIES)
 		return;
+	/* (a teleporter's scenery, wherever it is found, in TELEPORTERS: placed, it is one) */
+	if (category == _forge_cat_scenery && forge_teleporter_scenery_tag(group_tag, tag_path))
+		category = _forge_cat_teleporters;
 
 	/* (an actor's rank once, whatever its weapon: forge_ai.c's kinds) */
 	if (group_tag == FORGE_GROUP_AI_SPAWN && strncmp(tag_path, FORGE_AI_RANDOM_PATH, strlen(FORGE_AI_RANDOM_PATH)))
@@ -1281,12 +1303,13 @@ void forge_runtime_reload_catalogs(void)
 	g_forge.catalog_count = 0;
 
 	/* Built-in Spawns & Teleporters (source_cache_id = 1; 0 is reserved for transient [MAP] local tags) */
-	add_catalog_entry('spwn', _forge_cat_spawns_teleporters, 1, "spawn\\player_red", "[SPAWN] Red Team Spawn");
-	add_catalog_entry('spwn', _forge_cat_spawns_teleporters, 1, "spawn\\player_blue", "[SPAWN] Blue Team Spawn");
-	add_catalog_entry('spwn', _forge_cat_spawns_teleporters, 1, "spawn\\player_ffa", "[SPAWN] FFA / Neutral Spawn");
+	add_catalog_entry('spwn', _forge_cat_spawns, 1, "spawn\\player_red", "[SPAWN] Red Team Spawn");
+	add_catalog_entry('spwn', _forge_cat_spawns, 1, "spawn\\player_blue", "[SPAWN] Blue Team Spawn");
+	add_catalog_entry('spwn', _forge_cat_spawns, 1, "spawn\\player_ffa", "[SPAWN] FFA / Neutral Spawn");
 	add_catalog_entry('ffsp', _forge_cat_firefight, 1, "spawn\\firefight_spawn", "[FF] Firefight Spawn");
-	add_catalog_entry('tele', _forge_cat_spawns_teleporters, 1, "teleporter\\origin", "[TELEPORTER] Origin Node");
-	add_catalog_entry('tele', _forge_cat_spawns_teleporters, 1, "teleporter\\destination", "[TELEPORTER] Destination Node");
+	/* (the teleporter scenery joins these: add_catalog_entry) */
+	add_catalog_entry('tele', _forge_cat_teleporters, 1, "teleporter\\origin", "[NODE] Sender");
+	add_catalog_entry('tele', _forge_cat_teleporters, 1, "teleporter\\destination", "[NODE] Receiver");
 
 	/* Built-in Netgame Objectives */
 	add_catalog_entry('flag', _forge_cat_objectives, 1, "objective\\ctf_flag_red", "[CTF] Red Flag Base");
