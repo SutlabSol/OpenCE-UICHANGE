@@ -39,6 +39,9 @@
 #include "scenario/scenario_definitions.h"
 #include "cache/cache_files.h"
 #include "custom_edition_cache.h"
+#include "mcc_cache.h"
+#include "mcc_maps.h"
+#include "mcc_package.h"
 #include "tag_schema.h"
 #include "social_creator.h"
 #include <xtl.h>
@@ -193,6 +196,13 @@ char const *forge_get_active_map_name(void)
 			snprintf(s_active_map, sizeof(s_active_map), "custom_maps\\%s", clean_stem);
 			return s_active_map;
 		}
+	}
+
+	/* (an MCC map's level: its own name, mcc_maps\<package>\<name>) */
+	if (mcc_cache_level_name())
+	{
+		snprintf(s_active_map, sizeof(s_active_map), "%s", mcc_cache_level_name());
+		return s_active_map;
 	}
 
 	loaded_leaf = cache_file_loaded_map_name();
@@ -5379,6 +5389,58 @@ static void resolve_current_base_map_path(char *out_path, size_t out_sz)
 	snprintf(out_path, out_sz, "maps/bloodgulch.map");
 }
 
+/* a map made on an MCC map's level: saved as an MCC map of Forge's own
+package, mcc_maps\forge\<name> (forge_export_mcc_scenario_map), which the MCC
+MULTIPLAYER list shows in its [Forge maps] folder. None of the base map's
+resources are in it: like a Custom Edition map's bitmaps.map, sounds.map and
+loc.map, they are asked for where the base map has them (MCC's _shared) */
+static int forge_ui_save_mcc(char const *name, int was_already_saved)
+{
+	char const *base_level = mcc_cache_level_name();
+	char clean_name[41];
+	char level[64];
+	char base_path[128];
+	char out_path[128];
+	FILE *existing;
+	int is_new_map;
+
+	/* (the catalog keeps 54 characters of forge\<name>: mcc_maps.c) */
+	snprintf(clean_name, sizeof(clean_name), "%s", name);
+	snprintf(level, sizeof(level), "%s%s\\%s", MCC_MAPS_LEVEL_PREFIX, MCC_PACKAGE_FORGE, clean_name);
+	if (!base_level || !mcc_package_map_path(base_level, base_path) || !mcc_package_map_path(level, out_path))
+	{
+		forge_set_status("ERROR: '%s' can't name an MCC map", clean_name);
+		return 0;
+	}
+	existing = fopen(out_path, "rb");
+	is_new_map = existing == NULL;
+	if (existing)
+		fclose(existing);
+
+	forge_ai_saved_tags_collect();
+	if (!forge_export_mcc_scenario_map(base_path, base_level, &g_forge.edit_state, clean_name, out_path))
+	{
+		forge_set_status("ERROR: Failed to export mcc_maps/%s/%s.map", MCC_PACKAGE_FORGE, clean_name);
+		return 0;
+	}
+	if (is_new_map)
+		social_creator_add(_social_creator_forge_maps, 1);
+	platform_log("Forge: saved %s on the MCC map %s with %d campaign tags for its AI, %d AI spawns", level, base_level,
+		(int)g_forge.edit_state.ai_actor_count, (int)g_forge.edit_state.ai_spawn_count);
+	mcc_maps_rescan();
+	snprintf(g_forge.save_map_name, sizeof(g_forge.save_map_name), "%s", clean_name);
+	g_forge.save_map_name_len = (int)strlen(g_forge.save_map_name);
+	g_forge.has_saved_map_once = 1;
+	if (was_already_saved)
+	{
+		forge_set_status("Updated saved map 'mcc_maps/%s/%s.map' (%d placed, %d default edits)!", MCC_PACKAGE_FORGE,
+			clean_name, (int)g_forge.edit_state.placed_object_count, (int)g_forge.edit_state.default_edit_count);
+	}
+	else
+		forge_set_status("Initial save complete: 'mcc_maps/%s/%s.map'", MCC_PACKAGE_FORGE, clean_name);
+	return 1;
+}
+
 int forge_ui_save_copy_as(char const *new_map_name)
 {
 	char base_map_path[512];
@@ -5400,6 +5462,9 @@ int forge_ui_save_copy_as(char const *new_map_name)
 	{
 		snprintf(clean_name, sizeof(clean_name), "%s", new_map_name);
 	}
+
+	if (mcc_cache_level_name())
+		return forge_ui_save_mcc(clean_name, was_already_saved);
 
 	resolve_current_base_map_path(base_map_path, sizeof(base_map_path));
 
@@ -5760,6 +5825,17 @@ static FILE *forge_saved_map_open(char const *scenario_name)
 	char path[256];
 	char host[1024];
 
+	/* (an MCC map's level, mcc_maps\<package>\<name>: its file, Forge's own
+	in mcc_maps\forge among them) */
+	if (scenario_name && mcc_level_name(scenario_name))
+	{
+		char mcc_path[128];
+
+		if (!mcc_package_map_path(scenario_name, mcc_path))
+			return NULL;
+		platform_translate_path(mcc_path, host, sizeof(host));
+		return fopen(host, "rb");
+	}
 	while ((slash = strpbrk(leaf, "\\/")) != NULL)
 		leaf = slash + 1;
 	if (!leaf[0] || !custom_edition_map_file_path(leaf, path))
@@ -6864,10 +6940,16 @@ void forge_load_saved_map_state_if_present(char const *map_name)
 		slash = strrchr(map_name, '/');
 	snprintf(leaf, sizeof(leaf), "%s", slash ? (slash + 1) : map_name);
 
-	/* 1. Read embedded [OpenCE Forge Map] / [ForgeState] directly from .map header (0x1E4 / 0x1E8) */
-	snprintf(map_path, sizeof(map_path), "custom_maps/%s.map", leaf);
-	f = fopen(map_path, "rb");
-	if (!f)
+	/* 1. Read embedded [OpenCE Forge Map] / [ForgeState] directly from .map header (0x1E4 / 0x1E8)
+	(an MCC map's level, Forge's own in mcc_maps\forge: its file, and nothing beside) */
+	if (mcc_level_name(map_name))
+		f = forge_saved_map_open(map_name);
+	else
+	{
+		snprintf(map_path, sizeof(map_path), "custom_maps/%s.map", leaf);
+		f = fopen(map_path, "rb");
+	}
+	if (!f && !mcc_level_name(map_name))
 	{
 		static char const *const state_map_cands[] = {
 			"OpenCE Forge/forge_maps/%s.map",
@@ -6922,7 +7004,9 @@ void forge_load_saved_map_state_if_present(char const *map_name)
 		fclose(f);
 	}
 
-	/* 2. Legacy fallback for maps saved before embedded state */
+	/* 2. Legacy fallback for maps saved before embedded state (never an MCC map's: Forge saved none so) */
+	if (mcc_level_name(map_name))
+		return;
 	snprintf(txt_path, sizeof(txt_path), "OpenCE Forge/forge_maps/%s/%s.txt", leaf, leaf);
 	f = fopen(txt_path, "rb");
 	if (!f)

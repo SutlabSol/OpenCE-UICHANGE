@@ -2394,6 +2394,9 @@ static void forge_ensure_default_object_edit_entry(struct forge_live_instance *i
 		de->new_roll = inst->roll;
 		de->gametype_flags = inst->gametype_flags;
 	}
+	else
+		forge_set_status("Map budget reached: changes past %d of the map's own objects won't be saved",
+			FORGE_MAX_DEFAULT_OBJECT_EDITS);
 }
 
 static int32_t adopt_default_scenario_object(long object_index)
@@ -3199,7 +3202,10 @@ int32_t forge_3d_spawn_object_at_slot(
 		}
 		/* (an old save's tag no one has now: the object stays in the map's
 		record, and comes back if the tag does) */
-		if (def_idx == NONE)
+		if (inst->edit_entry_index < 0)
+			forge_set_status("Save budget reached (%d placed): '%s' won't be saved with the map",
+				FORGE_MAX_PLACED_OBJECTS, tag_path);
+		else if (def_idx == NONE)
 			forge_set_status("Missing tag '%s': it stays in the map, but cannot be shown", tag_path);
 		else
 			forge_set_status("Placed '%s' at (%.1f, %.1f, %.1f)", tag_path, x, y, z);

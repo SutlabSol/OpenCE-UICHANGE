@@ -583,6 +583,37 @@ widgets can still use the MCC callback adapter described below. The new
 pause labels and confirmation text are currently English; localization of
 these generated strings is not implemented.
 
+## Forge maps made on MCC maps
+
+In a Forge session, the New Game and Create Game map lists show **MCC
+MULTIPLAYER** next to the other multiplayer kinds. MCC campaign maps stay
+hidden, because Forge only edits multiplayer maps. Saving writes
+`mcc_maps/forge/<name>.map` (`forge_export_mcc_scenario_map`). The file is the
+base map's file unchanged, followed by Forge's trailer, as for a Forge map made
+on an Xbox map. The trailer holds the state, the preview, the description and
+the baked tags. Its `Base Map:` line names the base level
+(`mcc_maps\<package>\<level>`). The header keeps the base map's own name, and
+the trailer's offsets sit at 0x1E4–0x1FC with `FLG1` at 0x1FC, which is
+padding in a version-13 header. The MCC catalog lists these maps in the
+**[Forge maps]** folder.
+
+The base map's `bitmaps.map` and `sounds.map` are never copied into the saved
+map. The saved map looks for them where the base map does: in the base
+package's own folder, then the legacy root, then the `_shared` sets.
+`mcc_package_resource_path` reads the base level from the trailer
+(`mcc_package_forge_base`). When none of those locations has a match, the map
+is refused with a message that names `mcc_maps/_shared`. This is how a Custom
+Edition map asks for `bitmaps.map`, `sounds.map` and `loc.map` in
+`custom_maps`. A save over the map being played rewrites only its trailer and
+header in place, because the loader keeps the file open. Any other save writes
+`<name>.map.part` and then renames it to `<name>.map`.
+
+A saved Forge map is played as Forge's other saved maps are. Its trailer's
+objects, spawns, flags and AI are applied as the level loads. Its baked tags
+and `LOCAL_TAG` lines go through `forge_level_baked_open`. The `forge` folder
+has no Workshop id, so hosts never send it to joiners (see below). A joiner
+needs its own copy of the file.
+
 ## MCC sharing eligibility
 
 Hosts send **Steam Workshop items only**: a package is offered only when it

@@ -20,13 +20,13 @@ extern "C" {
 
 /* ---------- constants */
 
-#define FORGE_MAX_PLACED_OBJECTS 512
+#define FORGE_MAX_PLACED_OBJECTS 2048
 #define FORGE_MAX_PLAYER_SPAWNS 512
 #define FORGE_MAX_NETGAME_FLAGS 512
 #define FORGE_MAX_NETGAME_EQUIPMENT 200
 #define FORGE_MAX_AI_SPAWNS 256
 #define FORGE_MAX_AI_ACTORS 64
-#define FORGE_MAX_DEFAULT_OBJECT_EDITS 256
+#define FORGE_MAX_DEFAULT_OBJECT_EDITS 1024
 #define FORGE_TAG_PATH_MAX 256
 
 enum forge_placed_object_category
@@ -208,6 +208,18 @@ int forge_export_scenario_map(
 	char const *base_map_path,
 	struct forge_scenario_edit_state const *edits,
 	char const *output_map_name);
+
+/* Saves a map made on an MCC multiplayer map (version 13) to `output_map_path`
+(an Xbox path, d:\mcc_maps\forge\<name>.map): `base_map_path`'s file as it is,
+with Forge's trailer, whose "Base Map:" is `base_level` (mcc_maps\<package>\<name>).
+None of the base map's resource files are copied: the saved map reads them as
+the base map does (mcc_package.c's mcc_package_forge_base). */
+int forge_export_mcc_scenario_map(
+	char const *base_map_path,
+	char const *base_level,
+	struct forge_scenario_edit_state const *edits,
+	char const *output_map_name,
+	char const *output_map_path);
 
 /* Loads 2D floorplan collision edges and initial scenario placements from any CE (v609) or PC (v7) .map file */
 int forge_load_map_blueprint(

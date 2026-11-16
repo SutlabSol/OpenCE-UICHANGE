@@ -96,6 +96,23 @@ static void mcc_map_description_read(struct mcc_menu_map *map)
 		map->description[used - 1] == '\n'))
 		used--;
 	map->description[used] = 0;
+	/* (a map Forge saved: the MCC map it was made on) */
+	if (!used)
+	{
+		char base[64];
+
+		if (mcc_package_forge_base(map->level_name, base))
+		{
+			char const *leaf = strrchr(base, '\\') + 1;
+			char text[MCC_MAP_DESCRIPTION_MAXIMUM + 1];
+
+			snprintf(text, sizeof(text), "Forge map\r\nMade on %s", leaf);
+			for (used = 0; text[used]; used++)
+				map->description[used] = (unsigned char)text[used] >= 32 || text[used] == '\r' || text[used] == '\n' ?
+					(unsigned char)text[used] : '?';
+			map->description[used] = 0;
+		}
+	}
 	if (!used)
 	{
 		wchar_t const *fallback = map->campaign ? L"Halo 1 MCC\r\nCampaign map" : L"Halo 1 MCC\r\nMultiplayer map";
@@ -264,7 +281,9 @@ static void mcc_maps_menu_metadata(void)
 				mcc_menu_metadata_load(root, family, &metadata[family]);
 		}
 		strcpy(map->package_title, metadata[family].title);
-		text = mcc_menu_metadata_find(&metadata[family], strrchr(map->level_name, '\\') + 1);
+		if (!csstrcasecmp(package, MCC_PACKAGE_FORGE))
+			strcpy(map->package_title, "Forge maps");
+		text =mcc_menu_metadata_find(&metadata[family], strrchr(map->level_name, '\\') + 1);
 		if (!text || !text->title[0]) continue;
 		for (n = 0; text->title[n] && n < 63; n++)
 			map->name[n] = (unsigned char)text->title[n] >= 32 && (unsigned char)text->title[n] < 127 ? text->title[n] : '?';
@@ -399,6 +418,8 @@ static void mcc_maps_scan(void)
             size_t n,k,length=(size_t)(base-map->file_name);
             memcpy(package,map->file_name,length);package[length]=0;
             if (mcc_map_package_is_item(package)) continue;
+            /* (Forge's maps: their folder is titled, mcc_maps_menu_metadata) */
+            if (!csstrcasecmp(package,MCC_PACKAGE_FORGE)) continue;
             /* Preserve the established human-named package disambiguator. */
             for (n=0;map->name[n];n++) {}
             map->name[n++]=' ';map->name[n++]='[';
@@ -431,6 +452,7 @@ void mcc_maps_rescan(void)
 {
 	mcc_menu_preview_clear();
 	mcc_cache_precache_clear();
+	mcc_package_forge_forget();
 	steam_workshop_scan();
 	mcc_menu_catalog.scanned = FALSE;
 }

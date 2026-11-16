@@ -243,8 +243,11 @@ int mcc_resources_select_paths(struct mcc_runtime *runtime,void *raw,char const 
         if (!selected->stream) {
             error(_error_silent,"mcc resources: no complete matching %s for %s; check the package and MCC shared folders",
                 type==1 ? "bitmaps.map" : "sounds.map",runtime->level_name);
+            /* (as a Custom Edition map asks for custom_maps' resource maps: a
+             * map made on MCC's own, a Forge map too, reads them from _shared) */
             snprintf(runtime->failure,sizeof(runtime->failure),
-                "No matching %s. Install its MCC package resources beside the level.",
+                "This map needs MCC's %s. Copy it into mcc_maps/_shared (see MCC FILE STATUS), "
+                "or its package's own beside the level.",
                 type==1 ? "bitmaps.map" : "sounds.map");
             return 0;
         }

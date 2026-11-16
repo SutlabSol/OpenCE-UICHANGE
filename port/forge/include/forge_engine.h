@@ -263,7 +263,12 @@ struct forge_live_instance
 	char label[64];
 };
 
-#define FORGE_MAX_LIVE_INSTANCES 1024
+/* (what Forge tracks on a map: the map's own objects it takes over, spawns,
+flags and AI spawns too, and what is placed. Big maps (The Silent
+Cartographer: Evolved) have more than 1024 of their own; the engine holds
+HALO_PORT_MAXIMUM_OBJECTS_PER_MAP, 8192. About 380 bytes each, on the heap
+with the rest of g_forge) */
+#define FORGE_MAX_LIVE_INSTANCES 4096
 
 /* ---------- 3D Snap Point Configuration Per Tag */
 

@@ -1384,10 +1384,9 @@ static boolean map_kind_allowed(short kind, boolean singleplayer, boolean forge_
 {
 	if ((!singleplayer || g_forge_session_enabled) && map_kind_singleplayer(kind))
 		return FALSE;
-	/* (MCC packages: never edited by Forge. Firefight plays MCC
-	MULTIPLAYER's maps, vanilla: randomizer_mcc_tags_loaded) */
-	if (map_kind_mcc(kind) && g_forge_session_enabled)
-		return FALSE;
+	/* (Forge edits MCC MULTIPLAYER's maps too, and saves its own in its
+	[Forge maps] folder: mcc_package.h's MCC_PACKAGE_FORGE. Firefight plays
+	them, vanilla: randomizer_mcc_tags_loaded) */
 	if (kind == MAP_KIND_FORGE)
 		return forge_maps;
 	return kind != MAP_KIND_DAILY || (config_boolean("game.daily_challenge") && !multiplayer_firefight_mode());
@@ -2412,7 +2411,9 @@ static boolean mcc_solo_choose(short controller)
 
 	if (!level_name || !campaign_profile(controller, &profile))
 		return campaign_fail();
-	if (mcc_maps_campaign(index))
+	/* (a Forge session's map isn't played yet: forge_hooks.c asks for its
+	tag profile first, and starts it) */
+	if (mcc_maps_campaign(index) || g_forge_session_enabled)
 	{
 		main_set_map_name(level_name);
 		main_defer_map_map_change();

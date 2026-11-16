@@ -352,7 +352,8 @@ static long loadout_set[LOADOUT_WEAPONS];
 static int loadout_ready;
 static int loadout_imports;
 /* an MCC map's level is being loaded (randomizer_mcc_tags_loaded): no
-randomizer, Forge or game modes, but its Tag Injector profiles (a multiplayer
+randomizer or game modes (Forge on a multiplayer one only), but its Tag
+Injector profiles (a multiplayer
 game's share, a Firefight variant's, a campaign profile played alone); and
 whether it is a campaign level (a solo scenario) */
 static int mcc_vanilla_level;
@@ -2498,7 +2499,7 @@ void randomizer_custom_edition_tags_loaded(char const *scenario_name)
 
 /* an MCC map's level (cache_files.c), as any other's (randomizer_tags_loaded)
 but for what is this build's maps' and Custom Edition's alone: no randomizer,
-Forge, game modes or co-op share. Its Tag Injector profiles are played: a
+game modes or co-op share, and Forge on a multiplayer map only. Its Tag Injector profiles are played: a
 multiplayer game's (the host's share), a Firefight variant's, and a campaign
 profile played alone; Firefight's campaign weapons and enemies, and a
 campaign level's skulls (the skull the enemies carry, Outbreak's Flood and
@@ -2556,9 +2557,11 @@ void randomizer_tags_loaded(char const *scenario_name)
 	}
 #endif
 #if OPENCE_ENABLE_FORGE
-	/* (an MCC map is never Forge's: none of a saved Forge map's of the same
-	name, nor the last level's actors) */
-	if (mcc_vanilla_level)
+	/* (an MCC multiplayer map is Forge's as a Custom Edition one is: a
+	Forge session's, or a map Forge saved on one, mcc_maps\forge\<name>, its
+	bake and local tags with it. An MCC campaign level never is: none of a
+	saved Forge map's of the same name, nor the last level's actors) */
+	if (mcc_vanilla_level && mcc_solo_level)
 	{
 		forge_ai_saved_clear();
 		forge_level_local_tags_clear();
@@ -2730,8 +2733,7 @@ void randomizer_tags_loaded(char const *scenario_name)
 		if (firefight)
 			gather_firefight(leaf);
 #if OPENCE_ENABLE_FORGE
-		if (!mcc_vanilla_level)
-			gather_forge_actors();
+		gather_forge_actors();
 #endif
 		if (randomize || loadout_imports)
 			gather_campaign(leaf);

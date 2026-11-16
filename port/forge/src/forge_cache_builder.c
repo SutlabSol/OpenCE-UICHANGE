@@ -83,6 +83,9 @@ extern void platform_translate_path(char const *xbox_path, char *out_path, unsig
 #define XBOX_TAG_BASE_ADDR 0x803A6000UL
 
 #define TAG_INSTANCE_SIZE 0x20
+/* (a saved map's state text, as large as its loaders read:
+forge_runtime_tags.c's forge_saved_map_state) */
+#define FORGE_STATE_TEXT_MAX (4u * 1024u * 1024u)
 
 /* ---------- little-endian memory helpers */
 
@@ -5305,7 +5308,8 @@ static int append_forge_map_metadata_and_preview_trailer(
 	struct forge_scenario_edit_state const *edits,
 	struct forge_source_map const *ce_base_map,
 	struct forge_pending_bake_obj const *pending_objs,
-	int pending_count)
+	int pending_count,
+	uint32_t file_bias)
 {
 	struct forge_byte_buf state_buf;
 	struct forge_map_blueprint_data *bp = NULL;
@@ -5622,7 +5626,7 @@ static int append_forge_map_metadata_and_preview_trailer(
 		{
 			char digits[9];
 
-			snprintf(digits, sizeof(digits), "%08X", (unsigned)baked_foff);
+			snprintf(digits, sizeof(digits), "%08X", (unsigned)(baked_foff + file_bias));
 			memcpy(out->data + state_foff + baked_line, digits, 8);
 		}
 		if (baked_file)
@@ -5635,11 +5639,11 @@ static int append_forge_map_metadata_and_preview_trailer(
 
 	memset(out->data + 0x20u, 0, 32);
 	snprintf((char *)(out->data + 0x20u), 32, "%s", output_map_name);
-	write_u32(out->data + 0x1E4u, state_foff);
+	write_u32(out->data + 0x1E4u, state_foff ? state_foff + file_bias : 0u);
 	write_u32(out->data + 0x1E8u, state_size);
-	write_u32(out->data + 0x1ECu, bmp_foff);
+	write_u32(out->data + 0x1ECu, bmp_foff ? bmp_foff + file_bias : 0u);
 	write_u32(out->data + 0x1F0u, bmp_size);
-	write_u32(out->data + 0x1F4u, desc_foff);
+	write_u32(out->data + 0x1F4u, desc_foff ? desc_foff + file_bias : 0u);
 	write_u32(out->data + 0x1F8u, desc_len);
 	write_u32(out->data + 0x1FCu, 0x464C4731u); /* 'FLG1' OpenCE : Forge map signature */
 	return 1;
@@ -5694,7 +5698,7 @@ static int forge_build_xbox_flg1_map(
 			uint32_t prev_st_sz = read_u32(hdr_peek + 0x1E8u);
 			if (prev_sig == 0x464C4731u && prev_st >= 0x800u && (long)prev_st < raw_sz)
 			{
-				if (prev_st_sz > 0 && prev_st_sz < 262144u && (long)(prev_st + prev_st_sz) <= raw_sz)
+				if (prev_st_sz > 0 && prev_st_sz < FORGE_STATE_TEXT_MAX && (long)(prev_st + prev_st_sz) <= raw_sz)
 				{
 					char *st_buf = (char *)malloc(prev_st_sz + 1u);
 					if (st_buf)
@@ -5752,7 +5756,8 @@ static int forge_build_xbox_flg1_map(
 			edits,
 			NULL,
 			NULL,
-			0))
+			0,
+			0u))
 	{
 		buf_free(&out);
 		return 0;
@@ -6048,7 +6053,7 @@ int forge_export_scenario_map(
 		uint32_t prev_st_size = read_u32(base_map.data + 0x1E8u);
 		if (prev_st_foff >= orig_tag_end && prev_st_foff <= base_map.file_size)
 		{
-			if (prev_st_size > 0 && prev_st_size < 262144u && prev_st_foff + prev_st_size <= base_map.file_size)
+			if (prev_st_size > 0 && prev_st_size < FORGE_STATE_TEXT_MAX && prev_st_foff + prev_st_size <= base_map.file_size)
 			{
 				prev_state_text = (char *)malloc(prev_st_size + 1u);
 				if (prev_state_text)
@@ -6765,7 +6770,8 @@ int forge_export_scenario_map(
 				edits,
 				&base_map,
 				pending_objs,
-				pending_count))
+				pending_count,
+				0u))
 		{
 			free(pending_objs);
 			forge_source_map_close(&base_map);
@@ -6838,5 +6844,214 @@ int forge_export_scenario_map(
 	fclose(f);
 	buf_free(&out);
 	forge_source_map_close(&base_map);
+	return 1;
+}
+
+/* ---------- a map made on an MCC map
+
+An MCC map (version 13: docs/mcc_maps.md) is saved as Xbox maps are
+(forge_build_xbox_flg1_map): the base map's file as it is, with the trailer
+after it, which the level plays as it loads (forge_load_saved_map_state_if_present,
+forge_level_baked_open). Its "Base Map:" names the base level, mcc_maps\<package>\<name>,
+whose resources the saved map reads as the base map does (mcc_package.c's
+mcc_package_forge_base): bitmaps.map and sounds.map, MCC's _shared ones or the
+package's own, are never copied in. The file is copied in pieces: MCC maps are
+large. A save over the map it was made from (a map of Forge's own saved
+again) replaces it once the new file is whole. */
+
+#define MCC_FORGE_CACHE_VERSION 13
+#define MCC_FORGE_COPY_CHUNK 0x40000u
+/* (the Xbox SDK's headers have none: the port's file layer takes any) */
+#ifndef FILE_SHARE_READ
+#define FILE_SHARE_READ 0x00000001
+#endif
+#ifndef FILE_SHARE_WRITE
+#define FILE_SHARE_WRITE 0x00000002
+#endif
+
+int forge_export_mcc_scenario_map(
+	char const *base_map_path,
+	char const *base_level,
+	struct forge_scenario_edit_state const *edits,
+	char const *output_map_name,
+	char const *output_map_path)
+{
+	FILE *in_f;
+	FILE *out_f = NULL;
+	uint8_t header[0x800];
+	uint8_t name_field[32];
+	uint8_t *chunk = NULL;
+	char label[64];
+	char temp_path[160];
+	char folder[160];
+	char *slash;
+	long raw_sz;
+	uint32_t base_size, base_end, position;
+	struct forge_byte_buf out;
+	int ok;
+
+	if (!base_map_path || !base_level || !output_map_name || !output_map_path)
+		return 0;
+	in_f = fopen(base_map_path, "rb");
+	if (!in_f)
+		return 0;
+	if (fseek(in_f, 0, SEEK_END) != 0 || (raw_sz = ftell(in_f)) < 0x800L || fseek(in_f, 0, SEEK_SET) != 0 ||
+		fread(header, 1, sizeof(header), in_f) != sizeof(header) ||
+		read_u32(header + 0x00u) != CACHE_HEADER_SIGNATURE ||
+		read_s32(header + 0x04u) != MCC_FORGE_CACHE_VERSION ||
+		read_u32(header + 0x7FCu) != CACHE_FOOTER_SIGNATURE ||
+		read_s16(header + 0x60u) != 1)
+	{
+		fclose(in_f);
+		return 0;
+	}
+	snprintf(label, sizeof(label), "%s", base_level);
+	base_size = (uint32_t)raw_sz;
+
+	/* (a map Forge saved before: its trailer left out, its base level kept) */
+	if (read_u32(header + 0x1FCu) == 0x464C4731u)
+	{
+		uint32_t prev_st = read_u32(header + 0x1E4u);
+		uint32_t prev_st_sz = read_u32(header + 0x1E8u);
+
+		if (prev_st >= 0x800u && prev_st < base_size)
+		{
+			if (prev_st_sz > 0 && prev_st_sz < FORGE_STATE_TEXT_MAX && prev_st + prev_st_sz <= base_size)
+			{
+				char *st_buf = (char *)malloc(prev_st_sz + 1u);
+
+				if (st_buf && fseek(in_f, (long)prev_st, SEEK_SET) == 0 &&
+					fread(st_buf, 1, prev_st_sz, in_f) == prev_st_sz)
+				{
+					char const *bm;
+
+					st_buf[prev_st_sz] = '\0';
+					bm = strstr(st_buf, "Base Map: ");
+					if (bm && _strnicmp(bm + 10, "mcc_maps", 8) == 0)
+					{
+						size_t bi = 0;
+
+						bm += 10;
+						while (bm[bi] && bm[bi] != '\r' && bm[bi] != '\n' && bi + 1 < sizeof(label))
+						{
+							label[bi] = bm[bi];
+							bi++;
+						}
+						label[bi] = '\0';
+					}
+				}
+				free(st_buf);
+			}
+			base_size = prev_st;
+		}
+		memset(header + 0x1E4u, 0, 0x1Cu);
+	}
+	memcpy(name_field, header + 0x20u, sizeof(name_field));
+	base_end = (base_size + 31u) & ~31u;
+
+	/* (the trailer, made after a copy of the header alone: its offsets are
+	the file's, past the base map) */
+	buf_init(&out, 0x800u + 65536u);
+	if (!out.data)
+	{
+		fclose(in_f);
+		return 0;
+	}
+	memcpy(out.data, header, sizeof(header));
+	out.size = sizeof(header);
+	if (!append_forge_map_metadata_and_preview_trailer(
+			&out,
+			output_map_name,
+			label,
+			base_map_path,
+			edits,
+			NULL,
+			NULL,
+			0,
+			base_end - 0x800u))
+	{
+		fclose(in_f);
+		buf_free(&out);
+		return 0;
+	}
+	/* (the base map's own name stays: the trailer's names the saved one) */
+	memcpy(out.data + 0x20u, name_field, sizeof(name_field));
+
+#undef _mkdir
+#undef mkdir
+	snprintf(folder, sizeof(folder), "%s", output_map_path);
+	slash = strrchr(folder, '\\');
+	/* (mcc_maps may be missing: a base map from a Steam library's Workshop) */
+	FORGE_MKDIR("d:\\mcc_maps");
+	if (slash)
+	{
+		*slash = '\0';
+		FORGE_MKDIR(folder);
+	}
+	/* (a save over the map it was made from: the level playing has its file
+	open, which Windows would not let go, so only what changes is written,
+	the trailer and then the header that finds it) */
+	if (_stricmp(base_map_path, output_map_path) == 0)
+	{
+		HANDLE file;
+		DWORD done = 0;
+		static uint8_t const zeros[32];
+
+		fclose(in_f);
+		file = CreateFileA(output_map_path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+			OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		ok = file != INVALID_HANDLE_VALUE;
+		if (ok && base_end > base_size)
+		{
+			ok = SetFilePointer(file, (LONG)base_size, NULL, FILE_BEGIN) == base_size &&
+				WriteFile(file, zeros, base_end - base_size, &done, NULL) && done == base_end - base_size;
+		}
+		if (ok)
+		{
+			ok = SetFilePointer(file, (LONG)base_end, NULL, FILE_BEGIN) == base_end &&
+				WriteFile(file, out.data + 0x800u, out.size - 0x800u, &done, NULL) && done == out.size - 0x800u &&
+				SetEndOfFile(file) &&
+				SetFilePointer(file, 0, NULL, FILE_BEGIN) == 0 &&
+				WriteFile(file, out.data, 0x800u, &done, NULL) && done == 0x800u;
+		}
+		if (file != INVALID_HANDLE_VALUE)
+			CloseHandle(file);
+		buf_free(&out);
+		return ok;
+	}
+	snprintf(temp_path, sizeof(temp_path), "%s.part", output_map_path);
+	chunk = (uint8_t *)malloc(MCC_FORGE_COPY_CHUNK);
+	out_f = chunk ? fopen(temp_path, "wb") : NULL;
+	ok = out_f && fwrite(out.data, 1, 0x800u, out_f) == 0x800u && fseek(in_f, 0x800L, SEEK_SET) == 0;
+	for (position = 0x800u; ok && position < base_size;)
+	{
+		uint32_t part = base_size - position < MCC_FORGE_COPY_CHUNK ? base_size - position : MCC_FORGE_COPY_CHUNK;
+
+		ok = fread(chunk, 1, part, in_f) == part && fwrite(chunk, 1, part, out_f) == part;
+		position += part;
+	}
+	if (ok && base_end > base_size)
+	{
+		memset(chunk, 0, base_end - base_size);
+		ok = fwrite(chunk, 1, base_end - base_size, out_f) == base_end - base_size;
+	}
+	if (ok && out.size > 0x800u)
+		ok = fwrite(out.data + 0x800u, 1, out.size - 0x800u, out_f) == out.size - 0x800u;
+	fclose(in_f);
+	if (out_f && fclose(out_f) != 0)
+		ok = 0;
+	free(chunk);
+	buf_free(&out);
+	if (!ok)
+	{
+		DeleteFileA(temp_path);
+		return 0;
+	}
+	DeleteFileA(output_map_path);
+	if (!MoveFileA(temp_path, output_map_path))
+	{
+		DeleteFileA(temp_path);
+		return 0;
+	}
 	return 1;
 }

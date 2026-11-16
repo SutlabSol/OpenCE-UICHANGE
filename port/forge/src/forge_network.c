@@ -75,7 +75,10 @@ struct forge_distributed_object_change
 	byte region_permutations[8];
 };
 
-#define FORGE_MAX_TRACKED_NET_OBJECTS 2048
+/* (by the engine's object index: every object the map can hold,
+HALO_PORT_MAXIMUM_OBJECTS_PER_MAP. A map with many of its own puts placed
+objects past 2048, which were not kept in step) */
+#define FORGE_MAX_TRACKED_NET_OBJECTS 8192
 #define FORGE_MAX_CLIENT_MACHINES     32
 
 static unsigned long g_last_transform_send_ms = 0;
@@ -89,11 +92,22 @@ static int g_client_requested_full_sync = 0;
 static unsigned long g_client_join_ms = 0;
 
 /* Maps absolute object index -> resolved local tag definition_index & Forge live_idx */
-static long g_net_obj_def_index[FORGE_MAX_TRACKED_NET_OBJECTS];
-static int32_t g_net_obj_live_index[FORGE_MAX_TRACKED_NET_OBJECTS];
-static uint8_t g_net_obj_is_held[FORGE_MAX_TRACKED_NET_OBJECTS];
-static uint8_t g_net_obj_has_deferred_create[FORGE_MAX_TRACKED_NET_OBJECTS];
-static struct forge_distributed_object_change g_net_obj_deferred_create[FORGE_MAX_TRACKED_NET_OBJECTS];
+/* (about 1 MB: on the heap, FORGE_HEAP_STATIC, which the Android image has
+no room for) */
+struct forge_net_objects
+{
+	long def_index[FORGE_MAX_TRACKED_NET_OBJECTS];
+	int32_t live_index[FORGE_MAX_TRACKED_NET_OBJECTS];
+	uint8_t is_held[FORGE_MAX_TRACKED_NET_OBJECTS];
+	uint8_t has_deferred_create[FORGE_MAX_TRACKED_NET_OBJECTS];
+	struct forge_distributed_object_change deferred_create[FORGE_MAX_TRACKED_NET_OBJECTS];
+};
+FORGE_HEAP_STATIC(struct forge_net_objects, s_net_objects)
+#define g_net_obj_def_index (FORGE_HEAP(s_net_objects).def_index)
+#define g_net_obj_live_index (FORGE_HEAP(s_net_objects).live_index)
+#define g_net_obj_is_held (FORGE_HEAP(s_net_objects).is_held)
+#define g_net_obj_has_deferred_create (FORGE_HEAP(s_net_objects).has_deferred_create)
+#define g_net_obj_deferred_create (FORGE_HEAP(s_net_objects).deferred_create)
 static uint8_t g_suppressed_change_slots[256];
 
 /* Host per-machine incremental full-sync cursor (-1 = idle, >= 0 = next live_idx to send) */
