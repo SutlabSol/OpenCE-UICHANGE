@@ -922,6 +922,9 @@ static void custom_edition_maps_look_for_into(
 		custom_edition_maps_forget();
 	globals->map_count = 0;
 	globals->campaign_count = 0;
+	/* (a scan's copy too, which custom_edition_maps_forget never sees: a
+	count left from the heap sorted garbage over its memory) */
+	globals->folder_count = 0;
 	globals->looked_for = TRUE;
 	globals->names_fingerprint = custom_edition_maps_names_fingerprint(); /* port */
 	if (!halo_custom_edition_tag_cache())
@@ -1022,7 +1025,7 @@ void custom_edition_maps_scan_start(
 		return;
 	if (!maps_scan.globals)
 	{
-		maps_scan.globals = malloc(sizeof(*maps_scan.globals));
+		maps_scan.globals = calloc(1, sizeof(*maps_scan.globals));
 		if (!maps_scan.globals)
 			return;
 	}
@@ -1060,6 +1063,9 @@ boolean custom_edition_maps_scan_poll(
 	globals->campaign_count = scanned->campaign_count;
 	csmemcpy(globals->maps, scanned->maps, scanned->map_count * sizeof(scanned->maps[0]));
 	csmemcpy(globals->campaigns, scanned->campaigns, scanned->campaign_count * sizeof(scanned->campaigns[0]));
+	/* (custom_maps' folders too: the Map Manager's and the lists' folders) */
+	globals->folder_count = scanned->folder_count;
+	csmemcpy(globals->folders, scanned->folders, scanned->folder_count * sizeof(scanned->folders[0]));
 	globals->names_fingerprint = scanned->names_fingerprint;
 	globals->looked_for = TRUE;
 	/* (as the scan does on the game's thread: a network game's map's file
