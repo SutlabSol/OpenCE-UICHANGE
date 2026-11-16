@@ -90,10 +90,21 @@ static struct {
     struct mcc_validation_context *active;
 } mcc_validation;
 static char mcc_validation_empty_name[] = "";
+/* (port) a bundle's validation (mcc_tags_validate_bundle): its file ranges */
+static struct {
+    int active;
+    struct tag_validate_file_range const *ranges;
+    short count;
+} mcc_validation_bundle;
+static boolean mcc_validation_custom_edition(struct tag_validation *validation)
+{
+    (void)validation;
+    return mcc_validation_bundle.active ? TRUE : FALSE;
+}
 static struct mcc_validation_dispatch const mcc_callbacks = {
     mcc_validation_owns, mcc_validation_message, mcc_validation_file_contains,
     mcc_validation_root, mcc_validation_contains, mcc_validation_tag_get,
-    mcc_validation_buffer_data, mcc_validation_any_claimed
+    mcc_validation_buffer_data, mcc_validation_any_claimed, mcc_validation_custom_edition
 };
 
 /* MCC retains tag-collection loader lists that the Xbox schema inventory
@@ -238,6 +249,12 @@ static struct tag_schema_group const *mcc_group(unsigned long group)
     struct tag_schema_group const *const *list;
     if (group == 'tagc') return &mcc_collection_group;
     if (group == 'devc') return &mcc_device_group;
+    /* (a bundle's models are gbxmodels still: mcc_tags_validate_bundle) */
+    if (mcc_validation_bundle.active) {
+        struct tag_schema_group const *entry;
+        for (entry = tag_schema_custom_edition_groups; entry->group_tag; ++entry)
+            if (entry->group_tag == group) return entry;
+    }
     for (list = tag_schema_group_lists; *list; ++list) {
         struct tag_schema_group const *entry;
         for (entry = *list; entry->group_tag; ++entry)
@@ -463,7 +480,10 @@ static int mcc_animation_model_tree(struct mcc_validation_context *context,
         if (graph_handle!=context->handle) continue;
         memcpy(&model_handle,(byte *)object->root+52,4);
         model=mcc_instance(model_handle);
-        if (!model || model->group!='mode' || !mcc_range(context->region,context->length,model->root,232)) return 0;
+        /* (a bundle's models are gbxmodels still, of the same root:
+         * mcc_tags_validate_bundle) */
+        if (!model || (model->group!='mode' && !(mcc_validation_bundle.active && model->group=='mod2')) ||
+            !mcc_range(context->region,context->length,model->root,232)) return 0;
         model_nodes=(struct tag_block const *)((byte *)model->root+184);
         if (model_nodes->count!=nodes->count ||
             !mcc_range(context->region,context->length,model_nodes->address,nodes->count*156)) return 0;
@@ -771,7 +791,12 @@ static void mcc_fields(struct mcc_validation_context *context, byte *address,
                     context->geometry_access = FALSE;
                     mcc_validation.active = context;
                     mcc_validation_callbacks = &mcc_callbacks;
-                    if (!strcmp(field->name, "bitmap_data_check"))
+                    /* (a bundle's bitmaps are Halo PC's, unconverted: the
+                     * schema's own checks, with its pixels in its ranges) */
+                    if (mcc_validation_bundle.active && (!strcmp(field->name, "bitmap_data_check") ||
+                        !strcmp(field->name, "bitmap_group_check")))
+                        accepted = field->check((struct tag_validation *)context, address);
+                    else if (!strcmp(field->name, "bitmap_data_check"))
                         accepted = mcc_bitmaps_valid(mcc_validation.runtime, (struct bitmap_data *)address);
                     else if (!strcmp(field->name, "model_geometry_part_check"))
                         accepted = mcc_geometry_part_valid(mcc_validation.runtime, address);
@@ -968,6 +993,19 @@ int mcc_tags_validate(struct mcc_runtime *runtime)
     return !context.rejected;
 }
 
+int mcc_tags_validate_bundle(struct mcc_runtime *runtime, struct tag_validate_file_range const *ranges,
+    short range_count)
+{
+    int valid;
+    if (!ranges || range_count <= 0) return 0;
+    mcc_validation_bundle.active = 1;
+    mcc_validation_bundle.ranges = ranges;
+    mcc_validation_bundle.count = range_count;
+    valid = mcc_tags_validate(runtime);
+    memset(&mcc_validation_bundle, 0, sizeof(mcc_validation_bundle));
+    return valid;
+}
+
 int mcc_bsp_validate(struct mcc_runtime *runtime, long handle, void *address, long size)
 {
     struct mcc_validation_context context;
@@ -1018,6 +1056,15 @@ boolean mcc_validation_file_contains(struct tag_validation *validation, long off
     struct mcc_runtime *runtime = mcc_validation.runtime;
     struct mcc_validation_context *context=(struct mcc_validation_context *)validation;
     if (!context || offset < 0 || size < 0 || !runtime) return FALSE;
+    if (mcc_validation_bundle.active) {
+        short index;
+        for (index = 0; index < mcc_validation_bundle.count; index++) {
+            struct tag_validate_file_range const *range = &mcc_validation_bundle.ranges[index];
+            if ((unsigned long)offset >= range->offset && (unsigned long)offset - range->offset <= range->size &&
+                (unsigned long)size <= range->size - ((unsigned long)offset - range->offset)) return TRUE;
+        }
+        return FALSE;
+    }
     return ((unsigned long)offset <= runtime->source.size &&
         (unsigned long)size <= runtime->source.size - (unsigned long)offset) ||
         mcc_audio_contains(runtime, context->handle, (uint32_t)offset, (uint32_t)size) ||

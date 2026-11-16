@@ -2091,8 +2091,10 @@ void *tag_validate_root(
 boolean tag_validate_custom_edition(
 	struct tag_validation *validation)
 {
+	/* (an MCC map's: laid out as Custom Edition's only when its tags are
+	taken out as bundles, mcc_tags_validate_bundle) */
 	if (mcc_validation_callbacks && mcc_validation_callbacks->owns(validation))
-		return FALSE;
+		return mcc_validation_callbacks->custom_edition ? mcc_validation_callbacks->custom_edition(validation) : FALSE;
 	(void)validation;
 
 	return tag_validate_globals.custom_edition;

@@ -879,3 +879,12 @@ void mcc_bitmaps_dispose(struct mcc_runtime *runtime)
     if (textures->clones) free(textures->clones);
     free(textures);runtime->bitmaps=NULL;
 }
+
+/* (port) BC7 blocks made DXT5 in place, as a texture drawn as it is keeps them
+ * (mcc_bc7_to_dxt5): the Tag Injector's bundles of an MCC map's tags, whose
+ * bitmaps are Halo PC's (mcc_tag_bundle.c). Of `bytes`, whole blocks alone */
+void mcc_bitmaps_bc7_transcode(unsigned char *blocks,uint32_t bytes)
+{
+    uint32_t block;
+    for (block=0;blocks && block<bytes/16;block++) mcc_bc7_to_dxt5(blocks+(size_t)block*16);
+}

@@ -1781,6 +1781,33 @@ static int archive_entry_file(struct archive_entry *entry, const struct tag_prof
 	return archive_entry_path(entry, file, path);
 }
 
+/* (port) a bundle's header (tag_bundle.h): its signature, and its flags'
+"MCC's own content" (_tag_bundle_mcc_own_content_bit) */
+#define BUNDLE_SIGNATURE 0x4245434FUL
+#define BUNDLE_HEADER_FLAGS_OFFSET 8
+#define BUNDLE_MCC_OWN_CONTENT_FLAG (1UL << 2)
+
+/* whether a profile's tag was taken out of an MCC map and holds MCC's own
+content (a map not of the Steam Workshop, or pixels or samples of MCC's
+shared resource maps: port/linux/game/mcc_tag_bundle.c), which its EULA
+lets no one send to another machine: never in a network game's share or a
+Forge map's bake, which every machine of the game reads */
+static int tag_mcc_own_content(long profile, long tag)
+{
+	unsigned char header[BUNDLE_HEADER_FLAGS_OFFSET + 4];
+	unsigned long size = 0;
+	long handle = port_tag_profiles_bundle_open(profile, tag, &size);
+	int own = 0;
+
+	if (handle < 0)
+		return 0;
+	if (size >= sizeof(header) && port_tag_profiles_bundle_read_at(handle, 0, header, sizeof(header)))
+		own = archive_get_long(header) == BUNDLE_SIGNATURE &&
+			(archive_get_long(header + BUNDLE_HEADER_FLAGS_OFFSET) & BUNDLE_MCC_OWN_CONTENT_FLAG) != 0;
+	port_tag_profiles_bundle_close(handle);
+	return own;
+}
+
 long port_tag_profiles_shared_build(long profile, unsigned long group, const char *multiplayer, const char *campaign,
 	const char *archive)
 {
@@ -1811,8 +1838,15 @@ long port_tag_profiles_shared_build(long profile, unsigned long group, const cha
 		struct tag_profile_tag *tag = &found->tags[index];
 		long other;
 
-		if (!tag->enabled || (group && tag->group != group) || !tag->size ||
-			!archive_entry_file(&entries[count], found, tag->file))
+		if (!tag->enabled || (group && tag->group != group) || !tag->size)
+			continue;
+		if (tag_mcc_own_content(profile, index))
+		{
+			platform_log("tag injector: %s is MCC's own content, which stays on this machine: it is left out of the "
+				"network game's share", tag->name);
+			continue;
+		}
+		if (!archive_entry_file(&entries[count], found, tag->file))
 			continue;
 		/* (a file two tags name, once) */
 		for (other = 0; other < count && strcmp(entries[other].name, tag->file); other++)
@@ -2139,6 +2173,12 @@ long port_tag_profiles_baked_build(const long *profiles, const long *tags, long 
 
 		if (!source || !tag || !tag->size)
 			continue;
+		if (tag_mcc_own_content(profiles[index], tags[index]))
+		{
+			platform_log("tag injector: %s is MCC's own content, which stays on this machine: it is not baked into "
+				"the map", tag->name);
+			continue;
+		}
 		for (other = 0; other < baked.tag_count && strcmp(baked.tags[other].file, tag->file); other++)
 		{
 		}

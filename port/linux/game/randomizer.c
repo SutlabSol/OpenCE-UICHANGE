@@ -351,9 +351,12 @@ give, and whether a level played alone copies those it has not got */
 static long loadout_set[LOADOUT_WEAPONS];
 static int loadout_ready;
 static int loadout_imports;
-/* an MCC map's level is being loaded (randomizer_mcc_tags_loaded): Firefight's
-vanilla roster alone */
+/* an MCC map's level is being loaded (randomizer_mcc_tags_loaded): no
+randomizer, Forge or game modes, but its Tag Injector profiles (a multiplayer
+game's share, a Firefight variant's, a campaign profile played alone); and
+whether it is a campaign level (a solo scenario) */
 static int mcc_vanilla_level;
+static int mcc_solo_level;
 static unsigned long placement_roll;
 static int placement_roll_ready;
 /* the weapons and actor variants of the Tag Injector's profile the level was
@@ -2489,37 +2492,27 @@ void randomizer_custom_edition_tags_loaded(char const *scenario_name)
 	game_modes_tags_loaded(scenario_name);
 }
 
-/* an MCC map's level (cache_files.c): Firefight's campaign weapons and
-enemies alone, vanilla: no Tag Injector profile, Forge bake or Forge actors
-(the props alone: the ordnance capsule), nor the randomizer, skulls or
-game modes of any other game, which are this build's maps' and Custom
-Edition's. A campaign level's (a solo scenario) gets the skulls' tags alone,
-as a campaign level of this build's does with the randomizer off: the skull
-the enemies carry, Outbreak's Flood and Scarab's projectiles. TRUE for a
-Firefight game or a campaign level, whose skulls are played then
-(skulls_level_loaded) */
+/* an MCC map's level (cache_files.c), as any other's (randomizer_tags_loaded)
+but for what is this build's maps' and Custom Edition's alone: no randomizer,
+Forge, game modes or co-op share. Its Tag Injector profiles are played: a
+multiplayer game's (the host's share), a Firefight variant's, and a campaign
+profile played alone; Firefight's campaign weapons and enemies, and a
+campaign level's skulls (the skull the enemies carry, Outbreak's Flood and
+Scarab's projectiles), as before. TRUE for a Firefight game or a campaign
+level, whose skulls are played then (skulls_level_loaded) */
 boolean randomizer_mcc_tags_loaded(char const *scenario_name, long scenario_tag_index)
 {
+	boolean firefight = firefight_wanted();
+	boolean solo = scenario_tag_index != NONE &&
+		scenario_definition_get(scenario_tag_index)->type == _scenario_type_solo;
+
 	randomizer_tags_unloaded();
-	if (firefight_wanted())
-	{
-		mcc_vanilla_level = 1;
-		randomizer_tags_loaded(scenario_name);
-		mcc_vanilla_level = 0;
-		return TRUE;
-	}
-	if (scenario_tag_index == NONE || scenario_definition_get(scenario_tag_index)->type != _scenario_type_solo)
-		return FALSE;
-	/* (skulls_tag_import asks for none the skulls on do not want, nor any the
-	level has: the party's confetti too) */
-	if (tag_import_begin())
-	{
-		skulls_tag_import(skulls_carried_wanted(), skulls_outbreak_wanted(), skulls_scarab_wanted());
-		tag_import_run();
-		tag_import_end();
-		tag_import_log("skulls");
-	}
-	return TRUE;
+	mcc_vanilla_level = 1;
+	mcc_solo_level = solo && !firefight;
+	randomizer_tags_loaded(scenario_name);
+	mcc_vanilla_level = 0;
+	mcc_solo_level = 0;
+	return firefight || solo;
 }
 
 void randomizer_tags_loaded(char const *scenario_name)
@@ -2567,8 +2560,8 @@ void randomizer_tags_loaded(char const *scenario_name)
 		return;
 #endif
 	/* (a Firefight variant's Tag Injector profile, shared by its host; a
-	saved Forge map's bake stays beside it. Never on an MCC map) */
-	if (firefight && forge_profile == NONE && !mcc_vanilla_level)
+	saved Forge map's bake stays beside it. An MCC map's too) */
+	if (firefight && forge_profile == NONE)
 		forge_profile = tag_multiplayer_firefight_level_profile(scenario_name);
 	/* (the props: Firefight's ordnance capsule, and a saved map's weapon
 	racks; an MCC map's too, for its capsule. Without them the pod is the
@@ -2605,8 +2598,16 @@ void randomizer_tags_loaded(char const *scenario_name)
 			return;
 		}
 	}
+	/* (an MCC map's campaign level is one, by its own name; its multiplayer
+	levels play no game modes, which are this build's maps') */
+	if (mcc_vanilla_level && !firefight)
+	{
+		if (!mcc_solo_level)
+			return;
+		snprintf(leaf, sizeof(leaf), "%s", scenario_name ? tag_name_strip_path(scenario_name) : "mcc");
+	}
 	/* (a multiplayer game's mode's: Floodfection's burst and forms) */
-	if (!campaign_leaf(scenario_name, leaf, sizeof(leaf)))
+	else if (!campaign_leaf(scenario_name, leaf, sizeof(leaf)))
 	{
 		if (!firefight)
 		{
@@ -2626,7 +2627,8 @@ void randomizer_tags_loaded(char const *scenario_name)
 	host alone swaps with) */
 	if (!firefight && !game && !network_game_distributed_client() && !community_challenge_running())
 		campaign_profile = tag_campaign_level_profile();
-	else if (!firefight && !community_challenge_running())
+	/* (an MCC map's co-op game: as it is, tag_multiplayer_campaign_takes) */
+	else if (!firefight && !community_challenge_running() && !mcc_vanilla_level)
 	{
 		campaign_profile = tag_campaign_level_profile_shared(tag_multiplayer_campaign_level_profile(scenario_name),
 			network_game_distributed_client() ? NONE : tag_multiplayer_game_campaign_profile());
@@ -2635,8 +2637,9 @@ void randomizer_tags_loaded(char const *scenario_name)
 	{
 		memset(&current, 0, sizeof(current));
 	}
-	else if (firefight)
+	else if (firefight || mcc_vanilla_level)
 	{
+		/* (the randomizer plays this build's campaign alone) */
 		memset(&current, 0, sizeof(current));
 		randomize = 0;
 	}

@@ -1,7 +1,7 @@
 # The Tag Injector
 
 The Tag Injector takes weapons, AI and equipment out of Halo Custom Edition
-maps and puts them in profiles, which the campaign randomizer adds to a level: a
+maps and Halo 1 MCC maps (`mcc_maps`) and puts them in profiles, which the campaign randomizer adds to a level: a
 Custom Edition map's carbine lying where a plasma rifle was, its brutes in
 the level's encounters. A tag is taken out with every tag it names (its
 model, animations, collision, HUD, projectiles, effects, sounds and bitmaps;
@@ -16,7 +16,8 @@ the randomizer's), and `port/linux/game/randomizer.c` (the pools).
 
 It needs Custom Edition maps to run (`game.custom_edition`, on by default)
 and the maps in `custom_maps`, with Custom Edition's `bitmaps.map` and
-`sounds.map` (`README.md`, "Custom Edition maps").
+`sounds.map` (`README.md`, "Custom Edition maps"), or MCC maps in `mcc_maps`
+with MCC's shared resource maps (`docs/mcc_maps.md`; below, "MCC maps").
 
 ## The menu
 
@@ -33,7 +34,7 @@ first leaves. Its first list has:
   and AI without the randomizer (below, "Campaign profiles").
 - **MULTIPLAYER PROFILES**: how a multiplayer game plays a profile's
   weapons (below, "In multiplayer").
-- **MAPS**: the Custom Edition maps.
+- **MAPS**: the Custom Edition maps and the MCC maps.
 
 **TAG PROFILES**: A on a profile lists its tags' kinds, as a map's are
 (**WEAPONS**, **AI**, **EQUIPMENT**, **VEHICLES**, **BIPEDS** and
@@ -99,7 +100,10 @@ sword: power; rifle: automatic).
 opened last in TAG PROFILES, or made; left and right choose another), and
 **CUSTOM SINGLEPLAYER** and **CUSTOM MULTIPLAYER**, as the map lists have
 them: A on one lists its folders of `custom_maps` (each with how many maps
-it has) and the maps beside them, and A on a folder lists its maps. A on a
+it has) and the maps beside them, and A on a folder lists its maps.
+**MCC SINGLEPLAYER** and **MCC MULTIPLAYER** list the MCC maps of
+`mcc_maps` as the MCC map lists do: their Workshop collections and packages
+first, then the maps beside them (below, "MCC maps"). A on a
 map loads its tags, as the game would play them, and lists its
 **WEAPONS**, **AI**, **EQUIPMENT**, **VEHICLES**, **BIPEDS** and
 **SCENERY**, each with how many there are. A on one lists them, by the last
@@ -258,6 +262,66 @@ The frame says so, and NAME renames it once it is in a profile.
 Adding a tag loads its map again, with the sounds of the tags it takes
 decoded: a second or two, and longer for an actor variant of many voices
 (the brute major carbine of `firefight-fissurefall` takes 515 tags, 43 MB).
+
+### MCC maps
+
+A Halo 1 MCC map's tags are taken out as a Custom Edition map's are, into
+the same tag bundles, so a profile plays them wherever it plays any (the
+randomizer, campaign and multiplayer profiles, Forge, Firefight, the firing
+range) and on every kind of level the Tag Injector adds tags to, MCC
+levels among them (below, "On MCC levels").
+`port/linux/game/mcc_tag_bundle.c` opens the map as the MCC loader opens a
+level, in the MCC tag window (so not while an MCC map is played), and
+makes its tags a Custom Edition map's as they are taken out:
+
+- its metadata as an MCC level's is converted (shader types, chicago
+  extended shaders, weapon functions, HUD placements from MCC's 960-line
+  canvas, HUD meters), Gearbox HUD meters' opacity none as MCC draws them;
+- its models stay gbxmodels, as a Custom Edition map's bundles' are;
+- its bitmaps' pixels are read from the map or MCC's `bitmaps.map` as Halo
+  PC lays them out: BC7 as DXT5 (block for block), a 2D bitmap whose sides
+  are not powers of two (or BC7 that cannot be DXT5) decoded to linear
+  A8R8G8B8, its first level;
+- its sounds' samples (from the map or MCC's `sounds.map`: PCM, ADPCM or
+  Ogg Vorbis) are encoded as the Xbox ADPCM this build plays;
+- the MCC validator checks it all before anything is taken out.
+
+The scenario's scripts, recorded animations and cutscene cameras are left
+out of the opened map (a bundle never holds a scenario). An MCC map's model
+shaders of MCC's flag 6 and HUD meters of its flag 5 keep their Xbox channel
+orders where a level adds them (the bundle says it is an MCC map's). What an
+MCC level alone does as it draws (a weapon HUD's child anchors, its wider
+safe frame, MCC meters' coverage sampling) is not done for its tags on
+another level.
+
+**MCC's own content stays on this machine.** A tag of a map that is not a
+Steam Workshop item's (its package a Workshop id), or whose pixels or
+samples come from MCC's shared resource maps, holds MCC's own content,
+which its EULA lets no one redistribute (as MCC map sharing has it,
+`docs/mcc_maps.md`, "MCC sharing eligibility"). Its bundle says so, and it is
+left out of every network game's share and every Forge map's bake (logged:
+`... is MCC's own content, which stays on this machine`): played alone, on
+the firing range or in a campaign level, it plays; in a network game, every
+machine plays the profile without it. The menu says so on the MCC rows.
+
+### On MCC levels
+
+An MCC map's level plays Tag Injector profiles too (any profile's tags,
+Custom Edition's or MCC's; `randomizer.c`'s `randomizer_mcc_tags_loaded`
+takes it through the same level loading as any other's):
+
+- **an MCC campaign level** played alone: a campaign profile, chosen on the
+  TAG PROFILE screen after its difficulty (its campaign profiles alone:
+  the randomizer plays this build's campaign only), then the skulls' screen.
+  Its weapons and AI are swapped as a campaign level's are (by the
+  campaign's weapon and enemy paths, which a custom campaign may not use);
+- **an MCC multiplayer game**: the host's multiplayer profile, its share on
+  every machine, as on any multiplayer map;
+- **Firefight on an MCC map**: its variant's profile, as on any map.
+
+What is this build's maps' alone stays off on an MCC level: the
+randomizer's swaps, Forge's bakes and actors, the game modes' packs
+(Floodfection), and a co-op game's share (an MCC co-op game plays as it is).
 
 ## Profiles
 

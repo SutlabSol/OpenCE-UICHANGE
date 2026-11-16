@@ -290,6 +290,15 @@ the validator has checked: for the bitmaps of mods (mod_bitmaps.c), Halo
 PC's on any map. FALSE after logging why it cannot. */
 boolean custom_edition_loaded_reordered_bitmaps_find(
 	void);
+/* (port) After it: the bitmaps a sequence of the bitmap tag `handle` names
+(all of the tag's for NONE) drawn in `channel_order` (enum
+custom_edition_channel_order) whatever was found: an MCC map's bundle's
+model shaders and HUD meters whose flags say their channels are in Xbox
+order already (tag_injector.c) */
+void custom_edition_reordered_bitmaps_override(
+	long handle,
+	short sequence_index,
+	short channel_order);
 /* The order (enum custom_edition_channel_order) Halo PC keeps the channels
 of bitmap `bitmap_index` of the tag `handle` names in, of those found. */
 short custom_edition_bitmap_channel_order(

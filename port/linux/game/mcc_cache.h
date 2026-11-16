@@ -29,6 +29,14 @@ short mcc_cache_part_palette(void const *buffer, byte const **nodes);
 boolean mcc_cache_bitmap_valid(struct bitmap_data *bitmap);
 void const *mcc_cache_bitmap_pixels(struct bitmap_data const *bitmap, unsigned long *bytes, int *coverage);
 
+/* (port) A map's file opened read-only as the loader opens a level's, for the
+Tag Injector to take its tags out (mcc_tag_bundle.c): a handle for
+mcc_cache_file_close, its source and identity filled; NULL when it cannot be */
+struct mcc_cache_source;
+struct mcc_cache_identity;
+void *mcc_cache_file_open(char const *name, struct mcc_cache_source *source, struct mcc_cache_identity *identity);
+void mcc_cache_file_close(void *file);
+
 /* A map's tags read without loading it (mcc_cache.c's menus' readers). */
 boolean mcc_cache_tag_names_walk(char const *name,
     int (*visit)(void *context, unsigned long group_tag, char const *tag_name), void *context);

@@ -486,3 +486,32 @@ void mcc_audio_dispose(struct mcc_runtime *runtime)
         free(audio);runtime->audio=NULL;
     }
 }
+
+/* (port) A permutation's samples (`size` bytes of `compression`, `channels`
+ * channels at `rate`) as this build plays them, as mcc_audio_prepare_serial
+ * makes them: IMA ADPCM at the native rate (mono at 22,050 Hz, stereo at its
+ * own), a buffer of *bytes the caller frees; or, ADPCM at that rate already,
+ * NULL with *kept set (the samples are kept as they are). NULL, *kept clear,
+ * when they cannot be decoded. The Tag Injector's (mcc_tag_bundle.c) */
+unsigned char *mcc_audio_bundle_samples(unsigned char const *data,uint32_t size,int compression,
+    int channels,uint32_t rate,uint32_t *bytes,int *kept)
+{
+    struct mcc_pcm pcm;
+    uint32_t output_rate=channels==1 ? 22050 : rate,frames=0,encoded;
+    unsigned char *output=NULL;
+    *bytes=0;*kept=0;
+    if (!mcc_pcm_open(data,size,compression,channels,rate,&pcm)) return NULL;
+    if (compression==1 && rate==output_rate) {
+        mcc_pcm_close(&pcm);
+        *kept=1;
+        return NULL;
+    }
+    encoded=mcc_ima_encoded_size(&pcm,channels,output_rate,&frames);
+    output=encoded ? malloc(encoded) : NULL;
+    if (output) {
+        mcc_ima_encode(&pcm,channels,output_rate,frames,output,NULL);
+        *bytes=encoded;
+    }
+    mcc_pcm_close(&pcm);
+    return output;
+}

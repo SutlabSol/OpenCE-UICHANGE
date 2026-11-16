@@ -79,8 +79,17 @@ enum
 /* the header's flags */
 enum
 {
-	/* the tags are a Custom Edition map's (all bundles, for now) */
+	/* the tags are a Custom Edition map's, or laid out as one's (all bundles) */
 	_tag_bundle_custom_edition_bit = 0,
+	/* (port) taken out of an MCC map (mcc_tag_bundle.c): its model shaders
+	of flag 6 and HUD meters of flag 5 keep Xbox channel orders, which a
+	level adding it is told (tag_injector.c) */
+	_tag_bundle_mcc_bit = 1,
+	/* ... and some of what it holds is MCC's own (a map not of the Steam
+	Workshop, or pixels or samples of MCC's shared resource maps), which is
+	never sent to another machine (port_tag_profiles.c leaves it out of
+	network shares and Forge bakes) */
+	_tag_bundle_mcc_own_content_bit = 2,
 };
 
 /* a tag's flags */
@@ -126,6 +135,9 @@ struct tag_bundle_source
 	void *context;
 	char const *map_name;
 	char const *map_build;
+	/* header flags written besides _tag_bundle_custom_edition_bit (an MCC
+	map's: _tag_bundle_mcc_bit...) */
+	unsigned long flags;
 };
 
 /* a bundle tag_bundle_load checked: its parts, in the bundle's bytes */

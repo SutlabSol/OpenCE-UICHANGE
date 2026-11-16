@@ -80,6 +80,7 @@ one, as chosen, so a game listed for every build stays so.
 #include "network_replay.h"
 #include "halo_firefight.h"
 #include "mcc_cache.h"
+#include "mcc_maps.h"
 #include "interface/player_ui.h"
 
 #include <stdio.h>
@@ -1022,9 +1023,8 @@ static void host_firefight_profile(
 	struct network_game const *game)
 {
 	boolean firefight = game->variant.game_engine_index == game_engine_firefight;
-	/* (none on an MCC map, whose Firefight is vanilla: randomizer.c) */
-	unsigned long wanted = firefight && !mcc_level_name(game->map.name) ?
-		player_ui_get_game_variant_options()->firefight_tag_profile : 0UL;
+	/* (an MCC map's too: randomizer.c's randomizer_mcc_tags_loaded) */
+	unsigned long wanted = firefight ? player_ui_get_game_variant_options()->firefight_tag_profile : 0UL;
 	char const *folder = "";
 
 	if (!firefight && tag_multiplayer.game_kind != _played_firefight)
@@ -1106,6 +1106,10 @@ boolean tag_multiplayer_map_takes(
 
 	if (!level_name || !level_name[0] || custom_edition_level_name(level_name))
 		return FALSE;
+	/* (an MCC map's multiplayer level, whatever its name: an MCC package
+	may name its maps as the campaign's) */
+	if (mcc_level_name(level_name))
+		return !mcc_maps_level_campaign(level_name);
 	leaf = tag_name_strip_path(level_name);
 	for (index = 0; index < 10; index++)
 	{
@@ -1121,7 +1125,8 @@ boolean tag_multiplayer_campaign_takes(
 	char const *leaf;
 	short index;
 
-	if (!level_name || !level_name[0] || custom_edition_level_name(level_name))
+	/* (never an MCC map's: its co-op plays as it is, randomizer.c) */
+	if (!level_name || !level_name[0] || custom_edition_level_name(level_name) || mcc_level_name(level_name))
 		return FALSE;
 	leaf = tag_name_strip_path(level_name);
 	for (index = 0; index < 10; index++)

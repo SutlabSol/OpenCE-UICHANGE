@@ -57,11 +57,15 @@ MACOS_MINIMUM = "14.4"
 # guest's memory, its system calls, the Vulkan driver (MoltenVK), the
 # debugging hooks and OpenGL's absence
 SHARED_HOST_FILES = ("host_arch.c", "host_common.c", "host_loader.c", "host_thread.c", "host_watch_hash.c",
-                     "host_https.c", "host_replay.c", "host_sdl.c")
+                     "host_https.c", "host_replay.c", "host_sdl.c",
+                     # (the map lists' IMPORT, and the MCC maps folder it reads: host_mcc_hash.c)
+                     "host_mcc_import.c", "host_mcc_hash.c")
 SHARED_RENDERER_FILES = ("host_vk.c", "host_vk_data.c", "host_vk_draw.c", "host_vk_post.c", "host_vk_present.c",
                          "host_vk_hud.c", "host_vk_profile.c", "host_vk_render.c", "host_vk_shaders.c",
                          "host_vk_texture.c", "host_vk_visibility.c", "host_vk_passes.c")
-POSIX_FILES = ("posix_files.c", "posix_net.c", "posix_mcc_preview.c", "posix_mcc_share.c")
+POSIX_FILES = ("posix_files.c", "posix_net.c", "posix_mcc_preview.c", "posix_mcc_share.c",
+               # (the map lists' IMPORT's JSON reader: host_mcc_import.c)
+               "server_json.c")
 TLS_FILES = ("posix_dtls.c", "posix_update.c")
 
 

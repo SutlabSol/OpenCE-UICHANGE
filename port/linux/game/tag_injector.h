@@ -34,10 +34,19 @@ enum tag_injector_category
 
 /* ---------- the menu's (menu_functions.c) */
 
-/* Whether tags can be taken out of maps: Custom Edition maps can run
-(game.custom_edition) and none is being played. When not, `reason` says
-why, for the menu. */
+/* Whether tags can be taken out of maps: of Custom Edition maps, or of MCC
+maps (none is being played). When not, `reason` says why, for the menu. */
 boolean tag_injector_maps_available(
+	char *reason,
+	long reason_size);
+/* ... of Custom Edition maps: they can run (game.custom_edition) and none
+is being played */
+boolean tag_injector_custom_edition_maps_available(
+	char *reason,
+	long reason_size);
+/* ... of MCC maps (mcc_maps/): none is being played, whose tag window
+they are opened in (mcc_tag_bundle.c) */
+boolean tag_injector_mcc_maps_available(
 	char *reason,
 	long reason_size);
 
@@ -60,6 +69,13 @@ short tag_injector_map_of(
 	short index);
 /* whether a map is a campaign map */
 boolean tag_injector_map_campaign(
+	short map);
+/* (port) the map of the list that is the MCC map of mcc_maps.c's catalog
+index `catalog_index`, or NONE; and whether a map is an MCC map, whose tags
+are taken out by mcc_tag_bundle.c */
+short tag_injector_map_of_mcc(
+	short catalog_index);
+boolean tag_injector_map_mcc(
 	short map);
 
 /* Loads a map's tags, as the game would play them, to list them and take

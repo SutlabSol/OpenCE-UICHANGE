@@ -26,6 +26,7 @@
 #include "mcc_precache.h"
 #include "mcc_validation.h"
 #include "mcc_errors.h"
+#include "mcc_tag_bundle.h"
 #include "halo_port_window.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -227,6 +228,18 @@ static FILE *mcc_open(char const *name, struct mcc_cache_source *source,
     return mcc_open_explain(name,source,identity,NULL,0);
 }
 
+/* (port) the Tag Injector's (mcc_tag_bundle.c): a map's file opened read-only
+ * as a level's is, its local name as the loader takes it */
+void *mcc_cache_file_open(char const *name, struct mcc_cache_source *source, struct mcc_cache_identity *identity)
+{
+    return mcc_open(mcc_identity_local_name(name), source, identity);
+}
+
+void mcc_cache_file_close(void *file)
+{
+    if (file) fclose((FILE *)file);
+}
+
 #include "mcc_validation.inl"
 
 boolean mcc_cache_available(char const *name)
@@ -404,6 +417,9 @@ struct cache_file_tag_header *mcc_cache_tags_load(char const *name, void *header
     char memory_problem[192],resource_paths[2][128];
     char const *problem = "the map could not be opened";
     mcc_cache_tags_unload();
+    /* (the Tag Injector's map, opened at the menus in this same tag window,
+     * let go first: mcc_tag_bundle.c) */
+    mcc_tag_bundle_close();
     mcc_timing_begin();
     mcc_stream = mcc_open_explain(mcc_identity_local_name(name), &runtime->source, &identity,
         runtime->failure,sizeof(runtime->failure));

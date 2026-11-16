@@ -9,6 +9,14 @@ struct mcc_runtime;
 struct tag_validation;
 
 int mcc_tags_validate(struct mcc_runtime *runtime);
+/* (port) The tags of an MCC map opened for the Tag Injector to take tags out
+ * of (mcc_tag_bundle.c): as mcc_tags_validate, but their models are still
+ * gbxmodels ('mod2', tag_schema_custom_edition_groups), their bitmaps Halo
+ * PC's (the schemas' own checks), and their pixels and samples in `ranges`
+ * of the bundle's offsets, not the converted streams. */
+struct tag_validate_file_range;
+int mcc_tags_validate_bundle(struct mcc_runtime *runtime, struct tag_validate_file_range const *ranges,
+    short range_count);
 int mcc_bsp_validate(struct mcc_runtime *runtime, long handle, void *address, long size);
 void mcc_validation_dispose(struct mcc_runtime *runtime);
 
@@ -35,6 +43,9 @@ struct mcc_validation_dispatch {
     void *(*tag_get)(struct tag_validation *, long, unsigned long);
     void *(*buffer_data)(struct tag_validation *, void const *, boolean);
     boolean (*any_claimed)(void const *, unsigned long);
+    /* (port) whether the tags are laid out as a Custom Edition map's
+     * (tag_validate_custom_edition): an MCC map's taken out as bundles */
+    boolean (*custom_edition)(struct tag_validation *);
 };
 extern struct mcc_validation_dispatch const *mcc_validation_callbacks;
 

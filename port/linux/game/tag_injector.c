@@ -81,9 +81,13 @@ machine's, and a network game's machines must have the same tag table.
 #include "memory/data.h"
 #include "cutscene/cinematics.h"
 #include "interface/hud_messaging.h"
+#include "interface/unit_hud_interface_definition.h"
 #include "cache_file_formats.h"
 #include "custom_edition_cache.h"
 #include "custom_edition_maps.h"
+#include "mcc_cache.h"
+#include "mcc_maps.h"
+#include "mcc_tag_bundle.h"
 #include "tag_schema.h"
 #include "tag_bundle.h"
 #include "tag_editor.h"
@@ -114,8 +118,9 @@ enum
 	SHADER_MODEL_GROUP_TAG = 'soso',
 	SHADER_ENVIRONMENT_GROUP_TAG = 'senv',
 
-	/* the most maps listed, and tags of a category */
-	MAXIMUM_TAG_INJECTOR_MAPS = 512,
+	/* the most maps listed (Custom Edition's, then MCC's), and tags of a
+	category */
+	MAXIMUM_TAG_INJECTOR_MAPS = 512 + MCC_MAPS_MAXIMUM,
 	/* the most bytes of bundles' tags a level holds (their pixels, samples
 	and vertices are read from their files), and bundles */
 	MAXIMUM_INJECTED_BYTES = 0x8000000,
@@ -383,11 +388,15 @@ typedef char verify_preview_actor_variant_change_colors_size[
 typedef char verify_injector_tag_instance_size[sizeof(struct injector_tag_instance) == 0x20 ? 1 : -1];
 typedef char verify_injector_map_header_size[sizeof(struct injector_map_header) == 0x28 ? 1 : -1];
 
-/* a map of the menu's list */
+/* a map of the menu's list: a Custom Edition map (its display index of
+custom_edition_maps.c's), or an MCC map (its index of mcc_maps.c's catalog:
+mcc_tag_bundle.c opens it) */
 struct injector_map
 {
 	short display_index;
 	boolean campaign;
+	boolean mcc;
+	short mcc_index;
 };
 
 /* a bundle of a profile added to the level: its file, open while the level
@@ -492,6 +501,8 @@ static struct
 	struct injector_map maps[MAXIMUM_TAG_INJECTOR_MAPS];
 	short map_count;
 	short opened;
+	/* (the map open is an MCC map's: mcc_tag_bundle.c) */
+	boolean mcc_open;
 	char path[MAP_PATH_SIZE];
 	char map_name[64];
 	struct injector_map_header *header;
@@ -639,6 +650,10 @@ static long menu_tag(
 	if (tag_injector_menu.opened == NONE || category < 0 || category >= NUMBER_OF_TAG_INJECTOR_CATEGORIES ||
 		index < 0 || index >= tag_injector_menu.tag_counts[category])
 		return NONE;
+	/* (an MCC map's let go under the menu: an MCC level loads in its tag
+	window, mcc_cache_tags_load) */
+	if (tag_injector_menu.mcc_open && !mcc_tag_bundle_opened())
+		return NONE;
 	return tag_injector_menu.tags[category][index];
 }
 
@@ -663,7 +678,8 @@ static void menu_names_restore(
 			"names made from what they are", count, tag_injector_menu.path);
 }
 
-/* the map's file in the Custom Edition maps folders, into path */
+/* the map's file in the Custom Edition maps folders, into path; an MCC
+map's level name ("mcc_maps\\..."), which mcc_tag_bundle.c opens it by */
 static boolean menu_map_path(
 	short map,
 	char *path)
@@ -672,8 +688,50 @@ static boolean menu_map_path(
 
 	if (map < 0 || map >= tag_injector_menu.map_count)
 		return FALSE;
+	if (tag_injector_menu.maps[map].mcc)
+	{
+		level_name = mcc_maps_level_name(tag_injector_menu.maps[map].mcc_index);
+		if (!level_name || strlen(level_name) >= MAP_PATH_SIZE)
+			return FALSE;
+		snprintf(path, MAP_PATH_SIZE, "%s", level_name);
+		return TRUE;
+	}
 	level_name = custom_edition_maps_level_name(tag_injector_menu.maps[map].display_index);
 	return level_name && custom_edition_map_file_path(level_name, path);
+}
+
+/* the map open's tags opened again (sounds: of the tags a bundle will hold,
+decoded; NULL for none), a Custom Edition map's or an MCC map's; its tag
+header, or NULL */
+static struct injector_map_header *menu_bundle_open(
+	byte const *wanted,
+	long wanted_count)
+{
+	if (tag_injector_menu.mcc_open)
+		return mcc_tag_bundle_open(tag_injector_menu.path, wanted, wanted_count);
+	return custom_edition_cache_bundle_open(tag_injector_menu.path, wanted, wanted_count);
+}
+
+/* the map open, as tag_bundle_write reads it */
+static void menu_bundle_source(
+	struct tag_bundle_source *source)
+{
+	if (tag_injector_menu.mcc_open)
+		mcc_tag_bundle_source(source);
+	else
+		custom_edition_cache_bundle_source(source);
+}
+
+/* a bundle of the map open's tags (as tag_bundle_tags lists them) written
+with what it is: an MCC map's says whether it holds MCC's own content */
+static void menu_bundle_source_for(
+	struct tag_bundle_source *source,
+	long const *indices,
+	long count)
+{
+	menu_bundle_source(source);
+	if (tag_injector_menu.mcc_open && mcc_tag_bundle_own_content(indices, count))
+		source->flags |= FLAG(_tag_bundle_mcc_own_content_bit);
 }
 
 /* writes a bundle into a growing buffer (tag_bundle_write's) */
@@ -1010,6 +1068,96 @@ static void sound_permutations_retarget(
 
 			permutation->unknown2 = (unsigned long)datum;
 			permutation->unknown3 = (unsigned long)datum;
+		}
+	}
+}
+
+/* (port) an MCC map's bundle's (mcc_tag_bundle.c) model shaders of MCC's
+flag 6 and HUD meters of its flag 5, whose bitmaps' channels are in Xbox
+order already, which no Custom Edition map's are: drawn as they are, not
+as Halo PC keeps them (custom_edition_loaded_reordered_bitmaps_find has
+found every multipurpose map and meter), as an MCC level draws them
+(mcc_bitmaps.c's mcc_bitmap_model_usage and mcc_meter_usage). Of the tags
+it added, after the level's are found */
+enum
+{
+	MCC_SHADER_MODEL_FLAGS_OFFSET = 0x28,
+	MCC_SHADER_MODEL_XBOX_MULTIPURPOSE_BIT = 0x40,
+	MCC_SHADER_MODEL_MULTIPURPOSE_MAP_INDEX_OFFSET = 0xC8,
+	MCC_METER_XBOX_CHANNELS_BIT = 0x20,
+	MCC_WEAPON_HUD_METERS_OFFSET = 0x6C,
+	MCC_WEAPON_HUD_ELEMENT_BYTES = 0xB4,
+	MCC_WEAPON_HUD_ELEMENT_METER_OFFSET = 0x24,
+};
+
+static void mcc_meter_channels_keep(
+	struct meter_hud_element_definition const *meter)
+{
+	if (meter->meter_flags & MCC_METER_XBOX_CHANNELS_BIT)
+	{
+		custom_edition_reordered_bitmaps_override(meter->meter_bitmap.index, meter->sequence_index,
+			_custom_edition_channels_hud_meter_xbox);
+	}
+}
+
+static void mcc_bundles_channels_keep(
+	long existing)
+{
+	long bundle_index;
+
+	for (bundle_index = 0; bundle_index < tag_injector_level.bundle_count; bundle_index++)
+	{
+		struct injected_bundle *bundle = &tag_injector_level.bundles[bundle_index];
+		long tag;
+
+		if (bundle->refused || !bundle->bytes ||
+			!(read_unsigned_long(bundle->bytes + TAG_BUNDLE_HEADER_FLAGS_OFFSET) & FLAG(_tag_bundle_mcc_bit)))
+			continue;
+		for (tag = 0; tag < bundle->loaded.tag_count; tag++)
+		{
+			long datum = bundle->datums[tag];
+			long absolute = datum == NONE ? NONE : DATUM_INDEX_TO_ABSOLUTE_INDEX(datum);
+			unsigned long group_tag = bundle_tag_group(&bundle->loaded, tag);
+			byte *root = bundle_tag_root(&bundle->loaded, tag);
+
+			/* (the bundle's own: added by it) */
+			if (absolute == NONE || absolute < existing ||
+				tag_injector_level.grown_instances[absolute].base_address != root)
+				continue;
+			if (group_tag == SHADER_MODEL_GROUP_TAG)
+			{
+				word flags;
+				long multipurpose;
+
+				memcpy(&flags, root + MCC_SHADER_MODEL_FLAGS_OFFSET, sizeof(flags));
+				memcpy(&multipurpose, root + MCC_SHADER_MODEL_MULTIPURPOSE_MAP_INDEX_OFFSET, sizeof(multipurpose));
+				if ((flags & MCC_SHADER_MODEL_XBOX_MULTIPURPOSE_BIT) && multipurpose != NONE)
+					custom_edition_reordered_bitmaps_override(multipurpose, NONE, _custom_edition_channels_xbox);
+			}
+			else if (group_tag == UNIT_HUD_INTERFACE_DEFINITION_TAG)
+			{
+				struct unit_hud_interface_definition const *hud = (struct unit_hud_interface_definition const *)root;
+				long meter_index;
+
+				mcc_meter_channels_keep(&hud->shield_meter.meter);
+				mcc_meter_channels_keep(&hud->health_meter.meter);
+				for (meter_index = 0; meter_index < hud->auxilary_meters.count; meter_index++)
+				{
+					mcc_meter_channels_keep(&TAG_BLOCK_GET_ELEMENT(&hud->auxilary_meters, meter_index,
+						struct auxilary_meter_definition)->panel.meter);
+				}
+			}
+			else if (group_tag == WEAPON_HUD_INTERFACE_GROUP_TAG)
+			{
+				struct tag_block const *meters = (struct tag_block const *)(root + MCC_WEAPON_HUD_METERS_OFFSET);
+				long meter_index;
+
+				for (meter_index = 0; meters->address && meter_index < meters->count; meter_index++)
+				{
+					mcc_meter_channels_keep((struct meter_hud_element_definition const *)((byte const *)meters->address +
+						meter_index * MCC_WEAPON_HUD_ELEMENT_BYTES + MCC_WEAPON_HUD_ELEMENT_METER_OFFSET));
+				}
+			}
 		}
 	}
 }
@@ -1480,6 +1628,20 @@ boolean tag_injector_maps_available(
 	char *reason,
 	long reason_size)
 {
+	/* (MCC maps' tags are taken out in their own tag window, while no MCC
+	map is played: mcc_tag_bundle.c) */
+	if (!mcc_cache_tags_loaded())
+	{
+		reason_set(reason, reason_size, "");
+		return TRUE;
+	}
+	return tag_injector_custom_edition_maps_available(reason, reason_size);
+}
+
+boolean tag_injector_custom_edition_maps_available(
+	char *reason,
+	long reason_size)
+{
 	if (!halo_custom_edition_tag_cache())
 	{
 		reason_set(reason, reason_size, "Custom Edition maps are off (game.custom_edition in config.toml), or cannot run here.");
@@ -1488,6 +1650,20 @@ boolean tag_injector_maps_available(
 	if (custom_edition_cache_tags_loaded())
 	{
 		reason_set(reason, reason_size, "A Custom Edition map is being played.");
+		return FALSE;
+	}
+	reason_set(reason, reason_size, "");
+
+	return TRUE;
+}
+
+boolean tag_injector_mcc_maps_available(
+	char *reason,
+	long reason_size)
+{
+	if (mcc_cache_tags_loaded())
+	{
+		reason_set(reason, reason_size, "An MCC map is being played.");
 		return FALSE;
 	}
 	reason_set(reason, reason_size, "");
@@ -1514,8 +1690,30 @@ short tag_injector_maps_find(
 
 			map->display_index = custom_edition_maps_display_index_of(campaign, index);
 			map->campaign = campaign;
+			map->mcc = FALSE;
+			map->mcc_index = NONE;
 			/* (Halo PC's own multiplayer maps are Custom Edition maps too) */
 			if (map->display_index != NONE && custom_edition_maps_level_name(map->display_index))
+				tag_injector_menu.map_count++;
+		}
+	}
+	/* (and MCC's maps, each of its catalog, campaign or not) */
+	mcc_maps_rescan();
+	for (pass = 0; pass < 2; pass++)
+	{
+		boolean campaign = pass == 0;
+		short count = mcc_maps_type_count(campaign);
+		short index;
+
+		for (index = 0; index < count && tag_injector_menu.map_count < MAXIMUM_TAG_INJECTOR_MAPS; index++)
+		{
+			struct injector_map *map = &tag_injector_menu.maps[tag_injector_menu.map_count];
+
+			map->display_index = NONE;
+			map->campaign = campaign;
+			map->mcc = TRUE;
+			map->mcc_index = mcc_maps_type_index(index, campaign);
+			if (map->mcc_index != NONE && mcc_maps_level_name(map->mcc_index))
 				tag_injector_menu.map_count++;
 		}
 	}
@@ -1532,9 +1730,13 @@ short tag_injector_map_count(
 wchar_t const *tag_injector_map_name(
 	short map)
 {
-	wchar_t const *name = map >= 0 && map < tag_injector_menu.map_count ?
-		custom_edition_maps_name(tag_injector_menu.maps[map].display_index) : NULL;
+	wchar_t const *name = NULL;
 
+	if (map >= 0 && map < tag_injector_menu.map_count)
+	{
+		name = tag_injector_menu.maps[map].mcc ? mcc_maps_name(tag_injector_menu.maps[map].mcc_index) :
+			custom_edition_maps_name(tag_injector_menu.maps[map].display_index);
+	}
 	return name ? name : L"";
 }
 
@@ -1545,7 +1747,7 @@ char const *tag_injector_map_folder(
 	short count;
 	short index;
 
-	if (map < 0 || map >= tag_injector_menu.map_count)
+	if (map < 0 || map >= tag_injector_menu.map_count || tag_injector_menu.maps[map].mcc)
 		return "";
 	found = &tag_injector_menu.maps[map];
 	count = custom_edition_maps_count(found->campaign);
@@ -1571,11 +1773,32 @@ short tag_injector_map_of(
 
 	for (map = 0; display_index != NONE && map < tag_injector_menu.map_count; map++)
 	{
-		if (tag_injector_menu.maps[map].display_index == display_index && tag_injector_menu.maps[map].campaign == campaign)
+		if (!tag_injector_menu.maps[map].mcc && tag_injector_menu.maps[map].display_index == display_index &&
+			tag_injector_menu.maps[map].campaign == campaign)
 			return map;
 	}
 
 	return NONE;
+}
+
+short tag_injector_map_of_mcc(
+	short catalog_index)
+{
+	short map;
+
+	for (map = 0; catalog_index != NONE && map < tag_injector_menu.map_count; map++)
+	{
+		if (tag_injector_menu.maps[map].mcc && tag_injector_menu.maps[map].mcc_index == catalog_index)
+			return map;
+	}
+
+	return NONE;
+}
+
+boolean tag_injector_map_mcc(
+	short map)
+{
+	return map >= 0 && map < tag_injector_menu.map_count && tag_injector_menu.maps[map].mcc;
 }
 
 boolean tag_injector_map_campaign(
@@ -1598,12 +1821,17 @@ boolean tag_injector_map_open(
 		error(_error_silent, "tag injector: map %d has no file", map);
 		return FALSE;
 	}
-	header = custom_edition_cache_bundle_open(tag_injector_menu.path, NULL, 0);
+	tag_injector_menu.mcc_open = tag_injector_menu.maps[map].mcc;
+	header = menu_bundle_open(NULL, 0);
 	if (!header)
+	{
+		tag_injector_menu.mcc_open = FALSE;
 		return FALSE;
+	}
 	tag_injector_menu.header = header;
 	tag_injector_menu.opened = map;
-	level_name = custom_edition_maps_level_name(tag_injector_menu.maps[map].display_index);
+	level_name = tag_injector_menu.mcc_open ? mcc_maps_level_name(tag_injector_menu.maps[map].mcc_index) :
+		custom_edition_maps_level_name(tag_injector_menu.maps[map].display_index);
 	snprintf(tag_injector_menu.map_name, sizeof(tag_injector_menu.map_name), "%s", tag_name_strip_path(level_name));
 	menu_names_restore(header);
 	for (category = 0; category < NUMBER_OF_TAG_INJECTOR_CATEGORIES; category++)
@@ -1646,7 +1874,13 @@ void tag_injector_map_close(
 {
 	menu_tags_free();
 	if (tag_injector_menu.opened != NONE)
-		custom_edition_cache_bundle_close();
+	{
+		if (tag_injector_menu.mcc_open)
+			mcc_tag_bundle_close();
+		else
+			custom_edition_cache_bundle_close();
+	}
+	tag_injector_menu.mcc_open = FALSE;
 	tag_names_dispose();
 	if (tag_injector_menu.names_made)
 		free(tag_injector_menu.names_made);
@@ -1746,7 +1980,7 @@ long tag_injector_tag_size(
 		long problem = NONE;
 		enum tag_bundle_status status;
 
-		custom_edition_cache_bundle_source(&source);
+		menu_bundle_source(&source);
 		status = tag_bundle_tags(&source, absolute, &indices, &count, &problem);
 		/* (the bundle's tags were taken from the game's malloc) */
 		if (indices)
@@ -1839,8 +2073,9 @@ boolean tag_injector_tag_add(
 	tag_count = tag_injector_menu.header->tag_count;
 
 	/* the map again, with the sounds of the tags the bundle holds decoded
-	(the tags are the same, at the same indices) */
-	custom_edition_cache_bundle_source(&source);
+	(the tags are the same, at the same indices; an MCC map's, its bitmaps'
+	pixels too, of those alone) */
+	menu_bundle_source(&source);
 	tag_bundle_tags(&source, absolute, &indices, &count, &problem);
 	sounds = malloc((unsigned long)tag_count);
 	if (!sounds || !indices)
@@ -1855,10 +2090,11 @@ boolean tag_injector_tag_add(
 	memset(sounds, 0, (unsigned long)tag_count);
 	for (tag = 0; tag < count; tag++)
 	{
-		if ((unsigned long)tag_injector_menu.header->instances[indices[tag]].group_tag == SOUND_DEFINITION_TAG)
+		if (tag_injector_menu.mcc_open ||
+			(unsigned long)tag_injector_menu.header->instances[indices[tag]].group_tag == SOUND_DEFINITION_TAG)
 			sounds[indices[tag]] = TRUE;
 	}
-	header = custom_edition_cache_bundle_open(tag_injector_menu.path, sounds, tag_count);
+	header = menu_bundle_open(sounds, tag_count);
 	free(sounds);
 	tag_injector_menu.header = header;
 	/* (its names made again: the same) */
@@ -1875,7 +2111,7 @@ boolean tag_injector_tag_add(
 		return FALSE;
 	}
 
-	custom_edition_cache_bundle_source(&source);
+	menu_bundle_source_for(&source, indices, count);
 	tag_bundle_write(&source, absolute, bundle_buffer_write, &buffer, &report);
 	added = report.status == _tag_bundle_status_ok &&
 		profile_bundle_add(profile, tag_injector_menu.map_name, (unsigned long)header->instances[absolute].group_tag,
@@ -1913,6 +2149,21 @@ boolean tag_injector_tag_add(
 			error(_error_silent, "tag injector: %s, which %s carries, has no first-person model or animations, and is "
 				"not added", carried_name, name);
 			continue;
+		}
+		/* (what it holds of MCC's own: its own tags') */
+		{
+			long *carried_indices = NULL;
+			long carried_count = 0;
+			long carried_problem = NONE;
+
+			menu_bundle_source(&source);
+			if (tag_bundle_tags(&source, indices[tag], &carried_indices, &carried_count, &carried_problem) ==
+				_tag_bundle_status_ok)
+				menu_bundle_source_for(&source, carried_indices, carried_count);
+			else
+				menu_bundle_source_for(&source, indices, count);
+			if (carried_indices)
+				free(carried_indices);
 		}
 		tag_bundle_write(&source, indices[tag], bundle_buffer_write, &carried_buffer, &report);
 		if (report.status == _tag_bundle_status_ok && profile_bundle_add(profile, tag_injector_menu.map_name, group_tag,
@@ -2795,7 +3046,7 @@ boolean tag_injector_map_tag_preview(
 	memset(&source, 0, sizeof(source));
 	if (absolute == NONE)
 		return FALSE;
-	custom_edition_cache_bundle_source(&source.map);
+	menu_bundle_source(&source.map);
 	root = tag_injector_menu.header->instances[absolute].base_address;
 	group_tag = (unsigned long)tag_injector_menu.header->instances[absolute].group_tag;
 	preview_needs(&source, root, group_tag, needs);
@@ -2823,7 +3074,7 @@ boolean tag_injector_map_tag_usable(
 		if (absolute == NONE || _stricmp(menu_tag_name(absolute), tag_name))
 			continue;
 		memset(&source, 0, sizeof(source));
-		custom_edition_cache_bundle_source(&source.map);
+		menu_bundle_source(&source.map);
 		preview_needs(&source, tag_injector_menu.header->instances[absolute].base_address,
 			(unsigned long)tag_injector_menu.header->instances[absolute].group_tag, &needs);
 		for (need = 0; need < needs.count; need++)
@@ -3587,7 +3838,10 @@ long tag_injector_tags_load(
 	/* (the channels of every bitmap Halo PC keeps elsewhere, the bundles'
 	among the level's, as a mod's bitmaps are found: mod_bitmaps.c) */
 	if (tag_injector_level.bitmaps_added && !custom_edition_cache_tags_loaded())
+	{
 		custom_edition_loaded_reordered_bitmaps_find();
+		mcc_bundles_channels_keep(existing);
+	}
 	error(_error_silent, "tag injector: %s: %ld tags added and %ld replaced from %ld bundles (%lu bytes of tags), %ld "
 		"roots", port_tag_profiles_name(profile), added, replaced, tag_injector_level.bundle_count, total, root_count);
 	if (bitmaps_downsized)

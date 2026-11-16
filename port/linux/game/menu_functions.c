@@ -4139,6 +4139,10 @@ on the profiles it plays, a list at a time from this place */
 #define RANDOMIZER_TAG_PROFILE_SCREEN "pc\\main_menu\\difficulty_select\\randomizer\\tag_profile_screen"
 #define RANDOMIZER_SCREEN "pc\\main_menu\\difficulty_select\\randomizer\\randomizer_screen"
 static short randomizer_tag_profile_first;
+/* (the screen opened for an MCC campaign level: its campaign profiles alone,
+the randomizer playing this build's campaign alone: randomizer.c's
+randomizer_mcc_tags_loaded) */
+static boolean randomizer_tag_profile_mcc;
 
 /* the screen's rows past NONE: the campaign profiles, then (the randomizer
 on) the profiles; of a place, the campaign profile it is (NONE: not one) and
@@ -4146,7 +4150,7 @@ the profile (NONE: not one) */
 static short randomizer_tag_profile_count(void)
 {
 	return (short)(1 + port_tag_campaign_profiles_count() +
-		(config_boolean("game.randomizer") ? port_tag_profiles_count() : 0));
+		(config_boolean("game.randomizer") && !randomizer_tag_profile_mcc ? port_tag_profiles_count() : 0));
 }
 
 static long randomizer_tag_profile_place(short place, long *profile)
@@ -4251,7 +4255,7 @@ static void randomizer_tag_profiles_update(struct widget_instance *list)
 					tag_injector_profile_enabled_count(profile, 'actv'),
 					tag_injector_profile_enabled_count(profile, 'weap'), size);
 			}
-			else if (config_boolean("game.randomizer"))
+			else if (config_boolean("game.randomizer") && !randomizer_tag_profile_mcc)
 			{
 				snprintf(text, sizeof(text), "No Tag Injector tags: the randomizer plays the\ncampaign's alone.");
 			}
@@ -4281,12 +4285,17 @@ static boolean randomizer_tag_profile_choose(struct widget_instance *widget, boo
 		return campaign_fail();
 	campaign_profile = randomizer_tag_profile_place(place, &profile);
 	tag_campaign_profile_choose(campaign_profile);
-	if (!config_write("game.randomizer_tag_profile", profile != NONE ? port_tag_profiles_folder(profile) : ""))
-		error(_error_silent, "randomizer: could not write game.randomizer_tag_profile");
-	error(_error_silent, "randomizer: the Tag Injector's profile played: %s",
-		profile != NONE ? port_tag_profiles_name(profile) : "none");
+	/* (an MCC level's screen has no randomizer's profiles: the one chosen
+	for this build's campaign stays) */
+	if (!randomizer_tag_profile_mcc)
+	{
+		if (!config_write("game.randomizer_tag_profile", profile != NONE ? port_tag_profiles_folder(profile) : ""))
+			error(_error_silent, "randomizer: could not write game.randomizer_tag_profile");
+		error(_error_silent, "randomizer: the Tag Injector's profile played: %s",
+			profile != NONE ? port_tag_profiles_name(profile) : "none");
+	}
 	randomizer_tags.checked = 0;
-	if (campaign_profile != NONE || !config_boolean("game.randomizer"))
+	if (campaign_profile != NONE || !config_boolean("game.randomizer") || randomizer_tag_profile_mcc)
 	{
 		ui_play_audio_feedback_sound(SOUND_FORWARD);
 		if (config_boolean("game.skulls") && skulls_open(widget, widget_deleted))
@@ -4782,21 +4791,43 @@ static boolean difficulty_start(struct widget_instance *widget, short difficulty
 
 	if (!campaign_profile(controller, &profile))
 		return campaign_fail();
-	/* (an MCC campaign level: vanilla, no randomizer or Tag Injector, but
-	the skulls' screen with the skulls on: randomizer_mcc_tags_loaded) */
+	randomizer_tag_profile_mcc = FALSE;
+	/* (an MCC campaign level: no randomizer, but a campaign profile, chosen
+	on the TAG PROFILE screen (its campaign profiles alone), and the skulls'
+	screen with the skulls on: randomizer_mcc_tags_loaded) */
 	if (mcc_maps_level_campaign(map_name))
 	{
 		difficulty = PIN(difficulty, 0, 3);
-		if (config_boolean("game.skulls"))
+		snprintf(campaign_pending.map_name, sizeof(campaign_pending.map_name), "%s", map_name);
+		campaign_pending.controller = controller;
+		campaign_pending.difficulty = difficulty;
+		campaign_screens_for_server = FALSE;
+		main_set_difficulty(difficulty);
+		if (config_boolean("game.tag_injection"))
 		{
-			snprintf(campaign_pending.map_name, sizeof(campaign_pending.map_name), "%s", map_name);
-			campaign_pending.controller = controller;
-			campaign_pending.difficulty = difficulty;
-			campaign_screens_for_server = FALSE;
-			main_set_difficulty(difficulty);
-			if (skulls_open(widget, widget_deleted))
-				return TRUE;
+			port_tag_profiles_scan();
+			port_tag_campaign_profiles_scan();
 		}
+		if (!config_boolean("game.tag_injection") || !port_tag_campaign_profiles_count())
+		{
+			tag_campaign_profile_choose(NONE);
+		}
+		else
+		{
+			randomizer_tag_profile_mcc = TRUE;
+			randomizer_tags.checked = 0;
+			randomizer_tag_profile_first = 0;
+			if (ui_widget_load_by_name_or_tag(RANDOMIZER_TAG_PROFILE_SCREEN, NONE, NULL, NONE,
+				screen_of(widget)->definition_tag_index, NONE, NONE))
+			{
+				*widget_deleted = TRUE;
+				return TRUE;
+			}
+			randomizer_tag_profile_mcc = FALSE;
+			tag_campaign_profile_choose(NONE);
+		}
+		if (config_boolean("game.skulls") && skulls_open(widget, widget_deleted))
+			return TRUE;
 		campaign_start(map_name, difficulty, controller, FALSE);
 		return TRUE;
 	}
@@ -7800,6 +7831,9 @@ enum
 	_tags_kind_profile,
 	_tags_kind_campaign,
 	_tags_kind_multiplayer,
+	/* (MCC's maps, of mcc_maps/: mcc_tag_bundle.c) */
+	_tags_kind_mcc_campaign,
+	_tags_kind_mcc_multiplayer,
 	NUMBER_OF_TAGS_KIND_ROWS
 };
 
@@ -7941,6 +7975,9 @@ static struct
 	/* whether the tag shown is of a campaign map's path (REPLACE ORIGINAL) */
 	boolean tag_stock;
 	boolean campaign;
+	/* (MAPS' kind is MCC's maps, listed by tags_mcc_browser: their folder
+	is its package's or collection's) */
+	boolean mcc;
 	char folder[CUSTOM_EDITION_MAP_CATEGORY_LENGTH];
 	short map;
 	short category;
@@ -7980,7 +8017,7 @@ static struct
 	short campaign_stock;
 	short campaign_rank;
 	long campaign_deleting;
-} tags_screen = { 0, NONE, NONE, NONE, FALSE, FALSE, "", NONE, NONE, { 0 }, { 0 }, _tags_naming_none, { 0 }, NONE, NONE,
+} tags_screen = { 0, NONE, NONE, NONE, FALSE, FALSE, FALSE, "", NONE, NONE, { 0 }, { 0 }, _tags_naming_none, { 0 }, NONE, NONE,
 	NONE, "", 0, "", { { 0 } }, "", { FALSE }, NONE, 0, NONE, NONE, FALSE, 0, 0, NONE };
 
 static void tags_message(char const *text)
@@ -8118,6 +8155,10 @@ static char const *tags_browse_folder(void)
 {
 	return tags_screen.list == _tags_list_folder ? tags_screen.folder : "";
 }
+
+/* MAPS' MCC maps, by their packages and Workshop collections, as the MCC
+lists have them (mcc_maps.c) */
+static struct mcc_map_browser tags_mcc_browser;
 
 /* how many of the profile shown's tags are of a category (as a map's are
 listed) */
@@ -8781,7 +8822,7 @@ static short tags_count(void)
 		return NUMBER_OF_TAGS_KIND_ROWS;
 	case _tags_list_browse:
 	case _tags_list_folder:
-		return map_browse_count(tags_screen.campaign, tags_browse_folder());
+		return tags_screen.mcc ? tags_mcc_browser.count : map_browse_count(tags_screen.campaign, tags_browse_folder());
 	case _tags_list_categories:
 		return NUMBER_OF_TAG_INJECTOR_CATEGORIES;
 	case _tags_list_mp_profiles:
@@ -8908,6 +8949,16 @@ static boolean tags_browse_row(short place, char *name, size_t name_size, short 
 	wchar_t wide[ROW_TEXT_LENGTH];
 
 	*flat = NONE;
+	/* (an MCC map's: its index of mcc_maps.c's catalog) */
+	if (tags_screen.mcc)
+	{
+		wchar_t text[64];
+
+		mcc_map_browser_text(&tags_mcc_browser, place, text);
+		tags_ascii_copy(name, name_size, text);
+		*flat = mcc_map_browser_index(&tags_mcc_browser, place);
+		return place >= 0 && place < tags_mcc_browser.count && tags_mcc_browser.folders[place];
+	}
 	if (map_browse_folder(tags_screen.campaign, folder, place))
 	{
 		snprintf(name, name_size, "%s", map_browse_folder_name(tags_screen.campaign, folder, place));
@@ -9041,6 +9092,13 @@ static void tags_row_text(short place, char *name, size_t name_size, char *state
 			upper_copy(state, state_size, tags_screen.profile != NONE ? port_tag_profiles_name(tags_screen.profile) :
 				"NONE");
 		}
+		else if (place == _tags_kind_mcc_campaign || place == _tags_kind_mcc_multiplayer)
+		{
+			boolean campaign = place == _tags_kind_mcc_campaign;
+
+			snprintf(name, name_size, "%s", campaign ? "MCC SINGLEPLAYER" : "MCC MULTIPLAYER");
+			snprintf(state, state_size, "%d", mcc_maps_type_count(campaign));
+		}
 		else
 		{
 			boolean campaign = place == _tags_kind_campaign;
@@ -9054,7 +9112,7 @@ static void tags_row_text(short place, char *name, size_t name_size, char *state
 	{
 		short flat;
 
-		if (tags_browse_row(place, name, name_size, &flat))
+		if (tags_browse_row(place, name, name_size, &flat) && !tags_screen.mcc)
 			snprintf(state, state_size, "%d MAPS", tags_folder_count(tags_screen.campaign, name));
 		break;
 	}
@@ -9346,8 +9404,9 @@ static void tags_details_text(short place, char *title, size_t title_size, char 
 			if (!tag_injector_maps_available(reason, sizeof(reason)))
 				snprintf(text, text_size, "%s", reason);
 			else
-				snprintf(text, text_size, "The Custom Edition maps of custom_maps, singleplayer and multiplayer, by "
-					"their folders.\n \nA lists them, to add their weapons and AI to a profile.");
+				snprintf(text, text_size, "The Custom Edition maps of custom_maps and the MCC maps of mcc_maps, "
+					"singleplayer and multiplayer, by their folders.\n \nA lists them, to add their weapons and AI to a "
+					"profile.");
 		}
 		break;
 	case _tags_list_profiles:
@@ -9501,13 +9560,31 @@ static void tags_details_text(short place, char *title, size_t title_size, char 
 				snprintf(text, text_size, "The profile a map's tags are added to: %s. Left and right choose another."
 					"\n \nVIEW PROFILE, here and in the maps' lists, shows it.", profile);
 		}
+		else if (place == _tags_kind_mcc_campaign || place == _tags_kind_mcc_multiplayer)
+		{
+			boolean campaign = place == _tags_kind_mcc_campaign;
+			char reason[160];
+
+			snprintf(title, title_size, "%s", campaign ? "MCC Singleplayer" : "MCC Multiplayer");
+			if (!tag_injector_mcc_maps_available(reason, sizeof(reason)))
+				snprintf(text, text_size, "%s", reason);
+			else
+				snprintf(text, text_size, "%d MCC %s maps.\n \nA lists their packages and Workshop collections of "
+					"mcc_maps. Their tags play on any map. Those of MCC's own maps, or drawn from MCC's shared "
+					"files, stay on this machine: network games and Forge maps leave them out.",
+					mcc_maps_type_count(campaign), campaign ? "campaign" : "multiplayer");
+		}
 		else
 		{
 			boolean campaign = place == _tags_kind_campaign;
+			char reason[160];
 
 			snprintf(title, title_size, "%s", campaign ? "Custom Singleplayer" : "Custom Multiplayer");
-			snprintf(text, text_size, "%d Custom Edition %s maps.\n \nA lists their folders of custom_maps, and the "
-				"maps beside them.", custom_edition_maps_count(campaign), campaign ? "campaign" : "multiplayer");
+			if (!tag_injector_custom_edition_maps_available(reason, sizeof(reason)))
+				snprintf(text, text_size, "%s", reason);
+			else
+				snprintf(text, text_size, "%d Custom Edition %s maps.\n \nA lists their folders of custom_maps, and "
+					"the maps beside them.", custom_edition_maps_count(campaign), campaign ? "campaign" : "multiplayer");
 		}
 		break;
 	case _tags_list_browse:
@@ -9520,17 +9597,32 @@ static void tags_details_text(short place, char *title, size_t title_size, char 
 		if (place == NONE)
 		{
 			snprintf(title, title_size, "No maps");
-			snprintf(text, text_size, "No Custom Edition maps of this kind: put them in custom_maps.");
+			snprintf(text, text_size, "%s", tags_screen.mcc ? "No MCC maps of this kind: install them in mcc_maps, or "
+				"download them from the Steam Workshop (Settings > STEAM WORKSHOP)." :
+				"No Custom Edition maps of this kind: put them in custom_maps.");
 			break;
 		}
 		if (tags_browse_row(place, name, sizeof(name), &flat))
 		{
 			snprintf(title, title_size, "%s", name);
-			snprintf(text, text_size, "A folder of custom_maps: %d maps.\n \nA lists them.",
-				tags_folder_count(tags_screen.campaign, name));
+			if (tags_screen.mcc)
+				snprintf(text, text_size, "A package or Workshop collection of mcc_maps.\n \nA lists its maps.");
+			else
+				snprintf(text, text_size, "A folder of custom_maps: %d maps.\n \nA lists them.",
+					tags_folder_count(tags_screen.campaign, name));
 			break;
 		}
 		snprintf(title, title_size, "%s", name);
+		if (tags_screen.mcc)
+		{
+			if (!tag_injector_mcc_maps_available(reason, sizeof(reason)))
+				snprintf(text, text_size, "%s", reason);
+			else
+				snprintf(text, text_size, "An MCC %s map.\n \nA lists its weapons, AI and the rest, to add to %s. "
+					"Opening it takes a moment.", tags_screen.campaign ? "campaign" : "multiplayer",
+					profile[0] ? profile : "a profile");
+			break;
+		}
 		if (!tag_injector_maps_available(reason, sizeof(reason)))
 			snprintf(text, text_size, "%s", reason);
 		else
@@ -9795,6 +9887,7 @@ static boolean tags_screen_reset(boolean opening)
 	tags_screen.map = NONE;
 	tags_screen.profile_category = NONE;
 	tags_screen.category = NONE;
+	tags_screen.mcc = FALSE;
 	tags_screen.folder[0] = 0;
 	for (list = 0; list < NUMBER_OF_TAGS_LISTS; list++)
 	{
@@ -9892,9 +9985,10 @@ kinds of tags shown */
 static void tags_map_open(struct widget_instance *list, short flat)
 {
 	char reason[320];
-	short map = tag_injector_map_of(tags_screen.campaign, flat);
+	short map = tags_screen.mcc ? tag_injector_map_of_mcc(flat) : tag_injector_map_of(tags_screen.campaign, flat);
 
-	if (!tag_injector_maps_available(reason, sizeof(reason)))
+	if (tags_screen.mcc ? !tag_injector_mcc_maps_available(reason, sizeof(reason)) :
+		!tag_injector_custom_edition_maps_available(reason, sizeof(reason)))
 	{
 		tags_message(reason);
 		ui_play_audio_feedback_sound(SOUND_ERROR);
@@ -10125,8 +10219,20 @@ static boolean tags_choose(struct widget_instance *widget)
 			ui_play_audio_feedback_sound(SOUND_CURSOR);
 			break;
 		}
-		tags_screen.campaign = place == _tags_kind_campaign;
+		tags_screen.mcc = place == _tags_kind_mcc_campaign || place == _tags_kind_mcc_multiplayer;
+		tags_screen.campaign = place == _tags_kind_campaign || place == _tags_kind_mcc_campaign;
 		tags_screen.folder[0] = 0;
+		if (tags_screen.mcc)
+		{
+			if (!tag_injector_mcc_maps_available(reason, sizeof(reason)))
+			{
+				tags_message(reason);
+				ui_play_audio_feedback_sound(SOUND_ERROR);
+				break;
+			}
+			csmemset(&tags_mcc_browser, 0, sizeof(tags_mcc_browser));
+			mcc_map_browser_open(&tags_mcc_browser, tags_screen.campaign);
+		}
 		ui_play_audio_feedback_sound(SOUND_FORWARD);
 		tags_list_open(list, _tags_list_browse, 0);
 		break;
@@ -10138,7 +10244,10 @@ static boolean tags_choose(struct widget_instance *widget)
 
 		if (tags_browse_row(place, name, sizeof(name), &flat))
 		{
-			snprintf(tags_screen.folder, sizeof(tags_screen.folder), "%s", name);
+			/* (an MCC package's or collection's: the browser opens it) */
+			if (tags_screen.mcc && !mcc_map_browser_enter(&tags_mcc_browser, place))
+				break;
+			snprintf(tags_screen.folder, sizeof(tags_screen.folder), "%s", name[0] ? name : "[MCC]");
 			ui_play_audio_feedback_sound(SOUND_FORWARD);
 			tags_list_open(list, _tags_list_folder, 0);
 		}
@@ -10432,7 +10541,11 @@ static boolean tags_back(struct widget_instance *widget, boolean *widget_deleted
 	case _tags_list_snap_points: up = _tags_list_tag; break;
 	case _tags_list_kinds: up = _tags_list_top; break;
 	case _tags_list_browse: up = _tags_list_kinds; break;
-	case _tags_list_folder: up = _tags_list_browse; break;
+	case _tags_list_folder:
+		if (tags_screen.mcc)
+			mcc_map_browser_back(&tags_mcc_browser);
+		up = _tags_list_browse;
+		break;
 	case _tags_list_categories:
 		tag_injector_map_close();
 		tags_screen.map = NONE;
@@ -11123,7 +11236,7 @@ static void tags_update(struct widget_instance *list)
 			tags_screen.campaign_profile, tags_screen.campaign_enemies, tags_screen.campaign_stock,
 			(long)tags_screen.campaign_rank, port_tag_campaign_profiles_scans(), *chosen,
 			count, tags_screen.category, tags_screen.profile_category, tags_screen.profile, tags_screen.tag,
-			tags_screen.campaign,
+			tags_screen.campaign + 2 * tags_screen.mcc,
 			tags_screen.folder, port_tag_profiles_scans(), config_boolean("game.tag_injection"), tags_screen.removing,
 			tags_screen.deleting, tags_screen.campaign_deleting, mods_screen.fonts[_mod_details_name],
 			mods_screen.widths[_mod_details_name], mods_screen.fonts[_mod_details_text],
@@ -22214,7 +22327,8 @@ static boolean map_content_tags_initialize(struct widget_instance *list)
 		firefight_map_content_check(server_settings_map_name(), map_content_tag_usable);
 		return TRUE;
 	}
-	map = tag_injector_maps_available(reason, sizeof(reason)) ? tag_injector_map_named(server_settings_map_name()) : NONE;
+	map = tag_injector_custom_edition_maps_available(reason, sizeof(reason)) ?
+		tag_injector_map_named(server_settings_map_name()) : NONE;
 	if (map != NONE && tag_injector_map_opened() != map && !tag_injector_map_open(map))
 		map = NONE;
 	map_content_menu.previewing = map != NONE;
