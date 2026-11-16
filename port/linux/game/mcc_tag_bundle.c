@@ -656,7 +656,8 @@ static int bundle_bitmap_raw_read(struct bundle_bitmap const *plan, uint32_t off
 		mcc_runtime_read(runtime, plan->raw_offset + offset, bytes, out);
 }
 
-/* a bitmap's pixels made whole (transcoded or decoded), the one kept */
+/* a bitmap's pixels made whole (transcoded or decoded, or a resource of
+bitmaps.map read whole), the one kept */
 static unsigned char const *bundle_bitmap_made(long plan_index)
 {
 	struct bundle_bitmap const *plan = &mcc_bundle.bitmaps[plan_index];
@@ -675,7 +676,9 @@ static unsigned char const *bundle_bitmap_made(long plan_index)
 			free(raw);
 		return NULL;
 	}
-	if (plan->transform == _pixels_transcoded)
+	if (plan->transform == _pixels_as_they_are)
+		mcc_bundle.cache = raw;
+	else if (plan->transform == _pixels_transcoded)
 	{
 		mcc_bitmaps_bc7_transcode(raw, plan->raw_size);
 		mcc_bundle.cache = raw;
@@ -909,7 +912,9 @@ static boolean bundle_read(void *context, unsigned long offset, unsigned long si
 		if (found == NONE)
 			return FALSE;
 		plan = &mcc_bundle.bitmaps[found];
-		if (plan->transform == _pixels_as_they_are)
+		/* (a resource of bitmaps.map is read whole, from its start: its
+		pieces from the bitmap made, mcc_resources.c's mcc_resource_read) */
+		if (plan->transform == _pixels_as_they_are && !plan->external)
 			return bundle_bitmap_raw_read(plan, at - plan->offset, bytes, buffer);
 		made = bundle_bitmap_made(found);
 		if (!made)
