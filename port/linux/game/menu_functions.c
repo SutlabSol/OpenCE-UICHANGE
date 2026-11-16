@@ -14259,6 +14259,8 @@ ENEMY AI, MAP WEAPONS and MAP VEHICLES) */
 #define SERVER_SCORING_HELP 27
 #define FF_START_SKULLS_HELP 28
 #define FF_MAP_CONTENT_HELP 29
+/* (GAME SETTINGS' VEHICLES, FIREFIGHT_SETUP_ROWS' last: its help) */
+#define FF_VEHICLES_HELP 40
 static void firefight_skulls_summary(char *text, unsigned int size);
 static boolean gametype_setup_floodfection(void);
 /* (MAP CONTENT's section: after the gametype's copy, gametype_edit) */
@@ -14287,6 +14289,8 @@ static boolean map_content_tag_toggle(struct widget_instance *widget);
 static boolean map_content_tags_all(boolean on);
 static void server_settings_map_content_init(struct widget_instance *list);
 static void server_settings_map_content_update(struct widget_instance *list);
+static void server_settings_vehicles_init(struct widget_instance *list);
+static void server_settings_vehicles_update(struct widget_instance *list);
 
 #define SERVER_SETTINGS_FIRST_ROW 73
 #define SERVER_SETTINGS_ROWS 8
@@ -14421,6 +14425,7 @@ static boolean server_settings_initialize(struct widget_instance *list)
 	if ((spinner = named(list, "scoring_spinner", 0)) != NULL)
 		spinner->parameters.list.selected_index = config_boolean("game.campaign_score") ? 0 : 1;
 	server_settings_map_content_init(list);
+	server_settings_vehicles_init(list);
 	/* (TAG PROFILE's: the Tag Injector's multiplayer profiles found again) */
 	port_tag_mp_profiles_scan();
 	p2p_set_hosting_public(multiplayer.mode == _multiplayer_mode_host_internet && !server_settings_private());
@@ -14841,6 +14846,7 @@ static void server_settings_update(struct widget_instance *list)
 	}
 	server_settings_tag_profile_update(list);
 	server_settings_map_content_update(list);
+	server_settings_vehicles_update(list);
 	/* (the rows each screen shows, one under another) */
 	server_settings_pack_rows(list);
 }
@@ -21054,17 +21060,6 @@ static struct gametype_option const gametype_options[] =
 		{ 1, 0, 2, 3, 4 } },
 	{ "ff_ordnance_spinner", _option_variant_u8, VARIANT_FIELD(game_engine_variant.firefight.ordnance_drops), 0, 4,
 		{ 0, 1, 2, 3 } },
-	{ "ff_r1_veh_spinner", _option_option_byte, OPTIONS_FIELD(firefight_early_vehicle), 0, 7,
-		{ _firefight_early_vehicle_none, _firefight_early_vehicle_warthog, _firefight_early_vehicle_rocket_warthog,
-		  _firefight_early_vehicle_ghost, _firefight_early_vehicle_scorpion, _firefight_early_vehicle_banshee,
-		  _firefight_early_vehicle_wraith } },
-	{ "ff_r2_veh_spinner", _option_option_byte, OPTIONS_FIELD(firefight_round2_vehicle), 0, 7,
-		{ _firefight_early_vehicle_none, _firefight_early_vehicle_warthog, _firefight_early_vehicle_rocket_warthog,
-		  _firefight_early_vehicle_ghost, _firefight_early_vehicle_scorpion, _firefight_early_vehicle_banshee,
-		  _firefight_early_vehicle_wraith } },
-	{ "ff_r3_veh_spinner", _option_option_byte, OPTIONS_FIELD(firefight_late_vehicle), 0, 5,
-		{ _firefight_late_vehicle_none, _firefight_late_vehicle_warthog, _firefight_late_vehicle_scorpion,
-		  _firefight_late_vehicle_banshee, _firefight_late_vehicle_wraith } },
 	{ "ff_allies_spinner", _option_option_byte, OPTIONS_FIELD(firefight_friendly_ai), 0, 5,
 		{ 0, 1, 1, 2, 2 } },
 	{ "ff_generators_spinner", _option_variant_short, VARIANT_FIELD(game_engine_variant.firefight.generator_count), 0, 4,
@@ -21676,6 +21671,11 @@ static boolean gametype_options_save(struct widget_instance *widget)
 /* ---- Server Setup's options: a copy of the game's gametype (the one chosen
 before), edited by the editor's screens, the game's on START GAME */
 
+/* GAME SETTINGS' VEHICLES (a Firefight game's, on a map with vehicles of its
+own placed): the host's choice, ALL AT SPAWN till changed, for the games
+after too (halo_firefight.h's _firefight_vehicle_spawns_*) */
+static byte server_settings_vehicle_spawns = _firefight_vehicle_spawns_all;
+
 static void gametype_setup_begin(void)
 {
 	/* (a Round Options copy left behind is not the game's) */
@@ -21690,6 +21690,8 @@ static void gametype_setup_begin(void)
 	map's last, when it has one saved, server_settings_map_content_kinds) */
 	gametype_edit.setup_options.firefight_map_content = _firefight_map_content_vanilla;
 	map_content_menu.loaded_for[0] = 0;
+	/* (VEHICLES a game's own too: the host's last, server_settings_vehicles_update) */
+	gametype_edit.setup_options.firefight_vehicle_spawns = server_settings_vehicle_spawns;
 	gametype_edit.setup = TRUE;
 	gametype_edit.vehicle_side = 0;
 }
@@ -21788,6 +21790,55 @@ static byte server_settings_map_health(void)
 	if (!map_name || !gametype_edit.setup || !server_settings_firefight())
 		return 0;
 	return firefight_map_health_detect(map_name);
+}
+
+/* (VEHICLES': whether the map has vehicles for the players, the game's, or
+its own where MAP CONTENT takes them: firefight_spawner.c's
+player_vehicle_tag_allowed) */
+static boolean server_settings_map_vehicles(void)
+{
+	char const *map_name = server_settings_map_name();
+	byte content = gametype_edit.setup_options.firefight_map_content;
+	boolean stock;
+	boolean own;
+
+	if (!gametype_edit.setup || !server_settings_firefight())
+		return FALSE;
+	firefight_map_has_vehicles(map_name, &stock, &own);
+	return stock || (own && (server_settings_map_content_kinds() & FIREFIGHT_MAP_CONTENT_HAS_VEHICLES) &&
+		(content & FIREFIGHT_MAP_CONTENT_MODE_MASK) != _firefight_map_content_vanilla &&
+		!(content & FIREFIGHT_MAP_CONTENT_VEHICLES_OFF));
+}
+
+static void server_settings_vehicles_init(struct widget_instance *list)
+{
+	struct widget_instance *spinner = named(list, "ff_vehicles_spinner", 0);
+
+	if (spinner && gametype_edit.setup)
+	{
+		spinner->parameters.list.selected_index = (short)PIN(gametype_edit.setup_options.firefight_vehicle_spawns, 0,
+			NUMBER_OF_FIREFIGHT_VEHICLE_SPAWNS - 1);
+	}
+}
+
+/* VEHICLES: shown on a map with vehicles for the players, its choice the
+game's copy's (and the host's for the games after) */
+static void server_settings_vehicles_update(struct widget_instance *list)
+{
+	struct widget_instance *row = named(list, "op_ff_vehicles", 0);
+	struct widget_instance *spinner = named(list, "ff_vehicles_spinner", 0);
+	struct widget_instance *help = list->parameters.list.extended_description;
+
+	if (!row)
+		return;
+	visible_set(row, server_settings_map_vehicles());
+	if (!row->visible || !spinner)
+		return;
+	server_settings_vehicle_spawns = (byte)PIN(spinner->parameters.list.selected_index, 0,
+		NUMBER_OF_FIREFIGHT_VEHICLE_SPAWNS - 1);
+	gametype_edit.setup_options.firefight_vehicle_spawns = server_settings_vehicle_spawns;
+	if (help && list->focused_child == row)
+		help->parameters.text_box.string_list_index = FF_VEHICLES_HELP;
 }
 
 /* ... and its row's value on the hub: the mode, and the kinds it takes of

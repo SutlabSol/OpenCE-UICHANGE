@@ -1037,12 +1037,9 @@ static long firefight_prep_countdown_ticks(
 	short round_num)
 {
 	struct game_variant_options const *opts = game_variant_options_get();
-	/* (the players' vehicles are all there from the start: the first round's
-	countdown is the one they're found in) */
-	boolean has_vehicles = opts && round_num == 1 &&
-		(opts->firefight_early_vehicle != _firefight_early_vehicle_none ||
-			opts->firefight_round2_vehicle != _firefight_early_vehicle_none ||
-			opts->firefight_late_vehicle != _firefight_late_vehicle_none);
+	/* (the players' vehicles there from the start, ALL AT SPAWN's: the first
+	round's countdown is the one they're found in) */
+	boolean has_vehicles = round_num == 1 && firefight_player_vehicles_at_start();
 	byte mode = opts ? opts->firefight_prep_countdown : _firefight_prep_15s;
 
 	/* Round 1 Wave 1 starts briskly unless vehicles are deployed right away */
@@ -1491,9 +1488,9 @@ void firefight_variant_options_default(
 	options->firefight_dropship_mode = _firefight_dropship_auto;
 	options->firefight_next_wave_mode = _firefight_next_wave_timer_60s;
 	options->firefight_player_faction_mode = _firefight_player_faction_spartan;
-	options->firefight_early_vehicle = _firefight_early_vehicle_warthog;
-	options->firefight_round2_vehicle = _firefight_early_vehicle_none;
-	options->firefight_late_vehicle = _firefight_late_vehicle_scorpion;
+	options->firefight_vehicle_spawns = _firefight_vehicle_spawns_all;
+	options->firefight_unused_vehicles[0] = 0;
+	options->firefight_unused_vehicles[1] = 0;
 	options->firefight_prep_countdown = _firefight_prep_30s;
 	options->firefight_skull_progression_mode = _firefight_skull_prog_standard;
 	options->firefight_player_shields = _firefight_shields_normal;
@@ -1546,13 +1543,6 @@ void firefight_builtin_variant_options(
 			options->firefight_wave_size_scale = p->wave_size;
 		if (p->enemy_loadout)
 			options->firefight_enemy_loadout = p->enemy_loadout;
-		/* (a variant with no vehicles has none for its players either) */
-		if (!p->vehicle_drops_enabled)
-		{
-			options->firefight_early_vehicle = _firefight_early_vehicle_none;
-			options->firefight_round2_vehicle = _firefight_early_vehicle_none;
-			options->firefight_late_vehicle = _firefight_late_vehicle_none;
-		}
 		return;
 	}
 }
@@ -1595,6 +1585,7 @@ static boolean firefight_initialize_for_new_map(
 	for (i = 0; i < FIREFIGHT_MAX_SET_VEHICLES; i++)
 		ff_state.deployed_set_vehicles[i] = NONE;
 	ff_state.deployed_set_vehicle_count = 0;
+	firefight_player_vehicles_reset();
 	for (i = 0; i < FIREFIGHT_MAX_GENERATORS; i++)
 		ff_state.generators[i].object_index = NONE;
 	firefight_ordnance_pod_reset();

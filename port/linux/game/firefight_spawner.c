@@ -5715,6 +5715,11 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 		(round_num >= 4 || heavy_anti_armor) ? _ff_banner_heavy_ordnance_drop : _ff_banner_ordnance_drop,
 		0,
 		3 * TICKS_PER_SECOND);
+
+	/* (VEHICLES' ORDNANCE REWARDS: a vehicle with each drop past the game's
+	first, after its banner) */
+	if (ff_state.ordnance_drops_made > 1)
+		firefight_reward_player_vehicle();
 }
 
 /* ---------- The Ordnance Pods
@@ -6834,57 +6839,6 @@ void firefight_spawn_friendly_reinforcements(short count)
 }
 
 /* ---------- Round-Scheduled Player Vehicle Spawning & End-of-Round Despawning (Feature 7) */
-
-static long resolve_late_vehicle_tag(byte late_type);
-
-static long resolve_early_vehicle_tag(byte early_type)
-{
-	static char const *const warthog_tags[] = {
-		"vehicles\\warthog\\mp_warthog",
-		"vehicles\\warthog\\warthog",
-		"vehicles\\rwarthog\\rwarthog"
-	};
-	static char const *const rwarthog_tags[] = {
-		"vehicles\\rwarthog\\rwarthog",
-		"vehicles\\warthog\\mp_warthog",
-		"vehicles\\warthog\\warthog"
-	};
-	static char const *const ghost_tags[] = { "vehicles\\ghost\\ghost_mp", "vehicles\\ghost\\ghost" };
-
-	switch (early_type)
-	{
-	case _firefight_early_vehicle_warthog:        return find_loaded_vehicle_tag(warthog_tags, 3);
-	case _firefight_early_vehicle_ghost:          return find_loaded_vehicle_tag(ghost_tags, 2);
-	case _firefight_early_vehicle_rocket_warthog: return find_loaded_vehicle_tag(rwarthog_tags, 3);
-	case _firefight_early_vehicle_scorpion:       return resolve_late_vehicle_tag(_firefight_late_vehicle_scorpion);
-	case _firefight_early_vehicle_banshee:        return resolve_late_vehicle_tag(_firefight_late_vehicle_banshee);
-	case _firefight_early_vehicle_wraith:         return resolve_late_vehicle_tag(_firefight_late_vehicle_wraith);
-	default:                                      return NONE;
-	}
-}
-
-static long resolve_late_vehicle_tag(byte late_type)
-{
-	static char const *const scorpion_tags[] = {
-		"vehicles\\scorpion\\scorpion_mp",
-		"vehicles\\scorpion\\scorpion",
-		"vehicles\\rwarthog\\rwarthog",
-		"vehicles\\warthog\\mp_warthog",
-		"vehicles\\warthog\\warthog"
-	};
-	static char const *const wraith_tags[] = { "vehicles\\wraith\\wraith" };
-	static char const *const banshee_tags[] = { "vehicles\\banshee\\banshee_mp", "vehicles\\banshee\\banshee" };
-	static char const *const warthog_tags[] = { "vehicles\\warthog\\mp_warthog", "vehicles\\warthog\\warthog" };
-
-	switch (late_type)
-	{
-	case _firefight_late_vehicle_scorpion: return find_loaded_vehicle_tag(scorpion_tags, 5);
-	case _firefight_late_vehicle_wraith:   return find_loaded_vehicle_tag(wraith_tags, 1);
-	case _firefight_late_vehicle_banshee:  return find_loaded_vehicle_tag(banshee_tags, 2);
-	case _firefight_late_vehicle_warthog:  return find_loaded_vehicle_tag(warthog_tags, 2);
-	default:                               return NONE;
-	}
-}
 
 /* a vehicle placement (custom_edition_objects.c has the fields past the object) */
 struct ff_scenario_vehicle
@@ -8074,82 +8028,149 @@ static long pick_map_vehicle(boolean heavy, boolean custom_only)
 	return count ? ff_map_vehicle_tags[candidates[spawner_rand() % (unsigned long)count]] : NONE;
 }
 
-/* ---------- The players' vehicles: there from the start, never taken away */
+/* ---------- The players' vehicles: the map's own placements' (VEHICLES)
 
-/* (each slot of deployed_set_vehicles: the three PLAYER VEHICLE rows', then
-INCLUDE MAP's of the map's own) */
+Each slot of deployed_set_vehicles is one of the map's vehicle placements a
+player could drive (player_vehicles_build), made where the map has it: ALL
+AT SPAWN all of them from the start; ORDNANCE REWARDS one more, at random,
+a few seconds after each ordnance drop past the game's first (on a PLAYER
+VEH PAD, where Forge marked any); NONE none. A slot's vehicle once made is
+the players' for the game: made again at a round's start where it went */
+
 enum
 {
-	FF_PLAYER_VEHICLE_ROWS = 3
+	/* (a reward's vehicle after the drop's banner) */
+	FF_VEHICLE_REWARD_DELAY_TICKS = 4 * TICKS_PER_SECOND
 };
 
-/* the vehicle a PLAYER VEHICLE row's kind is, ONLY MAP's of the map's own:
-one whose name has the kind's word, else the map's in turn */
-static long player_vehicle_tag(short row)
+static struct
 {
-	static char const *const kind_words[NUMBER_OF_FIREFIGHT_EARLY_VEHICLES] = {
-		NULL, "warthog", "ghost", "rwarthog", "scorpion", "banshee", "wraith"
-	};
-	static char const *const late_kind_words[NUMBER_OF_FIREFIGHT_LATE_VEHICLES] = {
-		NULL, "scorpion", "wraith", "banshee", "warthog"
-	};
+	boolean built;
+	short count;
+	short placements[FIREFIGHT_MAX_SET_VEHICLES];
+	boolean earned[FIREFIGHT_MAX_SET_VEHICLES];
+	boolean rewarded[FIREFIGHT_MAX_SET_VEHICLES];
+	short rewards_pending;
+	long reward_time;
+} g_player_vehicles;
+
+static byte player_vehicle_spawns(void)
+{
 	struct game_variant_options const *opts = game_variant_options_get();
-	byte kind;
-	char const *word;
-	short i;
 
-	if (!opts)
-		return NONE;
-	kind = row == 0 ? opts->firefight_early_vehicle : row == 1 ? opts->firefight_round2_vehicle : opts->firefight_late_vehicle;
-	if (kind == 0)
-		return NONE;
-	if (!map_vehicles_only())
-	{
-		return row < 2 ? resolve_early_vehicle_tag(kind) : resolve_late_vehicle_tag(kind);
-	}
-	word = row < 2 ? (kind < NUMBER_OF_FIREFIGHT_EARLY_VEHICLES ? kind_words[kind] : NULL) :
-		(kind < NUMBER_OF_FIREFIGHT_LATE_VEHICLES ? late_kind_words[kind] : NULL);
-	for (i = 0; word && i < ff_map_vehicle_count; i++)
-	{
-		char const *name = tag_get_name(ff_map_vehicle_tags[i]);
-
-		if (name && strstr(name, word))
-			return ff_map_vehicle_tags[i];
-	}
-	return ff_map_vehicle_tags[row % ff_map_vehicle_count];
+	return opts ? (byte)PIN(opts->firefight_vehicle_spawns, 0, NUMBER_OF_FIREFIGHT_VEHICLE_SPAWNS - 1) :
+		(byte)_firefight_vehicle_spawns_all;
 }
 
-/* where a player vehicle goes: a PLAYER VEH PAD (any round's), the nth of
-them for the nth vehicle; else the map's own vehicle spots */
-static boolean player_vehicle_place(long vehicle_tag, short nth, real_point3d *out_position, real *out_facing)
+/* a vehicle the players may have: one they could drive, the game's own, or
+the map's own where MAP CONTENT takes them (and its CUSTOM list has it on) */
+static boolean player_vehicle_tag_allowed(long tag_index)
 {
-	boolean require_approved_veh_markers = (map_has_any_custom_ff_spawns() || !is_default_stock_map());
+	char lowered[256];
 
-	if (require_approved_veh_markers)
+	if (tag_index == NONE)
+		return FALSE;
+	lowercase_copy(tag_get_name(tag_index), lowered, sizeof(lowered));
+	if (!map_vehicle_tag_drivable(lowered))
+		return FALSE;
+	if (vehicle_tag_stock(lowered))
+		return TRUE;
+	return map_content_of(FIREFIGHT_MAP_CONTENT_VEHICLES_OFF) != _firefight_map_content_vanilla &&
+		!map_content_custom_off(FIREFIGHT_MAP_CONTENT_VEHICLES_CUSTOM, _firefight_map_content_kind_vehicles, tag_index);
+}
+
+/* (the placement's vehicle type, NONE for none) */
+static long player_vehicle_placement_tag(struct scenario *scen, short placement_index,
+	struct ff_scenario_vehicle **out_placement)
+{
+	struct ff_scenario_vehicle *placement;
+	struct scenario_object_palette_entry *palette;
+	short palette_index;
+
+	if (!scen || !VALID_INDEX(placement_index, scen->vehicles.count))
+		return NONE;
+	placement = TAG_BLOCK_GET_ELEMENT(&scen->vehicles, placement_index, struct ff_scenario_vehicle);
+	palette_index = placement->object.palette_entry_index;
+	if (!VALID_INDEX(palette_index, scen->vehicle_palette.count))
+		return NONE;
+	palette = TAG_BLOCK_GET_ELEMENT(&scen->vehicle_palette, palette_index, struct scenario_object_palette_entry);
+	if (out_placement)
+		*out_placement = placement;
+	return palette->reference.index;
+}
+
+/* the map's placements the players' vehicles are, once a game (NONE's
+none); ALL AT SPAWN's each earned */
+static void player_vehicles_build(void)
+{
+	struct scenario *scen;
+	byte spawns;
+	short i;
+
+	if (g_player_vehicles.built || !(scen = global_scenario_try_and_get()))
+		return;
+	g_player_vehicles.built = TRUE;
+	g_player_vehicles.count = 0;
+	spawns = player_vehicle_spawns();
+	if (spawns == _firefight_vehicle_spawns_none)
+		return;
+	for (i = 0; i < scen->vehicles.count && g_player_vehicles.count < FIREFIGHT_MAX_SET_VEHICLES; i++)
 	{
-		real_point3d pad_pts[16];
-		real pad_facings[16];
-		int pad_types[16];
-		short pad_count = collect_matching_custom_ff_spawns(
-			(1UL << FF_SPAWN_TYPE_PLAYER_VEHICLE), 1, 1, FALSE, FALSE, TRUE,
-			pad_pts, pad_facings, pad_types, 16);
-		short tries;
+		struct ff_scenario_vehicle *placement = NULL;
+		long tag_index = player_vehicle_placement_tag(scen, i, &placement);
+		short slot = g_player_vehicles.count;
 
-		for (tries = 0; tries < pad_count; tries++)
+		if (!placement || !player_vehicle_tag_allowed(tag_index) || !point_is_in_valid_bsp(&placement->object.position))
+			continue;
+		g_player_vehicles.placements[slot] = i;
+		g_player_vehicles.earned[slot] = spawns == _firefight_vehicle_spawns_all;
+		g_player_vehicles.rewarded[slot] = FALSE;
+		g_player_vehicles.count++;
+	}
+	error(_error_silent, "firefight: %d of the map's %d vehicle placements are the players' (%s)",
+		g_player_vehicles.count, scen->vehicles.count,
+		spawns == _firefight_vehicle_spawns_all ? "all at spawn" : "ordnance rewards");
+}
+
+void firefight_player_vehicles_reset(void)
+{
+	csmemset(&g_player_vehicles, 0, sizeof(g_player_vehicles));
+	g_player_vehicles.reward_time = NONE;
+}
+
+boolean firefight_player_vehicles_at_start(void)
+{
+	if (player_vehicle_spawns() != _firefight_vehicle_spawns_all)
+		return FALSE;
+	player_vehicles_build();
+	return g_player_vehicles.count > 0;
+}
+
+/* a free PLAYER VEH PAD (the nth's first), for a reward's vehicle */
+static boolean player_vehicle_pad(short nth, real_point3d *out_position, real *out_facing)
+{
+	real_point3d pad_pts[16];
+	real pad_facings[16];
+	int pad_types[16];
+	short pad_count = collect_matching_custom_ff_spawns(
+		(1UL << FF_SPAWN_TYPE_PLAYER_VEHICLE), 1, 1, FALSE, FALSE, TRUE,
+		pad_pts, pad_facings, pad_types, 16);
+	short tries;
+
+	for (tries = 0; tries < pad_count; tries++)
+	{
+		short pick = (short)((nth + tries) % pad_count);
+		real_point3d position = pad_pts[pick];
+
+		project_point_to_ground(&position, 0.75f);
+		if (map_vehicle_spot_clear(&position))
 		{
-			short pick = (short)((nth + tries) % pad_count);
-			real_point3d position = pad_pts[pick];
-
-			project_point_to_ground(&position, 0.75f);
-			if (map_vehicle_spot_clear(&position))
-			{
-				*out_position = position;
-				*out_facing = pad_facings[pick];
-				return TRUE;
-			}
+			*out_position = position;
+			*out_facing = pad_facings[pick];
+			return TRUE;
 		}
 	}
-	return map_vehicle_spot(vehicle_tag, out_position, out_facing);
+	return FALSE;
 }
 
 /* (whether the slot's vehicle is still there to drive: not deleted, not a
@@ -8162,9 +8183,41 @@ static boolean player_vehicle_present(long vehicle_index)
 	return object && !TEST_FLAG(object->object.damage_flags, _object_dead_bit);
 }
 
+/* a slot's vehicle made: where the map has it (a reward's on a pad first),
+else at the nearest free spot of the map's vehicles */
+static boolean player_vehicle_make(short slot, short nth)
+{
+	struct ff_scenario_vehicle *placement = NULL;
+	long tag_index = player_vehicle_placement_tag(global_scenario_try_and_get(),
+		g_player_vehicles.placements[slot], &placement);
+	struct object_placement_data placement_data;
+	real_point3d position;
+	real facing;
+	long vehicle_index;
+
+	if (!placement || tag_index == NONE)
+		return FALSE;
+	position = placement->object.position;
+	facing = placement->object.rotation.yaw;
+	if (!(g_player_vehicles.rewarded[slot] && player_vehicle_pad(nth, &position, &facing)) &&
+		!map_vehicle_spot_clear(&position) && !map_vehicle_spot(tag_index, &position, &facing))
+	{
+		return FALSE;
+	}
+	object_placement_data_new(&placement_data, tag_index, NONE);
+	placement_data.position = position;
+	vector3d_from_angle(&placement_data.forward, facing);
+	placement_data.owner_team_index = _game_team_player;
+	vehicle_index = object_new(&placement_data);
+	if (vehicle_index == NONE)
+		return FALSE;
+	ff_state.deployed_set_vehicles[slot] = vehicle_index;
+	ff_state.deployed_set_vehicle_count++;
+	return TRUE;
+}
+
 void firefight_spawn_player_vehicles(void)
 {
-	long tags[FIREFIGHT_MAX_SET_VEHICLES];
 	short slot;
 	short made = 0;
 	short nth = 0;
@@ -8173,53 +8226,151 @@ void firefight_spawn_player_vehicles(void)
 	second tick) */
 	if (network_game_distributed_client() || ff_state.session_elapsed_ticks < 2)
 		return;
-	for (slot = 0; slot < FIREFIGHT_MAX_SET_VEHICLES; slot++)
-		tags[slot] = slot < FF_PLAYER_VEHICLE_ROWS ? player_vehicle_tag(slot) : NONE;
-	/* (INCLUDE MAP: each of the map's own beside the game's, once) */
-	if (map_content_of(FIREFIGHT_MAP_CONTENT_VEHICLES_OFF) == _firefight_map_content_include_map)
-	{
-		short i;
-
-		for (i = 0, slot = FF_PLAYER_VEHICLE_ROWS; i < ff_map_vehicle_count && slot < FIREFIGHT_MAX_SET_VEHICLES; i++)
-		{
-			if (!ff_map_vehicle_stock[i])
-				tags[slot++] = ff_map_vehicle_tags[i];
-		}
-	}
-
+	player_vehicles_build();
 	ff_state.deployed_set_vehicle_count = 0;
 	for (slot = 0; slot < FIREFIGHT_MAX_SET_VEHICLES; slot++)
 	{
-		struct object_placement_data placement;
-		real_point3d position;
-		real facing = 0.0f;
-		long vehicle_index;
-
-		if (player_vehicle_present(ff_state.deployed_set_vehicles[slot]))
+		if (slot < g_player_vehicles.count && player_vehicle_present(ff_state.deployed_set_vehicles[slot]))
 		{
 			ff_state.deployed_set_vehicle_count++;
 			nth++;
 			continue;
 		}
 		ff_state.deployed_set_vehicles[slot] = NONE;
-		if (tags[slot] == NONE)
+		if (slot >= g_player_vehicles.count || !g_player_vehicles.earned[slot])
 			continue;
-		if (!player_vehicle_place(tags[slot], nth, &position, &facing))
-			continue;
-		object_placement_data_new(&placement, tags[slot], NONE);
-		placement.position = position;
-		vector3d_from_angle(&placement.forward, facing);
-		placement.owner_team_index = _game_team_player;
-		vehicle_index = object_new(&placement);
-		if (vehicle_index == NONE)
-			continue;
-		ff_state.deployed_set_vehicles[slot] = vehicle_index;
-		ff_state.deployed_set_vehicle_count++;
-		nth++;
-		made++;
+		if (player_vehicle_make(slot, nth))
+		{
+			nth++;
+			made++;
+		}
 	}
 	if (made)
 		firefight_announce_banner(_ff_banner_vehicle_deployed, MAX(1, ff_state.current_round), 3 * TICKS_PER_SECOND);
+}
+
+void firefight_reward_player_vehicle(void)
+{
+	if (network_game_distributed_client() || player_vehicle_spawns() != _firefight_vehicle_spawns_ordnance)
+		return;
+	g_player_vehicles.rewards_pending++;
+	g_player_vehicles.reward_time = game_time_get() + FF_VEHICLE_REWARD_DELAY_TICKS;
+}
+
+/* (each tick, the host's: a reward's vehicle, when its time comes; one of
+the map's not yet the players', at random, till they have all) */
+static void player_vehicle_rewards_update(void)
+{
+	short candidates[FIREFIGHT_MAX_SET_VEHICLES];
+	short count = 0;
+	short slot;
+	short nth = 0;
+
+	if (g_player_vehicles.rewards_pending <= 0 || g_player_vehicles.reward_time == NONE ||
+		game_time_get() < g_player_vehicles.reward_time)
+	{
+		return;
+	}
+	g_player_vehicles.rewards_pending--;
+	g_player_vehicles.reward_time = g_player_vehicles.rewards_pending > 0 ?
+		game_time_get() + FF_VEHICLE_REWARD_DELAY_TICKS : NONE;
+	player_vehicles_build();
+	for (slot = 0; slot < g_player_vehicles.count; slot++)
+	{
+		if (!g_player_vehicles.earned[slot])
+			candidates[count++] = slot;
+		else if (g_player_vehicles.rewarded[slot])
+			nth++;
+	}
+	if (!count)
+		return;
+	slot = candidates[spawner_rand() % (unsigned long)count];
+	g_player_vehicles.earned[slot] = TRUE;
+	g_player_vehicles.rewarded[slot] = TRUE;
+	if (player_vehicle_make(slot, nth))
+		firefight_announce_banner(_ff_banner_vehicle_deployed, MAX(1, ff_state.current_round), 3 * TICKS_PER_SECOND);
+}
+
+/* ---------- VEHICLES' row: whether a map (not loaded) has vehicles placed */
+
+static struct
+{
+	char map[128];
+	boolean stock;
+	boolean own;
+} g_map_vehicles;
+
+/* (the game's own maps with vehicles placed) */
+static boolean stock_map_has_vehicles(char const *stem)
+{
+	static char const *const with_vehicles[] = {
+		"bloodgulch", "dangercanyon", "deathisland", "gephyrophobia", "icefields", "infinity",
+		"sidewinder", "timberland",
+		"a10", "a30", "a50", "b30", "b40", "c10", "c20", "c40", "d20", "d40"
+	};
+	short i;
+
+	for (i = 0; i < (short)NUMBEROF(with_vehicles); i++)
+	{
+		if (!strcmp(stem, with_vehicles[i]))
+			return TRUE;
+	}
+	return FALSE;
+}
+
+static int map_vehicles_visit(void *context, unsigned long group_tag, char const *name)
+{
+	char lowered[256];
+
+	(void)context;
+	if (group_tag != VEHICLE_DEFINITION_TAG)
+		return TRUE;
+	lowercase_copy(name, lowered, sizeof(lowered));
+	if (!map_vehicle_tag_drivable(lowered))
+		return TRUE;
+	if (vehicle_tag_stock(lowered))
+		g_map_vehicles.stock = TRUE;
+	else
+		g_map_vehicles.own = TRUE;
+	return TRUE;
+}
+
+void firefight_map_has_vehicles(char const *map_name, boolean *stock, boolean *own)
+{
+	char stem[96];
+
+	*stock = TRUE;
+	*own = FALSE;
+	if (!map_name || !map_name[0])
+		return;
+	if (strcmp(g_map_vehicles.map, map_name))
+	{
+		boolean read;
+
+		snprintf(g_map_vehicles.map, sizeof(g_map_vehicles.map), "%s", map_name);
+		g_map_vehicles.stock = FALSE;
+		g_map_vehicles.own = FALSE;
+		map_content_stem(map_name, stem, sizeof(stem));
+		if (is_stock_map_stem(stem))
+		{
+			g_map_vehicles.stock = stock_map_has_vehicles(stem);
+			read = TRUE;
+		}
+		else if (custom_edition_level_name(map_name))
+			read = custom_edition_map_tag_names_walk(map_name, map_vehicles_visit, NULL);
+		else if (mcc_level_name(map_name))
+			read = mcc_cache_tag_names_walk(map_name, map_vehicles_visit, NULL);
+		else
+			read = FALSE;
+		/* (a map not read: as if it had them) */
+		if (!read)
+			g_map_vehicles.stock = TRUE;
+		error(_error_silent, "firefight: %s's vehicles: %s%s%s", map_name,
+			g_map_vehicles.stock ? "the game's" : "", g_map_vehicles.stock && g_map_vehicles.own ? ", " : "",
+			g_map_vehicles.own ? "its own" : !g_map_vehicles.stock ? "none" : "");
+	}
+	*stock = g_map_vehicles.stock;
+	*own = g_map_vehicles.own;
 }
 
 static boolean vehicle_has_player_rider(long vehicle_index)
@@ -8362,6 +8513,8 @@ void firefight_update_dropships_and_vehicles(void)
 {
 	short i;
 	long now = game_time_get();
+
+	player_vehicle_rewards_update();
 
 	/* Drain queued reinforcement enemies as active alive enemies fall below the safe 28-actor cap */
 	if (g_queued_reinforcement_enemies > 0 &&

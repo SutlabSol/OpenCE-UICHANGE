@@ -3836,22 +3836,25 @@ def _server_settings() -> list:
                                                      ("color", "#FF2896FF"), ("text_x", 13), ("text_y", 4)], [])
             rows.append((f"{base}/op_{key}", None))
             continue
+        wide = key in FIREFIGHT_WIDE_SPINNERS
+        spinner_width = 206 if wide else 147
         extra += _widget(f"{base}/op_{key}", [("width", 512), ("height", 28),
                                              ("flags", "pass_unhandled_to_focused_child"),
                                              ("bitmap", "bitmaps/option_bkds"), ("color", "#FF2896FF")],
                          [f'<child widget="{base}/{key}_label"/>',
-                          f'<child widget="{base}/{key}_spinner" x="320" y="1"/>'])
+                          f'<child widget="{base}/{key}_spinner" x="{300 if wide else 320}" y="1"/>'])
         extra += _widget(f"{base}/{key}_label", [("type", "text"), ("controller", 1), ("width", 300),
                                                  ("height", 22), ("string_list", f"{base}/labels"),
                                                  ("string_index", firefight_label + index), ("font", "ui\\large_ui"),
                                                  ("color", "#FF2896FF"), ("text_x", 13), ("text_y", 4)], [])
         extra += _widget(f"{base}/{key}_spinner",
-                         [("type", "spinner"), ("left", 3), ("top", 2), ("width", 147), ("height", 20),
+                         [("type", "spinner"), ("left", 3), ("top", 2), ("width", spinner_width), ("height", 20),
                           ("flags", "pass_unhandled_to_focused_child left_right_tabs_items"),
                           ("strings", "|".join(choices)), ("font", "ui\\large_ui"),
                           ("color", "#FF2896FF"), ("align", "center"), ("text_y", 1),
                           ("header_bitmap", "bitmaps/arrow_sm_left"), ("footer_bitmap", "bitmaps/arrow_sm_right"),
-                          ("header_bounds", "7 -6 19 0"), ("footer_bounds", "7 150 19 156")],
+                          ("header_bounds", "7 -6 19 0"),
+                          ("footer_bounds", f"7 {spinner_width + 3} 19 {spinner_width + 9}")],
                          ['<on event="left_mouse" run="mouse spinner 1wide click"/>'])
         rows.append((f"{base}/op_{key}", None))
     extra += _button(f"{base}/button_defaults", 3, [])
@@ -4109,7 +4112,7 @@ SERVER_SETUP_SECTIONS = [
      ["max_players", "invite", "listing", "password", "map_share_options"]),
     ("game_settings", "GAME SETTINGS", "The gametype and its rules for this game (co-op's\\noptions, for a co-op game).",
      ["game_type", "player_options", "item_options", "vehicle_options", "indicator_options", "team_options",
-      "coop_options", "voice_options", "ff_player_scale", "ff_start_skulls", "scoring"]),
+      "coop_options", "voice_options", "ff_player_scale", "ff_start_skulls", "ff_vehicles", "scoring"]),
     # (a Firefight game's on a Custom Edition map with enemies, weapons or
     # vehicles of its own: menu_functions.c's server_settings_map_content_update)
     ("map_content", "MAP CONTENT", "Play the map's own enemies, weapons and vehicles\\nin this game, beside the game's or alone.",
@@ -4171,7 +4174,15 @@ FIREFIGHT_SETUP_ROWS = [
      "ON: shields come back as in Halo. OFF: never (only\\nthe map's pickups). Kept for this map."),
     ("ff_mc_health_regen", "HEALTH REGEN", ["OFF", "ON"],
      "ON: health comes back after 5 seconds unhurt, as a\\nshield does. Kept for this map."),
+    # GAME SETTINGS' VEHICLES (a map with vehicles placed for the players:
+    # menu_functions.c's server_settings_vehicles_update, FF_VEHICLES_HELP;
+    # firefight_spawner.c's players' vehicles), last so no other's help moves;
+    # its spinner wide (FIREFIGHT_WIDE_SPINNERS)
+    ("ff_vehicles", "VEHICLES", ["ALL AT SPAWN", "ORDNANCE REWARDS", "NONE"],
+     "The map's vehicles for the players: all from the\\nstart, one with each ordnance drop, or none."),
 ]
+# (the rows whose spinners are wider, for their words: nearer their labels)
+FIREFIGHT_WIDE_SPINNERS = {"ff_vehicles"}
 # (the rows of no choices: what A runs, and the screen it opens, if any)
 FIREFIGHT_SETUP_RUNS = {
     "ff_start_skulls": ("ss firefight skulls", None),

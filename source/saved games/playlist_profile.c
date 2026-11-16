@@ -1141,9 +1141,11 @@ static boolean playlist_profile_options_from_block(
 	options->firefight_dropship_mode = (byte)PIN(options->firefight_dropship_mode, 0, NUMBER_OF_FIREFIGHT_DROPSHIP_MODES - 1);
 	options->firefight_next_wave_mode = (byte)PIN(options->firefight_next_wave_mode, 0, NUMBER_OF_FIREFIGHT_NEXT_WAVE_MODES - 1);
 	options->firefight_player_faction_mode = (byte)PIN(options->firefight_player_faction_mode, 0, NUMBER_OF_FIREFIGHT_PLAYER_FACTION_MODES - 1);
-	options->firefight_early_vehicle = (byte)PIN(options->firefight_early_vehicle, 0, NUMBER_OF_FIREFIGHT_EARLY_VEHICLES - 1);
-	options->firefight_round2_vehicle = (byte)PIN(options->firefight_round2_vehicle, 0, NUMBER_OF_FIREFIGHT_EARLY_VEHICLES - 1);
-	options->firefight_late_vehicle = (byte)PIN(options->firefight_late_vehicle, 0, NUMBER_OF_FIREFIGHT_LATE_VEHICLES - 1);
+	/* (VEHICLES is a game's, Server Setup's, never a variant's: and the
+	bytes were ROUND 1, 2 and 3 VEHICLE, saved) */
+	options->firefight_vehicle_spawns = _firefight_vehicle_spawns_all;
+	options->firefight_unused_vehicles[0] = 0;
+	options->firefight_unused_vehicles[1] = 0;
 	options->firefight_prep_countdown = (byte)PIN(options->firefight_prep_countdown, 0, NUMBER_OF_FIREFIGHT_PREP_MODES - 1);
 	options->firefight_skull_progression_mode = (byte)PIN(options->firefight_skull_progression_mode, 0, NUMBER_OF_FIREFIGHT_SKULL_PROG_MODES - 1);
 	options->firefight_player_shields = (byte)PIN(options->firefight_player_shields, 0, NUMBER_OF_FIREFIGHT_SHIELD_MODES - 1);

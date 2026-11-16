@@ -237,8 +237,6 @@ def test_each_firefight_spinner_has_as_many_values_as_choices():
 def test_the_defaults_show_as_what_they_are():
     escalation = option_values("ff_escalation_spinner")
     assert menus.FIREFIGHT_CHOICES["var_ff_escalation"][escalation.index("_firefight_escalation_medium")] == "+25% / SET"
-    late = option_values("ff_r3_veh_spinner")
-    assert menus.FIREFIGHT_CHOICES["var_ff_late_veh"][late.index("_firefight_late_vehicle_scorpion")] == "SCORPION"
 
 
 def test_generator_attackers_default_to_half_of_a_wave_and_outweigh_the_players():
@@ -294,13 +292,22 @@ def test_floodfight_defaults_to_250_and_the_fiestas_to_random_enemy_weapons():
     assert FIREFIGHT_C.count("FALSE, 0, _firefight_enemy_loadout_random") == 2
 
 
-def test_vehicle_rows_are_the_values_their_labels_say():
-    names = {"NONE": "none", "WARTHOG": "warthog", "ROCKET HOG": "rocket_warthog", "GHOST": "ghost",
-             "SCORPION": "scorpion", "BANSHEE": "banshee", "WRAITH": "wraith"}
-    for spinner in ("ff_r1_veh_spinner", "ff_r2_veh_spinner"):
-        values = re.findall(r"_firefight_early_vehicle_(\w+)", spinner_values(spinner))
-        assert values == [names[label] for label in menus.FIREFIGHT_CHOICES["var_ff_round_veh"]]
-    assert "OPTIONS_FIELD(firefight_round2_vehicle)" in MENU_C
+def test_vehicles_are_a_game_s_server_setup_row_not_the_variant_s():
+    """VEHICLES (ALL AT SPAWN first, the default) is GAME SETTINGS', shown on a
+    map with vehicles; the variant's ROUND 1-3 VEHICLE rows are gone"""
+    assert not [row for row in menus.FIREFIGHT_ROWS if row[1] in ("r1_veh", "r2_veh", "r3_veh")]
+    assert "ff_r1_veh_spinner" not in MENU_C and "var_ff_round_veh" not in menus.FIREFIGHT_CHOICES
+    rows = dict((row[0], row[2]) for row in port_settings.FIREFIGHT_SETUP_ROWS)
+    assert rows["ff_vehicles"] == ["ALL AT SPAWN", "ORDNANCE REWARDS", "NONE"]
+    keys = [row[0] for row in port_settings.FIREFIGHT_SETUP_ROWS]
+    base = int(re.search(r"#define FF_PLAYER_SCALE_HELP (\d+)", MENU_C).group(1))
+    assert base + keys.index("ff_vehicles") == int(re.search(r"#define FF_VEHICLES_HELP (\d+)", MENU_C).group(1))
+    members = dict((section[0], section[3]) for section in port_settings.SERVER_SETUP_SECTIONS)["game_settings"]
+    assert "ff_vehicles" in members
+    assert "_firefight_vehicle_spawns_all = 0," in (ROOT / "port/linux/include/halo_firefight.h").read_text()
+    assert "byte firefight_vehicle_spawns;" in ENGINE_H
+    profile = (ROOT / "source/saved games/playlist_profile.c").read_text()
+    assert "options->firefight_vehicle_spawns = _firefight_vehicle_spawns_all;" in profile
 
 
 def test_enemy_loadout_is_on_enemy_units_page():
@@ -320,19 +327,25 @@ def test_the_map_vote_is_laid_out_as_the_lobby():
 
 
 def test_a_players_vehicle_goes_on_a_pad_or_the_maps_own_spots():
-    body = SPAWNER_C.split("static boolean player_vehicle_place(", 1)[1].split("\n}\n", 1)[0]
+    """where the map has it (a reward's on a pad first), else the map's own
+    free spots: never the resupply point"""
+    body = SPAWNER_C.split("static boolean player_vehicle_make(", 1)[1].split("\n}\n", 1)[0]
     assert "calculate_safe_player_resupply_point" not in body
-    assert "return map_vehicle_spot(vehicle_tag, out_position, out_facing);" in body
+    assert "g_player_vehicles.rewarded[slot] && player_vehicle_pad(nth, &position, &facing)" in body
+    assert "!map_vehicle_spot(tag_index, &position, &facing)" in body
 
 
 def test_the_players_vehicles_are_there_from_the_start_and_stay():
-    """all three rows' at the second tick, made again at a round where one
-    went, and none taken away at a set's end or the bonus round"""
+    """the map's placements' at the second tick, made again at a round where
+    one went, and none taken away at a set's end or the bonus round"""
     assert "if (ff_state.session_elapsed_ticks == 2)\n\t\t\tfirefight_spawn_player_vehicles();" in FIREFIGHT_C
     assert FIREFIGHT_C.count("firefight_spawn_player_vehicles();") == 2
     assert "despawn" not in FIREFIGHT_C and "firefight_despawn" not in SPAWNER_C
     body = SPAWNER_C.split("void firefight_spawn_player_vehicles(void)", 1)[1].split("\n}\n", 1)[0]
-    assert "if (player_vehicle_present(ff_state.deployed_set_vehicles[slot]))" in body
+    assert "player_vehicle_present(ff_state.deployed_set_vehicles[slot])" in body
+    assert "!g_player_vehicles.earned[slot]" in body
+    # (ORDNANCE REWARDS: one with each drop past the first, after its banner)
+    assert "if (ff_state.ordnance_drops_made > 1)\n\t\tfirefight_reward_player_vehicle();" in SPAWNER_C
 
 
 def test_map_content_is_a_server_setup_section_not_a_variant_rule():

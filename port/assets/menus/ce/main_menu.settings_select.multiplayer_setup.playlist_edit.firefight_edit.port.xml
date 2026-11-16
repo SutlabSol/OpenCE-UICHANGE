@@ -365,33 +365,6 @@
 		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_ordnance_label"/>
 		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_ordnance_spinner" x="286" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_r1_veh_label" type="text" controller="1" width="280" height="22" string_list="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/firefight_labels" string_index="31" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
-	</widget>
-	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_r1_veh_spinner" type="spinner" left="2" top="2" width="206" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" string_list="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/var_ff_round_veh" font="ui\large_ui" color="#FF2896FF" align="center" text_y="4" list_flags="items_from_strings" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -13 19 -7" footer_bounds="7 208 19 214">
-		<on event="left_mouse" run="mouse spinner 1wide click"/>
-	</widget>
-	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_r1_veh" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_r1_veh_label"/>
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_r1_veh_spinner" x="286" y="1"/>
-	</widget>
-	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_r2_veh_label" type="text" controller="1" width="280" height="22" string_list="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/firefight_labels" string_index="32" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
-	</widget>
-	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_r2_veh_spinner" type="spinner" left="2" top="2" width="206" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" string_list="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/var_ff_round_veh" font="ui\large_ui" color="#FF2896FF" align="center" text_y="4" list_flags="items_from_strings" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -13 19 -7" footer_bounds="7 208 19 214">
-		<on event="left_mouse" run="mouse spinner 1wide click"/>
-	</widget>
-	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_r2_veh" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_r2_veh_label"/>
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_r2_veh_spinner" x="286" y="1"/>
-	</widget>
-	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_r3_veh_label" type="text" controller="1" width="280" height="22" string_list="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/firefight_labels" string_index="33" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
-	</widget>
-	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_r3_veh_spinner" type="spinner" left="2" top="2" width="206" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" string_list="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/var_ff_late_veh" font="ui\large_ui" color="#FF2896FF" align="center" text_y="4" list_flags="items_from_strings" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -13 19 -7" footer_bounds="7 208 19 214">
-		<on event="left_mouse" run="mouse spinner 1wide click"/>
-	</widget>
-	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_r3_veh" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_r3_veh_label"/>
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_r3_veh_spinner" x="286" y="1"/>
-	</widget>
 	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_allies_label" type="text" controller="1" width="280" height="22" string_list="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/firefight_labels" string_index="34" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_allies_spinner" type="spinner" left="2" top="2" width="206" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" string_list="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/var_ff_allies" font="ui\large_ui" color="#FF2896FF" align="center" text_y="4" list_flags="items_from_strings" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -13 19 -7" footer_bounds="7 208 19 214">
@@ -436,13 +409,10 @@
 		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_dropships" x="54" y="73"/>
 		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_boss_veh" x="54" y="100"/>
 		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_ordnance" x="54" y="127"/>
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_r1_veh" x="54" y="154"/>
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_r2_veh" x="54" y="181"/>
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_r3_veh" x="54" y="208"/>
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_allies" x="54" y="235"/>
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_generators" x="54" y="262"/>
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_gen_fail" x="54" y="289"/>
-		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_gen_attackers" x="54" y="316"/>
+		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_allies" x="54" y="154"/>
+		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_generators" x="54" y="181"/>
+		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_gen_fail" x="54" y="208"/>
+		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff3_gen_attackers" x="54" y="235"/>
 		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/firefight_button_bar" y="414"/>
 	</widget>
 	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/header_firefight_page_3" type="text" controller="1" left="35" top="11" width="605" height="59" text="VEHICLES &amp; DROPS" font="ui\large_ui" color="#FFFFFFFF">
@@ -814,22 +784,6 @@
 		<string text="PER ROUND"/>
 		<string text="HEAVY CRATES"/>
 	</strings>
-	<strings name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/var_ff_round_veh">
-		<string text="NONE"/>
-		<string text="WARTHOG"/>
-		<string text="ROCKET HOG"/>
-		<string text="GHOST"/>
-		<string text="SCORPION"/>
-		<string text="BANSHEE"/>
-		<string text="WRAITH"/>
-	</strings>
-	<strings name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/var_ff_late_veh">
-		<string text="NONE"/>
-		<string text="WARTHOG"/>
-		<string text="SCORPION"/>
-		<string text="BANSHEE"/>
-		<string text="WRAITH"/>
-	</strings>
 	<strings name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/var_ff_allies">
 		<string text="OFF"/>
 		<string text="2 ALLIES / SET"/>
@@ -913,7 +867,7 @@
 		<string text="Configure Set limits, shared team lives,\nprep countdowns, and Bonus Rounds."/>
 		<string text="Configure enemy factions, allegiances,\nAI combat difficulty, and per-Set scaling."/>
 		<string text="Enable or disable individual Covenant,\nFlood, Sentinel, and Human enemy unit types."/>
-		<string text="Configure Wave Insertion beacons, Boss\nvehicles, player vehicles, and Generators."/>
+		<string text="Configure Wave Insertion beacons, Boss\nvehicles, drops, allies, and Generators."/>
 		<string text="Configure Skull rotation, starting skulls, the\nSpartan loadout and traits, and the Tag Injector."/>
 	</strings>
 	<strings name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/cap_firefight_0">
@@ -1048,25 +1002,6 @@
 		<string text="Drop a resupply pod at the start of each Set."/>
 		<string text="Drop a pod of precision and heavy ordnance at\nthe start of each Round."/>
 		<string text="Drop heavy anti-armor pods every Round and\nBoss Wave."/>
-		<string text="No player vehicle 1."/>
-		<string text="A Chain Gun Warthog for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A Rocket Warthog for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A Covenant Ghost for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A Scorpion Tank for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A Covenant Banshee for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A drivable Wraith for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="No player vehicle 2."/>
-		<string text="A Chain Gun Warthog for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A Rocket Warthog for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A Covenant Ghost for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A Scorpion Tank for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A Covenant Banshee for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A drivable Wraith for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="No player vehicle 3."/>
-		<string text="A Chain Gun Warthog for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A Scorpion Tank for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A Covenant Banshee for the players, all\ngame (made again at a Round if lost)."/>
-		<string text="A drivable Wraith for the players, all\ngame (made again at a Round if lost)."/>
 		<string text="No friendly AI squadmates."/>
 		<string text="Deploy 2 friendly AI Marines (or Elites) at the\nstart of each Set."/>
 		<string text="Deploy 4 friendly AI Marines (or Elites) at the\nstart of each Set."/>

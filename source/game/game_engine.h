@@ -339,10 +339,11 @@ struct game_variant_options
 	byte firefight_dropship_mode;
 	byte firefight_next_wave_mode;
 	byte firefight_player_faction_mode;
-	/* ROUND 1, ROUND 2 and ROUND 3 VEHICLE */
-	byte firefight_early_vehicle;
-	byte firefight_round2_vehicle;
-	byte firefight_late_vehicle;
+	/* VEHICLES, a game's (Server Setup's; a saved variant's is ALL AT SPAWN:
+	halo_firefight.h's _firefight_vehicle_spawns_*). Were ROUND 1, 2 and 3
+	VEHICLE, which variants saved: the other two unused */
+	byte firefight_vehicle_spawns;
+	byte firefight_unused_vehicles[2];
 	byte firefight_prep_countdown;
 	byte firefight_skull_progression_mode;
 	byte firefight_player_shields;

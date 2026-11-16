@@ -146,28 +146,19 @@ enum
 	NUMBER_OF_FIREFIGHT_LOADOUT_PRESETS
 };
 
-/* ROUND 1 and ROUND 2 VEHICLE: the players' vehicle of those rounds */
+/* VEHICLES, a game's (Server Setup's GAME SETTINGS, on a map with vehicles
+of its own placed: firefight_map_has_vehicles), kept in its options'
+firefight_vehicle_spawns: the players' vehicles are the map's own placements'
+(MAP CONTENT's choices kept). ALL AT SPAWN: every one there from the start;
+ORDNANCE REWARDS: one more of them at random with each ordnance drop after
+the first, there for the rest of the game; NONE: none. Each made again at a
+round's start where it went */
 enum
 {
-	_firefight_early_vehicle_none = 0,
-	_firefight_early_vehicle_warthog,
-	_firefight_early_vehicle_ghost,
-	_firefight_early_vehicle_rocket_warthog,
-	_firefight_early_vehicle_scorpion,
-	_firefight_early_vehicle_banshee,
-	_firefight_early_vehicle_wraith,
-	NUMBER_OF_FIREFIGHT_EARLY_VEHICLES
-};
-
-/* ROUND 3 VEHICLE */
-enum
-{
-	_firefight_late_vehicle_none = 0,
-	_firefight_late_vehicle_scorpion,
-	_firefight_late_vehicle_wraith,
-	_firefight_late_vehicle_banshee,
-	_firefight_late_vehicle_warthog,
-	NUMBER_OF_FIREFIGHT_LATE_VEHICLES
+	_firefight_vehicle_spawns_all = 0,
+	_firefight_vehicle_spawns_ordnance,
+	_firefight_vehicle_spawns_none,
+	NUMBER_OF_FIREFIGHT_VEHICLE_SPAWNS
 };
 
 /* MAP CONTENT, a game's (Server Setup's MAP CONTENT section, a Custom
@@ -355,7 +346,8 @@ enum
 	FIREFIGHT_WAVES_PER_ROUND = 3,
 	FIREFIGHT_MAX_GENERATORS = 3,
 	FIREFIGHT_MAX_TRACKED_ENEMIES = 32,
-	FIREFIGHT_MAX_SET_VEHICLES = 8,
+	/* (the players' vehicles: a map's placements, firefight_spawn_player_vehicles) */
+	FIREFIGHT_MAX_SET_VEHICLES = 32,
 	/* (a drop's pods, a weapon each: firefight_spawner.c; the first so many
 	where mod version 103's state had them, firefight_network.c) */
 	FIREFIGHT_MAX_ORDNANCE_PODS = 48,
@@ -962,6 +954,18 @@ void firefight_ordnance_preview_refusals(char *text, long size);
 map's), there from the game's start and never taken away: any gone or
 destroyed is made again, at a round's start */
 void firefight_spawn_player_vehicles(void);
+/* VEHICLES' ORDNANCE REWARDS: one more of the map's vehicles for the players,
+at random (an ordnance drop's, after the first) */
+void firefight_reward_player_vehicle(void);
+/* (a game's start: the players' vehicles chosen again) */
+void firefight_player_vehicles_reset(void);
+/* whether the players have vehicles from the start (ALL AT SPAWN, on a map
+with some placed: the first round's countdown is longer) */
+boolean firefight_player_vehicles_at_start(void);
+/* VEHICLES' row: whether a map (by name, not loaded) has vehicles of its own
+placed for the players, the game's (stock) or the map's own (own, which MAP
+CONTENT takes or not); unknown maps have */
+void firefight_map_has_vehicles(char const *map_name, boolean *stock, boolean *own);
 /* wave enemies idle 10 s (not moved, fired nor hurt) put near the players,
 out of their sight, where they can walk; taken away after 4 such moves
 (firefight_spawner.c). The host's, each tick */
