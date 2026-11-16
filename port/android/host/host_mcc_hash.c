@@ -1,43 +1,37 @@
-/*
-HOST_MCC_HASH.C
-
-An MCC map's content fingerprint (host_mcc_hash.h), worked out in the
-Android app's host.
-
-Before a lobby takes an MCC map, the guest validates its package
-(port/linux/game/mcc_validation.inl): the map's tags against its resources,
-then a SHA-256 of the map and the resources it uses, and a CRC32 of the
-resources (mcc_resource_check.inl). The guest did that hashing itself, 16 KB
-at a time on a worker thread: a package whose bitmaps.map is 310 MB took a
-phone 30 to 60 seconds, the lobby showing its stock map the while.
-
-Here it is the host's, at the speed of the card: the CPU's SHA-256 and
-CRC32 instructions when it has them (ARMv8's), on
-two threads, one reading the file and doing the CRC while the other does
-the SHA-256 of what was read. What it works out is kept on the card
-(mcc_fingerprints.txt of the data root), by each file's path, size and time,
-so the lobby asks again for nothing it already knows; and a package the
-Steam Workshop screen installs (steam_downloads.c) is worked out as it is
-installed: each of its maps with its package's resources, in each of the
-ways the guest may ask (with neither, either or both of bitmaps.map and
-sounds.map, as the map's tags use them), each resource read once for every
-map. A map put into mcc_maps by hand is worked out when it is chosen.
-
-What is worked out is the guest's to the byte (mcc_resource_check.inl):
-  SHA-256 of "GulchCE MCC content v1", then for the map (type 0) and each
-  resource used (1 bitmaps, 2 sounds): its type, its size as 8 bytes (least
-  significant first) and its bytes;
-  CRC32 (zlib's) from the map header's checksum, over each resource used:
-  its type as a byte, its bytes, then 0xFF.
-The CRC's resource part is kept from 0 with its length, and joined to the
-map's checksum when asked (crc32_combine's way), so one entry serves each.
-*/
-
+/* An MCC map's content fingerprint on the host (host_mcc_hash.h), on the
+ * Switch, Android and the PS5 alike.
+ *
+ * Before a lobby takes an MCC map, the guest validates its package
+ * (port/linux/game/mcc_validation.inl): the map's tags against its resources,
+ * then a SHA-256 of the map and the resources it uses, and a CRC32 of the
+ * resources (mcc_resource_check.inl). The guest did that hashing itself, 16 KB
+ * at a time on a worker thread: a package whose bitmaps.map is 310 MB took a
+ * Switch 30 to 60 seconds, the lobby showing its stock map the while.
+ *
+ * Here it is the host's, at the speed of the card: the CPU's SHA-256 and
+ * CRC32 instructions when it has them (ARMv8's; x86-64's SHA extensions), on
+ * two threads, one reading the file and doing the CRC while the other does
+ * the SHA-256 of what was read. What it works out is kept on the card
+ * (mcc_fingerprints.txt of the data root), by each file's path, size and time,
+ * so the lobby asks again for nothing it already knows; and a package the
+ * Steam Workshop screen installs (steam_downloads.c) is worked out as it is
+ * installed: each of its maps with its package's resources, in each of the
+ * ways the guest may ask (with neither, either or both of bitmaps.map and
+ * sounds.map, as the map's tags use them), each resource read once for every
+ * map. A map put into mcc_maps by hand is worked out when it is chosen.
+ *
+ * What is worked out is the guest's to the byte (mcc_resource_check.inl):
+ *   SHA-256 of "GulchCE MCC content v1", then for the map (type 0) and each
+ *   resource used (1 bitmaps, 2 sounds): its type, its size as 8 bytes (least
+ *   significant first) and its bytes;
+ *   CRC32 (zlib's) from the map header's checksum, over each resource used:
+ *   its type as a byte, its bytes, then 0xFF.
+ * The CRC's resource part is kept from 0 with its length, and joined to the
+ * map's checksum when asked (crc32_combine's way), so one entry serves each. */
 #ifndef HOST_MCC_HASH_TEST
 #include "host.h"
 #endif
 #include "host_mcc_hash.h"
-#include "zlib_prefixed.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -56,6 +50,14 @@ map's checksum when asked (crc32_combine's way), so one entry serves each.
 #if defined(__ANDROID__)
 #include <sys/auxv.h>
 #endif
+#elif defined(__x86_64__)
+#include <cpuid.h>
+#include <immintrin.h>
+#endif
+
+#if defined(__SWITCH__)
+/* (port/switch/host/host_thread.c's) */
+void host_thread_place_on_helper_core(void);
 #endif
 
 #ifndef HOST_MCC_HASH_TEST
@@ -175,14 +177,93 @@ static void sha_blocks_arm(uint32_t state[8], unsigned char const *data, size_t 
 }
 #endif
 
+#if defined(__x86_64__)
+/* x86-64's SHA extensions (the PS5's Zen 2 has them) */
+__attribute__((target("sha,sse4.1,ssse3"), unused))
+static void sha_blocks_x86(uint32_t state[8], unsigned char const *data, size_t blocks)
+{
+	__m128i const mask = _mm_set_epi64x(0x0c0d0e0f08090a0bULL, 0x0405060700010203ULL);
+	__m128i tmp = _mm_loadu_si128((__m128i const *)state);
+	__m128i state1 = _mm_loadu_si128((__m128i const *)(state + 4));
+	__m128i state0;
+
+	tmp = _mm_shuffle_epi32(tmp, 0xB1);          /* CDAB */
+	state1 = _mm_shuffle_epi32(state1, 0x1B);    /* EFGH */
+	state0 = _mm_alignr_epi8(tmp, state1, 8);    /* ABEF */
+	state1 = _mm_blend_epi16(state1, tmp, 0xF0); /* CDGH */
+	while (blocks--) {
+		__m128i abef_saved = state0, cdgh_saved = state1, msg, m0, m1, m2, m3;
+		int k;
+
+		m0 = _mm_shuffle_epi8(_mm_loadu_si128((__m128i const *)data), mask);
+		m1 = _mm_shuffle_epi8(_mm_loadu_si128((__m128i const *)(data + 16)), mask);
+		m2 = _mm_shuffle_epi8(_mm_loadu_si128((__m128i const *)(data + 32)), mask);
+		m3 = _mm_shuffle_epi8(_mm_loadu_si128((__m128i const *)(data + 48)), mask);
+		for (k = 0; k < 16; k++) {
+			__m128i current = k % 4 == 0 ? m0 : k % 4 == 1 ? m1 : k % 4 == 2 ? m2 : m3;
+
+			msg = _mm_add_epi32(current, _mm_loadu_si128((__m128i const *)(sha_constants + k * 4)));
+			state1 = _mm_sha256rnds2_epu32(state1, state0, msg);
+			msg = _mm_shuffle_epi32(msg, 0x0E);
+			state0 = _mm_sha256rnds2_epu32(state0, state1, msg);
+			if (k < 12) {
+				/* the next four words of the schedule: w[i] for this group's
+				successor three groups on */
+				switch (k % 4) {
+				case 0:
+					m0 = _mm_sha256msg2_epu32(_mm_add_epi32(_mm_sha256msg1_epu32(m0, m1), _mm_alignr_epi8(m3, m2, 4)), m3);
+					break;
+				case 1:
+					m1 = _mm_sha256msg2_epu32(_mm_add_epi32(_mm_sha256msg1_epu32(m1, m2), _mm_alignr_epi8(m0, m3, 4)), m0);
+					break;
+				case 2:
+					m2 = _mm_sha256msg2_epu32(_mm_add_epi32(_mm_sha256msg1_epu32(m2, m3), _mm_alignr_epi8(m1, m0, 4)), m1);
+					break;
+				default:
+					m3 = _mm_sha256msg2_epu32(_mm_add_epi32(_mm_sha256msg1_epu32(m3, m0), _mm_alignr_epi8(m2, m1, 4)), m2);
+					break;
+				}
+			}
+		}
+		state0 = _mm_add_epi32(state0, abef_saved);
+		state1 = _mm_add_epi32(state1, cdgh_saved);
+		data += 64;
+	}
+	tmp = _mm_shuffle_epi32(state0, 0x1B);       /* FEBA */
+	state1 = _mm_shuffle_epi32(state1, 0xB1);    /* DCHG */
+	state0 = _mm_blend_epi16(tmp, state1, 0xF0); /* DCBA */
+	state1 = _mm_alignr_epi8(state1, tmp, 8);    /* ABEF -> HGFE */
+	_mm_storeu_si128((__m128i *)state, state0);
+	_mm_storeu_si128((__m128i *)(state + 4), state1);
+}
+#endif
+
 static void (*sha_blocks)(uint32_t state[8], unsigned char const *data, size_t blocks) = sha_blocks_portable;
 
 /* ---------- CRC32 (zlib's: reflected 0xEDB88320) */
 
-/* (zlib's, where the CPU has no CRC32 instructions) */
+static uint32_t crc_table[8][256];
+
 static uint32_t crc_portable(uint32_t crc, unsigned char const *data, size_t size)
 {
-	return (uint32_t)crc32(crc, data, (uInt)size);
+	crc = ~crc;
+	while (size && ((uintptr_t)data & 7)) {
+		crc = crc_table[0][(crc ^ *data++) & 0xFF] ^ (crc >> 8);
+		size--;
+	}
+	while (size >= 8) {
+		uint32_t low = crc ^ ((uint32_t)data[0] | (uint32_t)data[1] << 8 | (uint32_t)data[2] << 16 | (uint32_t)data[3] << 24);
+		uint32_t high = (uint32_t)data[4] | (uint32_t)data[5] << 8 | (uint32_t)data[6] << 16 | (uint32_t)data[7] << 24;
+
+		crc = crc_table[7][low & 0xFF] ^ crc_table[6][(low >> 8) & 0xFF] ^ crc_table[5][(low >> 16) & 0xFF] ^
+			crc_table[4][low >> 24] ^ crc_table[3][high & 0xFF] ^ crc_table[2][(high >> 8) & 0xFF] ^
+			crc_table[1][(high >> 16) & 0xFF] ^ crc_table[0][high >> 24];
+		data += 8;
+		size -= 8;
+	}
+	while (size--)
+		crc = crc_table[0][(crc ^ *data++) & 0xFF] ^ (crc >> 8);
+	return ~crc;
 }
 
 #if defined(__aarch64__)
@@ -211,10 +292,55 @@ static uint32_t crc_arm(uint32_t crc, unsigned char const *data, size_t size)
 
 static uint32_t (*crc_update)(uint32_t crc, unsigned char const *data, size_t size) = crc_portable;
 
-/* the CRC of A then B, from A's, B's (from 0) and B's length (zlib's) */
+/* zlib's crc32_combine: the CRC of A then B from A's, B's (from 0) and B's length */
+static uint32_t gf2_times(uint32_t const *matrix, uint32_t vector)
+{
+	uint32_t sum = 0;
+
+	while (vector) {
+		if (vector & 1)
+			sum ^= *matrix;
+		vector >>= 1;
+		matrix++;
+	}
+	return sum;
+}
+
+static void gf2_square(uint32_t *square, uint32_t const *matrix)
+{
+	int n;
+
+	for (n = 0; n < 32; n++)
+		square[n] = gf2_times(matrix, matrix[n]);
+}
+
 static uint32_t crc_combine(uint32_t crc1, uint32_t crc2, uint64_t length2)
 {
-	return (uint32_t)crc32_combine(crc1, crc2, (z_off_t)length2);
+	uint32_t even[32], odd[32], row = 1;
+	int n;
+
+	if (!length2)
+		return crc1;
+	odd[0] = 0xEDB88320u;
+	for (n = 1; n < 32; n++) {
+		odd[n] = row;
+		row <<= 1;
+	}
+	gf2_square(even, odd);
+	gf2_square(odd, even);
+	do {
+		gf2_square(even, odd);
+		if (length2 & 1)
+			crc1 = gf2_times(even, crc1);
+		length2 >>= 1;
+		if (!length2)
+			break;
+		gf2_square(odd, even);
+		if (length2 & 1)
+			crc1 = gf2_times(odd, crc1);
+		length2 >>= 1;
+	} while (length2);
+	return crc1 ^ crc2;
 }
 
 static pthread_once_t hash_once = PTHREAD_ONCE_INIT;
@@ -222,6 +348,17 @@ static char const *sha_kind = "portable", *crc_kind = "portable";
 
 static void hash_setup(void)
 {
+	uint32_t n, k, c;
+
+	for (n = 0; n < 256; n++) {
+		c = n;
+		for (k = 0; k < 8; k++)
+			c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+		crc_table[0][n] = c;
+	}
+	for (n = 0; n < 256; n++)
+		for (k = 1; k < 8; k++)
+			crc_table[k][n] = crc_table[0][crc_table[k - 1][n] & 0xFF] ^ (crc_table[k - 1][n] >> 8);
 #if defined(HOST_MCC_HASH_PORTABLE)
 	return;
 #elif defined(__aarch64__)
@@ -234,6 +371,7 @@ static void hash_setup(void)
 		sha2 = (hwcap & (1ul << 6)) != 0;
 		crc32 = (hwcap & (1ul << 7)) != 0;
 #endif
+		/* (the Switch's Cortex-A57 has both) */
 		if (sha2) {
 			sha_blocks = sha_blocks_arm;
 			sha_kind = "ARMv8 SHA-256";
@@ -241,6 +379,16 @@ static void hash_setup(void)
 		if (crc32) {
 			crc_update = crc_arm;
 			crc_kind = "ARMv8 CRC32";
+		}
+	}
+#elif defined(__x86_64__)
+	{
+		unsigned int a, b, cx, d;
+
+		if (__get_cpuid_count(7, 0, &a, &b, &cx, &d) && (b & (1u << 29)) &&
+			__get_cpuid(1, &a, &b, &cx, &d) && (cx & (1u << 19)) && (cx & (1u << 9))) {
+			sha_blocks = sha_blocks_x86;
+			sha_kind = "x86 SHA extensions";
 		}
 	}
 #endif
@@ -304,6 +452,25 @@ static void sha_end(struct sha const *source, unsigned char digest[32])
 	}
 }
 
+/* the host's piecewise SHA-256 (host_mcc_hash.h) */
+typedef char host_sha256_layout[sizeof(struct host_sha256) == sizeof(struct sha) ? 1 : -1];
+
+void host_sha256_begin(struct host_sha256 *sha)
+{
+	pthread_once(&hash_once, hash_setup);
+	sha_begin((struct sha *)sha);
+}
+
+void host_sha256_add(struct host_sha256 *sha, void const *data, size_t size)
+{
+	sha_add((struct sha *)sha, data, size);
+}
+
+void host_sha256_end(struct host_sha256 const *sha, unsigned char digest[32])
+{
+	sha_end((struct sha const *)sha, digest);
+}
+
 /* the fingerprint's header of a file: its type and its size */
 static void sha_file_header(struct sha *sha, unsigned type, uint64_t size)
 {
@@ -317,8 +484,8 @@ static void sha_file_header(struct sha *sha, unsigned type, uint64_t size)
 }
 
 /* ---------- a file read once into several SHA-256s and a CRC, on two threads:
-this one reads, and does the CRC and half the SHA-256s; a helper the other
-half (the first, and the only one when there is one) */
+ * this one reads, and does the CRC and half the SHA-256s; a helper the other
+ * half (the first, and the only one when there is one) */
 
 struct pass {
 	FILE *file;
@@ -362,6 +529,9 @@ static void *pass_helper(void *parameter)
 {
 	struct pass *pass = parameter;
 
+#if defined(__SWITCH__)
+	host_thread_place_on_helper_core();
+#endif
 	pthread_mutex_lock(&pass->lock);
 	for (;;) {
 		unsigned long chunk;
@@ -528,11 +698,19 @@ static int key_append(char *key, size_t size, char const *path)
 
 	if (stat(path, &information))
 		return 0;
+#ifdef __APPLE__
+	/* (macOS's names for them: the native macOS build runs this host) */
+#define HOST_MCC_HASH_MTIME information.st_mtimespec
+#define HOST_MCC_HASH_CTIME information.st_ctimespec
+#else
+#define HOST_MCC_HASH_MTIME information.st_mtim
+#define HOST_MCC_HASH_CTIME information.st_ctim
+#endif
 	return snprintf(key + used, size - used, "%s%s,%llu,%llu:%llu,%lld.%09ld,%lld.%09ld", used ? "|" : "", path,
 		(unsigned long long)information.st_size, (unsigned long long)information.st_dev,
-		(unsigned long long)information.st_ino, (long long)information.st_mtim.tv_sec,
-		(long)information.st_mtim.tv_nsec, (long long)information.st_ctim.tv_sec,
-		(long)information.st_ctim.tv_nsec) < (int)(size - used);
+		(unsigned long long)information.st_ino, (long long)HOST_MCC_HASH_MTIME.tv_sec,
+		(long)HOST_MCC_HASH_MTIME.tv_nsec, (long long)HOST_MCC_HASH_CTIME.tv_sec,
+		(long)HOST_MCC_HASH_CTIME.tv_nsec) < (int)(size - used);
 }
 
 /* (known_lock held) */
@@ -1019,7 +1197,7 @@ void host_mcc_hash_cancel(int id)
 (host_sha256_start/_poll/_cancel: an MCC package's files, which a host
 hashes before it offers them to a joiner, mcc_share_session.c; in the game's
 frame, a few megabytes at a time in software, a 360 MB package outlasted a
-joiner's wait for the offer, and took the frames with it) */
+joiner's wait for the offer on the Switch, and took the frames with it) */
 
 enum { SHA_JOBS = 4 };
 
@@ -1039,6 +1217,9 @@ static void *sha_job_main(void *parameter)
 	unsigned char *buffer = malloc(1 << 20);
 	int ok;
 
+#if defined(__SWITCH__)
+	host_thread_place_on_helper_core();
+#endif
 	ok = buffer && sha256_file_sized(job->path, job->digest, &job->size, &job->cancel, buffer, 1 << 20);
 	free(buffer);
 	pthread_mutex_lock(&jobs_lock);
@@ -1046,6 +1227,21 @@ static void *sha_job_main(void *parameter)
 	pthread_cond_broadcast(&jobs_changed);
 	pthread_mutex_unlock(&jobs_lock);
 	return NULL;
+}
+
+static char mcc_root_folder[1024];
+
+void host_mcc_root(unsigned int path_address)
+{
+	char const *path = (char const *)(uintptr_t)path_address;
+
+	if (path && strlen(path) < sizeof(mcc_root_folder))
+		snprintf(mcc_root_folder, sizeof(mcc_root_folder), "%s", path);
+}
+
+char const *host_mcc_maps_parent(char const *data_root)
+{
+	return mcc_root_folder[0] ? mcc_root_folder : data_root;
 }
 
 int host_sha256_start(unsigned int path_address)

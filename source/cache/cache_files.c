@@ -145,6 +145,7 @@ symbols in this file:
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 #include "firing_range.h" /* port: port/linux/game/firing_range.c */
 #include "mcc_share.h" /* port: port/linux/game/mcc_share.c */
+#include "custom_campaigns.h" /* port: port/linux/game/custom_campaigns.c */
 #ifdef HALO_ANDROID
 /* port: geometry the map holds and does not write, drawn on Android from
 GL buffers of its own (port/linux/src/d3d8_gl.c) */
@@ -1159,6 +1160,18 @@ map's build, empty if unread. The multiplayer menus check the loaded map's
 (ui.map's) build; this checks a multiplayer map's own, which may be of
 another build: the object and damage messages name definitions by tag
 index, which differs between builds */
+/* port: the answers, by map, for the run: asked at every update of a
+lobby's game settings, each an open of the map on the card, which waited
+for the card behind the lobby's copy of the map (precaching) */
+#define MAP_PLAYS_KEPT 16
+static struct
+{
+	char name[64];
+	char build[0x20];
+	boolean result;
+} map_plays_kept[MAP_PLAYS_KEPT];
+static short map_plays_next;
+
 boolean cache_files_map_plays_multiplayer(
 	char const *map_name,
 	char build[0x20])
@@ -1167,6 +1180,8 @@ boolean cache_files_map_plays_multiplayer(
 	char path[256];
 	HANDLE file;
 	boolean result = TRUE;
+	boolean read = FALSE;
+	short index;
 
 	build[0] = 0;
 	if (!map_name || !map_name[0])
@@ -1179,7 +1194,17 @@ boolean cache_files_map_plays_multiplayer(
 	header's build is Halo PC's, not one to check */
 	if (custom_edition_level_name(map_name))
 		return TRUE;
-	snprintf(path, sizeof(path), "%s%s.map", cache_files_map_directory(), tag_name_strip_path(map_name));
+	for (index = 0; index < MAP_PLAYS_KEPT; index++)
+	{
+		if (map_plays_kept[index].name[0] && !csstrcasecmp(map_plays_kept[index].name, map_name))
+		{
+			csmemcpy(build, map_plays_kept[index].build, 0x20);
+			return map_plays_kept[index].result;
+		}
+	}
+	/* port: (a mounted custom campaign's map of the name: custom_campaigns.c) */
+	if (!custom_campaign_map_path(map_name, FALSE, path))
+		snprintf(path, sizeof(path), "%s%s.map", cache_files_map_directory(), tag_name_strip_path(map_name));
 	file = CreateFileA(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
 	if (file == INVALID_HANDLE_VALUE)
 	{
@@ -1197,8 +1222,17 @@ boolean cache_files_map_plays_multiplayer(
 			csstrncpy(build, header.build, 0x20);
 			build[0x1F] = 0;
 			result = cache_files_build_region(header.build) != NULL;
+			read = TRUE;
 		}
 		CloseHandle(file);
+	}
+	/* (kept only once read: a map not there yet is asked of the card again) */
+	if (read && csstrlen(map_name) < sizeof(map_plays_kept[0].name))
+	{
+		csstrcpy(map_plays_kept[map_plays_next].name, map_name);
+		csmemcpy(map_plays_kept[map_plays_next].build, build, 0x20);
+		map_plays_kept[map_plays_next].result = result;
+		map_plays_next = (short)((map_plays_next + 1) % MAP_PLAYS_KEPT);
 	}
 
 	return result;
@@ -1301,7 +1335,9 @@ boolean cache_files_map_present(
 
 		if (cache_files_precache_map_loaded(map_name))
 			return TRUE;
-		snprintf(path, sizeof(path), "%s%s.map", cache_files_map_directory(), name);
+		/* port: (a mounted custom campaign's map of the name: custom_campaigns.c) */
+		if (!custom_campaign_map_path(map_name, FALSE, path))
+			snprintf(path, sizeof(path), "%s%s.map", cache_files_map_directory(), name);
 		file = CreateFileA(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
 		if (file == INVALID_HANDLE_VALUE)
 		{
@@ -1457,7 +1493,8 @@ long scenario_tags_load(
 	own maps are (port/linux/game/custom_edition_cache.c). It has no Xbox
 	vertex or index buffers. It is never the game's own map of that file
 	name: a Custom Edition map that cannot load is not played at all. */
-	if (custom_edition_level_name(scenario_name) && custom_edition_cache_playable(scenario_name))
+	if (custom_edition_level_name(scenario_name) && !custom_xbox_map_level(scenario_name) &&
+		custom_edition_cache_playable(scenario_name))
 	{
 		/* port: a protected map's structure bsp names the groups of tags
 		whose own are scrambled (port/linux/game/tag_validate.c) */
@@ -1512,7 +1549,11 @@ long scenario_tags_load(
 
 		return result;
 	}
-	if (cache_file_open(stripped_scenario_name, &cache_file_globals.header))
+	/* port: an Xbox map of custom_maps (custom_maps\<name>) is in the cache
+	file its level name was copied into, never that of the game's map its
+	header names (cache_files_windows.c) */
+	if (cache_file_open(custom_xbox_map_level(scenario_name) ? scenario_name : stripped_scenario_name,
+		&cache_file_globals.header))
 	{
 		tag_cache_base_address = physical_memory_get_tag_cache_base_address();
 		if (cache_file_header_verify(&cache_file_globals.header, scenario_name, TRUE))
@@ -1694,12 +1735,6 @@ boolean scenario_structure_bsp_load(
 	/* port: whether it was written, not read (the firing range's) */
 	boolean generated;
 
-#if defined(HALO_ANDROID) || defined(HALO_MOVABLE_WINDOW)
-	/* the scenario's own tag data names where the level is read to, in an
-	address the map was written with */
-	reference->base_address = cache_file_rebase_address(reference->base_address);
-#endif
-
 	/* port: an MCC map's bsp is read and converted by mcc_cache.c */
 	if (mcc_cache_tags_loaded())
 	{
@@ -1711,6 +1746,11 @@ boolean scenario_structure_bsp_load(
 		cache_get_tag_instance(reference->structure_bsp.index)->base_address = mcc_structure;
 		return TRUE;
 	}
+#if defined(HALO_ANDROID) || defined(HALO_MOVABLE_WINDOW)
+	/* the scenario's own tag data names where the level is read to, in an
+	address the map was written with */
+	reference->base_address = cache_file_rebase_address(reference->base_address);
+#endif
 
 	/* port: the tag data's size was checked as the map loaded
 	(cache_file_header_verify); the bsp's reference is the map's, and is

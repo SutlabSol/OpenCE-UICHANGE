@@ -481,6 +481,31 @@ The paths, vantage points, routes, vehicles and health packs are from
 [halo-ce-vita](https://github.com/BirchWoodGod/halo-ce-vita)'s bots
 (BirchWoodGod's PS Vita port, GPL-3.0).
 
+`bots.kind` `"provinggrounds"` adds a second kind of bot for the bots added
+from then on (the overlay's Bots > Kind; each bot keeps the kind it joined
+as, so one game can hold both, and in Oddball and Race, which only this kind
+plays, every bot is one). It is written from our own design notes after
+[Project Proving Grounds](https://github.com/AyoItzKye/project-proving-grounds)'
+bots, none of their code (`game/pgbots*.c`):
+
+- It knows only what it has seen (recognised after a moment, slower at the
+  edge of its view), heard (gunfire, the motion tracker when the game shows
+  it), been hit by, or been told by its team's silent callouts (an area, a
+  little late; never chat or sound), and forgets after its level's memory.
+- It picks its goal about ten times a second by scores (fight, retreat to
+  cover, recharge, hunt, the objective, a hold, its role, items, a vehicle),
+  its team's director handing out roles (defenders, runners, escorts,
+  hunters, anchors, hill scorers, overlooks) by each bot's leanings.
+- Its hands are a person's: it reads a target's movement now and then (a
+  juke beats it), flicks and sometimes overshoots, fires only on target with
+  a clear line, and paces its trigger by its weapon's class, taken from the
+  weapon's tag (so Custom Edition maps' weapons too).
+- `bots.skill` sets its hands and craft, its personality its preferences:
+  balanced, rusher, anchor, marksman, flanker, grenadier, objective player
+  or grudger, hidden, dealt in turn so both teams mirror each other, and
+  never its aim. `HALO_PGBOT_PERSONALITY=<name>` makes every one the same
+  (for testing).
+
 `bots.skill` sets six levels, from `"recruit"` (for new players: it reacts
 late, aims loosely and never throws) to `"legendary"`. Each level fights as
 a player of that level does (`game/bots_combat.c`): its reaction is never
@@ -692,7 +717,8 @@ over a profile's own `settings.toml`.
 | `input.mouse_sensitivity` | `1.0` | `HALO_MOUSE_SENSITIVITY` | The multiplier for the mouse aim. |
 | `input.mouse_vertical_sensitivity` | `0.0` | `HALO_MOUSE_VERTICAL_SENSITIVITY` | The multiplier for the vertical mouse aim. `0`: the same as `input.mouse_sensitivity`. |
 | `input.playstation_kernel_driver` | `false` | `HALO_PLAYSTATION_KERNEL_DRIVER` | Linux: `true` drives a PlayStation controller (DualSense, DualShock 4) through the kernel's driver of it (`hid-playstation` since Linux 5.12, `hid-sony`): its buttons, sticks, triggers and rumble, with no setup, but not its lightbar. `false`: SDL's own driver, which needs access to the controller's `/dev/hidraw` device, as Steam's udev rules give it (`steam-devices`, or Steam installed). Read at start-up. |
-| `input.left_stick_dead_zone` | `-1` | `HALO_LEFT_STICK_DEAD_ZONE` | How far the controller's left stick moves before it moves the player, in percent of its travel (`0` to `50`). Lower for finer control, higher for a worn stick that drifts. `-1`: the game's own (9000 of 32767, about 27%). On Android, the touch controls' stick too. Settings > Gamepads > Stick Dead Zones sets it. |
+| `input.stick_vertical_sensitivity` | `0` | `HALO_STICK_VERTICAL_SENSITIVITY` | How fast the controller's right stick turns the view up and down, each profile its own (its `settings.toml`): `1` to `15`, 40 degrees a second and about 24.4 more a step (`10` is 260, the top of the Xbox's Look Sensitivity left and right; `15` about 382). `0`: the game's own, half of Look Sensitivity's turn. Settings > Gamepads > Vertical Sensitivity sets it (SAME is `0`). |
+| `input.left_stick_dead_zone` | `-1` | `HALO_LEFT_STICK_DEAD_ZONE` | How far the controller's left stick moves before it moves the player, in percent of its travel (`0` to `50`). Lower for finer control, higher for a worn stick that drifts. `-1`: the game's own (9000 of 32767, about 27%). Not the touch controls' sticks, which have their own. Settings > Gamepads > Stick Dead Zones sets it. |
 | `input.right_stick_dead_zone` | `-1` | `HALO_RIGHT_STICK_DEAD_ZONE` | The same for the right stick, which turns the view. |
 | `input.invert_mouse` | `false` | `HALO_MOUSE_INVERT=1` sets `true` | `true`: the vertical mouse aim is inverted. |
 | `input.mouse_aim_assist` | `false` | `HALO_MOUSE_AIM_ASSIST` | `true`: the magnetism of the controller also operates for the mouse. `false`: when the mouse moved after the right stick, the view is not slowed or dragged by a target. The autoaim of the bullets operates in both cases. |
@@ -766,11 +792,13 @@ over a profile's own `settings.toml`.
 | `game.terminal_output` | `"menus"` | `HALO_TERMINAL_OUTPUT` | The game's messages at the bottom left of the screen ("Shaders preloaded.", what the console's commands print). `"none"`: never. `"menus"`: in the main menu, not in a campaign or a multiplayer game. `"always"`: everywhere, as the original game. While the console is open they are shown. Settings > Gameplay, or here. |
 | `game.ragdoll` | `"none"` | `HALO_RAGDOLL` | The older ragdoll setting. When `game.ragdoll_players` or `game.ragdoll_ai` is not in the file, that one takes this value. A file from before the two settings has this, and both start as it; a new file has `"none"`, so both stay off. Once each has its own line, this is not read. |
 | `game.downloaded_maps` | `""` | `HALO_DOWNLOADED_MAPS` | Maps to play as downloaded maps, besides the maps that map sharing downloaded (it names them in `downloaded_maps.txt` in `custom_maps`): their names (`bloodgulch`, `hugeass`), separated by commas, or `"*"` for all the maps. The scripts of a downloaded map cannot change the settings of the player or the games of other players. `debug.txt` names what the game refused. |
-| `game.maps.path` | `""` | `HALO_MAPS_PATH` | The folder that the game reads its maps from. Empty: the `maps` folder in the data folder. A relative path is in the data folder. The game reads it once, at the start. The game unpacks a disc image only into the `maps` folder in the data folder, so the folder that this setting names must already hold the maps. On the Switch, a folder that is missing or has no `ui.map` stops the game at the start with an error. |
+| `game.maps.path` | `""` | `HALO_MAPS_PATH` | The folder that the game reads its maps from. Empty: the `maps` folder in the data folder. A relative path is in the data folder. The game reads it once, at the start. The game unpacks a disc image only into the `maps` folder in the data folder, so the folder that this setting names must already hold the maps (on Android, "Use another folder" on the launcher screen sets this setting, and unpacks the disc image into that folder). On the Switch, a folder that is missing or has no `ui.map` stops the game at the start with an error. |
 | `game.custom_maps.path` | `""` | `HALO_CUSTOM_MAPS_PATH` | The folder that the game reads Custom Edition maps from, and that map sharing downloads maps into. Empty: the `custom_maps` folder in the data folder. A relative path is in the data folder. The game reads it once, at the start. On the Switch, a folder that is missing gets a warning at the start. |
+| `game.mods.path` | `""` | `HALO_MODS_PATH` | The folder that the game reads the mods from, and that the IMPORT of the Mods menu on Android puts mods into. Empty: the `mods` folder in the data folder. A relative path is in the data folder. |
 | `game.unlock_all_levels` | `false` | `HALO_UNLOCK_ALL_LEVELS` | `true`: a profile created afterward starts with all the campaign levels finished on all the difficulties. `false`: a new profile starts at The Pillar of Autumn, and each level opens when you finish the level before it, as on the Xbox. Existing profiles keep their progress. To start a profile over, type `profile_reset_campaign` in the console. |
 | `bots.count` | `0` | `HALO_BOTS` | Computer players (bots) in a game hosted here, local (split screen), system link or a private internet game: `0` to `127` (the most players a game holds but the host) join its lobby with the players, as far as the game has room. Not in public internet games. `0`: none, as in the stock game. BOTS in Create Game > LOCAL's Server Setup writes it (and `bots.skill`, `bots.teams`). Refer to "Bots". |
 | `bots.skill` | `"distributed"` | `HALO_BOT_SKILL` | How well the bots play: `"distributed"` (each bot its own level, on a curve, the same on both teams), or `"recruit"`, `"easy"`, `"normal"`, `"heroic"`, `"veteran"` or `"legendary"` for all of them: how soon they react, how far and how wide they see, how large their aim error is and how fast it settles, how fast they turn, how they fight, how often they aim at the head and the feet, and how hurt they are before they go for a health pack. `"easy"`, `"normal"`, `"heroic"` and `"legendary"` keep their numbers; `"recruit"` is below `"easy"`, and `"veteran"` halfway from `"heroic"` to `"legendary"`. Refer to "Bots". |
+| `bots.kind` | `"birchwood"` | `HALO_BOT_KIND` | The kind of bot added from now on: `"birchwood"`, the bots as they were, or `"provinggrounds"`, a second kind with hidden personalities that also plays Oddball and Race. Each bot keeps the kind it joined as, so one game can hold both. Refer to "Bots". |
 | `bots.teams` | `"even"` | `HALO_BOT_TEAMS` | In a team game: `"even"` puts the bots on both teams, evening them with the players; `"against"` puts them all on the team the players are not on. |
 | `bots.vehicles` | `1` | `HALO_BOT_VEHICLES` | `1`: the bots drive and ride the map's vehicles to goals a long way off, and man its turrets. `0`: they stay on foot. |
 | `bots.routes` | `"direct"` | `HALO_BOT_ROUTES` | How the bots go to their goals: `"direct"`, everyone the shortest way; `"lanes"`, each team's attackers spread over the map's side lanes; `"mixed"`, most direct and a few on the side lanes. |
@@ -819,7 +847,7 @@ over a profile's own `settings.toml`.
 | `network.map_share` | `true` | `HALO_NET_MAP_SHARE` | When you host: automatically offer CE maps and MCC packages. MCC base resources stay local to each machine; players consent before an MCC download. SHARE MAPS in Server Setup > Map Sharing writes its choice here. Refer to "Map sharing". |
 | `network.map_share_upload` | `1024` | `HALO_NET_MAP_SHARE_UPLOAD` | When you host: the most kilobytes per second that the game sends of maps (`16` to `256000`, 250 MB/s). UPLOAD LIMIT in Server Setup > Map Sharing writes its choice here. |
 | `network.map_seed` | `true` | `HALO_NET_MAP_SEED` | When you play in the game of another machine: help send its map to players who join without it. HELP SEND MAPS in Settings > Network Setup > Map Sharing. |
-| `network.map_seed_upload` | `256` | `HALO_NET_MAP_SEED_UPLOAD` | When you play in the game of another machine: the most kilobytes per second that the game sends of maps to other players (`16` to `10240`, 10 MB/s). UPLOAD LIMIT in Settings > Network Setup > Map Sharing. |
+| `network.map_seed_upload` | `256` | `HALO_NET_MAP_SEED_UPLOAD` | When you play in the game of another machine: the most kilobytes per second that the game sends of maps to other players (`16` to `256000`, 250 MB/s). UPLOAD LIMIT in Settings > Network Setup > Map Sharing. |
 | `network.map_download` | `true` | `HALO_NET_MAP_DOWNLOAD` | DOWNLOAD MAPS in Settings > Network Setup > Map Sharing. CE downloads from players as before; MCC permits a host offer and asks before transferring files. Off: CE leaves a missing-map game; MCC offers manual/Workshop installation and cancellation. |
 | `network.coop_public` | `false` | `HALO_NET_COOP_PUBLIC` | `true`: an online co-op game (Create Game > Internet, a SINGLEPLAYER map) starts as PUBLIC. `false`: it starts as PRIVATE. LISTING in co-op's Server Setup writes its choice here. Refer to "Server browser". |
 | `network.coop_team_wipe` | `"auto"` | `HALO_NET_COOP_TEAM_WIPE` | TEAM WIPE in Server Setup > Co-op Options: `"auto"` reverts the checkpoint in a PRIVATE game and only respawns the team in a PUBLIC game (a dedicated server's: `server.public` with internet play). `"revert"` or `"respawn"` overrides visibility; a password does not make a PUBLIC game private. Changed players/machine assignments fall back to position-only respawn with a host diagnostic. A missing checkpoint also uses position-only respawn. Scripted mission failures keep their existing revert behavior. |
@@ -838,7 +866,7 @@ over a profile's own `settings.toml`.
 | `network.browser_show_empty`, `network.browser_show_full` | `true` | `HALO_NET_BROWSER_SHOW_EMPTY`, `HALO_NET_BROWSER_SHOW_FULL` | `false`: the server browser does not list the games with no player, the full games. The server browser's Filters screen sets them. |
 | `network.browser_maps` | `"yes"` | `HALO_NET_BROWSER_MAPS` | `"yes"`: the server browser lists the games on maps this computer does not have. `"no"`: it does not. `"downloadable"`: only those of a Custom Edition map that the host shares. |
 | `network.browser_gametype` | `"any"` | `HALO_NET_BROWSER_GAMETYPE` | The server browser lists the games of one kind only: `"any"`, `"ctf"`, `"slayer"`, `"oddball"`, `"king"` or `"race"` (the Filters screen). |
-| `network.browser_sort` | `"players"` | `HALO_NET_BROWSER_SORT` | The server browser's order. `"players"`: the games with the most players first. `"servers"`: dedicated servers first, then by players. `"name"`, `"map"`, `"type"` or `"locked"` (games with a password first). A `-` before one reverses it (`"-players"`). A column's title sorts by it, and again the other way. |
+| `network.browser_sort` | `"players"` | `HALO_NET_BROWSER_SORT` | The server browser's order. `"players"`: the games with the most players first. `"servers"`: dedicated servers first, then by players. `"name"`, `"map"`, `"type"`, `"locked"` (games with a password first) or `"ping"` (the lowest ping first; games whose host is not timed yet, or has a password and is not timed, last either way). A `-` before one reverses it (`"-players"`). A column's title sorts by it, and again the other way. |
 | `server.enabled` | `false` | `HALO_SERVER` | `true`: run as a dedicated server, as `halo --server` does. Refer to "Dedicated server". The `server.*` settings are written to `config.toml` only by a dedicated server. |
 | `server.name` | `"OpenCE Server"` | `HALO_SERVER_NAME` | The game's name in the lobby and the server browser: 15 characters of printable ASCII. |
 | `server.max_players` | `16` | `HALO_SERVER_MAX_PLAYERS` | The most players (2 to 127). |
@@ -935,7 +963,7 @@ over a profile's own `settings.toml`.
 | `debug.sample_seconds` | `0.0` | `HALO_SAMPLE` | The 64-bit ARM and 64-bit x86 builds only. The host writes to the log, this often in seconds, where each game thread is: its program counter and frame chain, to find where the game spends its time or stops. `0`: never. |
 | `debug.memory_watch` | `true` | `HALO_MEMORY_WATCH` | The 64-bit ARM and 64-bit x86 builds only. `true`: the host notices the game's writes to cached textures and vertices by page protection. `false`: it compares page contents once a frame instead, which is slower. |
 | `debug.telnet_console`, `debug.telnet_console_port` | `false`, `2323` | `HALO_TELNET_CONSOLE`, `HALO_TELNET_CONSOLE_PORT` | The game listens on 127.0.0.1, on this port, for a script console (connect with telnet). The console has no password, so only this computer can reach it. |
-| `debug.profile_record`, `debug.profile_record_when`, `debug.profile_memory` | `false`, `"start"`, `256` | `HALO_PROFILE_RECORD`, `HALO_PROFILE_RECORD_WHEN`, `HALO_PROFILE_MEMORY` | Profiling builds only (`configure.py --profile`). Record without a command; `"start"` records from the first frame until the first map change, `"game"` records each game outside the main menu. Memory is 4Ã¢â‚¬â€œ1024 MB. Numbered `profile_<stamp>_<role>.part<n>.json` files remain in `profiles/` after recording. Refer to "Profiling builds" in the main README. |
+| `debug.profile_record`, `debug.profile_record_when`, `debug.profile_memory` | `false`, `"start"`, `256` | `HALO_PROFILE_RECORD`, `HALO_PROFILE_RECORD_WHEN`, `HALO_PROFILE_MEMORY` | Profiling builds only (`configure.py --profile`). Record without a command; `"start"` records from the first frame until the first map change, `"game"` records each game outside the main menu. Memory is 4–1024 MB. Numbered `profile_<stamp>_<role>.part<n>.json` files remain in `profiles/` after recording. Refer to "Profiling builds" in the main README. |
 
 
 With Mesa drivers, the game sends its GL calls through the GL thread of
@@ -1730,7 +1758,7 @@ Only machines with the invite can find the game:
     leaving.
   So that every player can be named, the host trims the spaces around a
   name and removes characters that draw as nothing. A
-  letter with a mark is typed as the plain letter (`ban jose` for "JosÃƒÂ©").
+  letter with a mark is typed as the plain letter (`ban jose` for "José").
   A name with nothing left to type becomes "Player", and a name that another
   player already has gets a number ("Player 2"). The game refuses a profile
   name that is blank, and a multiplayer game refuses a profile whose name was
@@ -2090,6 +2118,7 @@ checkpoint saves can still use (about 900 KB, `hs_console_state.inl`, added
 with the MCC maps): the checkpoints and cores of the builds before it have
 another layout and are refused. A checkpoint whose script threads cannot be
 saved with their syntax is not taken; the one before it is kept.
+
 ## 64-bit ARM
 
 `ninja linux_arm64` builds the game for 64-bit ARM Linux. It was tested on
@@ -2393,7 +2422,7 @@ Other changes:
 | `sound/sound_manager.c`, `interface/hud.c`, `game/game_engine.c` | The music's and the other sounds' volumes; the HUD's and the scoreboard's settings are read again when Settings changes them. |
 | `rasterizer/xbox/rasterizer_xbox_shadows.c` | With larger shadow maps (`display.shadow_resolution`), the blur's taps stay half a texel apart, and more passes widen it to cover the same part of the map as on the Xbox. |
 | `rasterizer/xbox/rasterizer_xbox_screen_effect.c` | A screen effect's passes (a scope's zoom blur) cover the whole screen when it is drawn at more pixels than the Xbox's: each pass's quad, and its texture coordinates with it, is moved back by the half pixel of the game's 480 lines that the shader translator adds (`src/nv2a_vsh.c`). Without that, the first pixels on the left and top were never drawn, and the zoom's warp spread their stale contents into a dark band down the left and along the top of the blur. |
-| `rasterizer/rasterizer_lights.c` | Each lens flare's occlusion test has a slot of its own, kept while the flare goes on being tested, and the flare's visibility is read from there. The Xbox waited for each test at the start of the next frame, so the test at each place in the frame's list of flares was that flare's; the native builds read the counts two or more frames late, and as flares come into view and go out of it, a flare was read another's count, and a hidden one's put it out (the Pelicans' thrusters, a corridor's lights). A slot just taken gives the last flare's count while the GPU is behind or drops tests, so it is read only once a count of one of the new flare's own tests has come: the renderer numbers each index's tests and says which one a count is from (`xgpu_visibility_tests_ended`, `xgpu_visibility_test_counted`, `src/d3d8_gl.c`). A flare that finds no slot is tested where no count is read, and keeps its visibility. |
+| `rasterizer/rasterizer_lights.c` | Each lens flare's occlusion test has a slot of its own, kept while the flare goes on being tested, and the flare's visibility is read from there. The Xbox waited for each test at the start of the next frame, so the test at each place in the frame's list of flares was that flare's; the native builds read the counts two or more frames late, and as flares come into view and go out of it, a flare was read another's count, and a hidden one's put it out (the Pelicans' thrusters, a corridor's lights). A slot just taken gives the last flare's count while the GPU is behind or drops tests, so it is read only once a count of one of the new flare's own tests has come: the renderer numbers each index's tests and says which one a count is from (`xgpu_visibility_tests_ended`, `xgpu_visibility_test_counted`: `src/d3d8_gl.c`; Vulkan's host gives each count with its test's number, `port/android/host/host_vk_visibility.c`; deko3d's guest takes a test's count as come once the GPU has finished its submission, `port/switch/guest/d3d8_dk.c`). A flare that finds no slot is tested where no count is read, and keeps its visibility. |
 | `rasterizer/rasterizer.c` | The 128 KB of vertices of the debug display of a model's vertices are static, not on the stack: the compiler inlines the function in `render_model`, and the Windows build probed the stack a page at a time for every model drawn. |
 | `render/render.c` | The 3D view of each window is tone mapped (`display.hdr`) and antialiased (`display.anti_aliasing`) before the HUD is drawn. |
 | `render/render.c` | `render_initialize` reads the structure culling tests from `display.structure_culling`. |

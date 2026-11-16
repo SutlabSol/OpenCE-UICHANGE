@@ -44,7 +44,8 @@ from typing import Any, Dict, List, Optional
 from .android_build import VARIADIC_PROTOTYPE_FILES
 from .embed_assets import hud_assets_build, hud_configure_inputs
 from .forge_build import forge_cflags, forge_source_flags, forge_sources
-from .linux_build import (GAME_DATA_FILES, EXPAT_DIR, EXPAT_SOURCES, KCP_DIR, MONOCYPHER_DIR, MUSL_MATH_DIR, STB_VORBIS_SOURCE, TOML_DIR,
+from .linux_build import (DYNAMIC_LIGHTING_DISABLED, DYNAMIC_LIGHTING_GAME_SOURCES, DYNAMIC_LIGHTING_PLATFORM_SOURCES,
+                          GAME_DATA_FILES, EXPAT_DIR, EXPAT_SOURCES, KCP_DIR, MONOCYPHER_DIR, MUSL_MATH_DIR, STB_VORBIS_SOURCE, TOML_DIR,
                           XDK_INCLUDE, ZLIB_DEFINES, ZLIB_DIR, ZLIB_SOURCES, compile_launcher, configuration_defines,
                           game_defines_and_includes, game_sources, musl_math_cflags, musl_math_sources,
                           opus_cflags, opus_sources, updater_defines, xdk_headers)
@@ -255,7 +256,10 @@ def generate_web_build(n: Writer, sln: Any) -> None:
             cflags += " -Dmain=halo_game_main"
         add_object(source, f"{cflags} {forge_source_flags(source)}")
     for source in sorted(Path(config["game_sources"]).glob("*.c")):
+        if source.name in DYNAMIC_LIGHTING_GAME_SOURCES:
+            continue
         add_object(source, f"{game_cflags} {forge_source_flags(source)}")
+    add_object(DYNAMIC_LIGHTING_DISABLED, game_cflags)
     # (Content Extended's Forge: tools/forge_build.py)
     for source in forge_sources():
         add_object(source, forge_cflags(game_cflags, ZLIB_DIR))
@@ -276,7 +280,7 @@ def generate_web_build(n: Writer, sln: Any) -> None:
         abi, "-std=gnu11", "-D_GNU_SOURCE", "-D_FILE_OFFSET_BITS=64", "-w", f"-I{platform_dir}",
     ])
     for source in sorted(platform_dir.glob("*.c")):
-        if source.name in WEB_EXCLUDE:
+        if source.name in WEB_EXCLUDE or source.name in DYNAMIC_LIGHTING_PLATFORM_SOURCES:
             continue
         add_object(source, posix_cflags if source.name.startswith("posix_") else
                    f"{platform_cflags} {forge_source_flags(source)}")

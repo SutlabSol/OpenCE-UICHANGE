@@ -2436,10 +2436,12 @@ static long get_player_index_from_object_or_parents(
 			break;
 		}
 
+		/* port: a projectile's owner can be gone by the time it hits (a dead
+		body purged by game_engine_update_purge, a respawned vehicle), and the
+		owner's index is then stale: no player, rather than object_get's halt */
 		object = object_try_and_get(object_index);
 		if (!object)
 			break;
-
 		object_index = object->object.parent_object_index;
 	}
 

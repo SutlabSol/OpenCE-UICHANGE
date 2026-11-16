@@ -90,7 +90,8 @@ enum halo_chat_pad_button
 	HALO_CHAT_PAD_STICK_DOWN,
 	HALO_CHAT_PAD_STICK_LEFT,
 	HALO_CHAT_PAD_STICK_RIGHT,
-	/* the shoulder buttons (the Xbox pad's white and black) */
+	/* the shoulder buttons (the Xbox pad's white and black; the right one turns
+	the chat line's channel) */
 	HALO_CHAT_PAD_LEFT_SHOULDER,
 	HALO_CHAT_PAD_RIGHT_SHOULDER,
 	/* the right stick clicked in (R3) */

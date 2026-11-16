@@ -29,6 +29,23 @@ def xdk_headers() -> List[Path]:
     return sorted(XDK_INCLUDE.glob("*.h"))
 
 
+# The dynamic lighting's modules (docs/dynamic_lighting_port.md): the Vulkan and
+# deko3d images link them. An OpenGL image links dynamic_lighting_disabled.c in
+# their place, so that it has none of their lights, rays, textures or shaders.
+DYNAMIC_LIGHTING_GAME_SOURCES = {
+    "ambient_emitter_lighting.c", "ammo_counter_falloff.c", "ammo_counter_lighting.c",
+    "authored_emitter_lighting.c", "covenant_emitter_lighting.c", "covenant_lighting.c", "lighting_config.c",
+    "lighting_menu.c",
+    "muzzle_lighting.c", "needler_lighting.c", "plasma_falloff.c", "plasma_lighting.c",
+    "plasma_collision.c", "plasma_collision_models.c", "plasma_collision_scene.c", "plasma_occlusion.c",
+    "rocket_lighting.c", "shield_glow.c",
+}
+DYNAMIC_LIGHTING_PLATFORM_SOURCES = {"plasma_model_shader.c"}
+# (the OpenGL-only builds, Linux, Windows and the web, as Android's OpenGL
+# image: the modules left out, their hooks answered stock)
+DYNAMIC_LIGHTING_DISABLED = Path("port/android/guest/dynamic_lighting_disabled.c")
+
+
 def game_sources(config: Dict[str, Any]) -> List[Path]:
     """the game's C sources (port.json "game"): every one under its root but
     those excluded (a file, or a folder: a name ending in "/")"""
@@ -637,7 +654,10 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
         # Port-specific units that must see the game exactly as its own
         # sources do (port/linux/game).
         for source in sorted(Path(config["game_sources"]).glob("*.c")):
+            if source.name in DYNAMIC_LIGHTING_GAME_SOURCES:
+                continue
             add_object(source, f"{game_cflags} {forge_source_flags(source)}")
+        add_object(DYNAMIC_LIGHTING_DISABLED, game_cflags)
         # (Content Extended's Forge: tools/forge_build.py)
         for source in forge_sources():
             add_object(source, forge_cflags(game_cflags, ZLIB_DIR))
@@ -675,6 +695,8 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
                 add_object(source, posix_cflags, posix=True)
             elif source.name in ("updater.c", "server_mode.c"):
                 add_object(source, f"{platform_cflags} {updater_defines(getattr(sln, 'port_release', False))}")
+            elif source.name in DYNAMIC_LIGHTING_PLATFORM_SOURCES:
+                continue
             else:
                 add_object(source, f"{platform_cflags} {forge_source_flags(source)}")
         for source in embedded_assets:

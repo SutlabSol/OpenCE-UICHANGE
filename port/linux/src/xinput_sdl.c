@@ -52,6 +52,12 @@ extern unsigned char network_aim_assist_block_mouse(void);
 #include "keyboard_prompts.h"
 #include "controller_buttons.h"
 #include "controller_remap.h"
+#include "halo_host_dashboard.h"
+#include "server_mode.h" /* port: halo_server_hosting, the host's screen a menu */
+/* (network_replay_playback.c: a replay played, or the host's game watched
+live; ui_widget.c: a player's own menu up) */
+unsigned char network_replay_viewing(void);
+unsigned char halo_ui_controller_menu_up(short controller_index);
 
 #include <SDL3/SDL.h>
 #include <math.h>
@@ -198,6 +204,37 @@ short halo_stick_dead_range(short stick)
 		}
 	}
 	return ranges[stick ? 1 : 0];
+}
+
+/* the right stick's turn up and down, in degrees a second, of each setting
+of input.stick_vertical_sensitivity (1 to 15): 1 to 10 Look Sensitivity's
+left and right range on the Xbox, 40 to 260, in even steps, and 11 to 15 on
+in the same steps (to about 382); 0 is the game's, half of left and right's
+(player_ui.c) */
+#define STICK_PITCH_RATE_SLOWEST 40.0f
+#define STICK_PITCH_RATE_AT_10 260.0f
+#define STICK_PITCH_RATE_STEPS 15
+
+float halo_stick_pitch_rate(short gamepad_index, float pitch_rate)
+{
+	static struct
+	{
+		unsigned long read_at;
+		float rate;
+	} players[PORT_COUNT];
+	int player = gamepad_index >= 0 && gamepad_index < PORT_COUNT ? gamepad_index : 0;
+
+	if (players[player].read_at != config_changes() + 1)
+	{
+		double setting = config_player_real(player, "input.stick_vertical_sensitivity");
+		long step = (long)(setting + 0.5);
+
+		/* (read_at 0 is never read: config_changes() + 1) */
+		players[player].read_at = config_changes() + 1;
+		players[player].rate = step < 1 || step > STICK_PITCH_RATE_STEPS ? 0.0f :
+			STICK_PITCH_RATE_SLOWEST + (STICK_PITCH_RATE_AT_10 - STICK_PITCH_RATE_SLOWEST) * (float)(step - 1) / 9.0f;
+	}
+	return players[player].rate > 0.0f ? players[player].rate : pitch_rate;
 }
 
 /* radians of yaw and pitch for the mouse motion since the last call; the
@@ -418,6 +455,8 @@ static void overlay_pad_take(int port, XINPUT_GAMEPAD *pad, SDL_Gamepad *gamepad
 	if (pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) buttons |= 1UL << HALO_OVERLAY_PAD_DPAD_DOWN;
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_A] >= PRESSED) buttons |= 1UL << HALO_OVERLAY_PAD_A;
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_B] >= PRESSED) buttons |= 1UL << HALO_OVERLAY_PAD_B;
+	if (pad->bAnalogButtons[XINPUT_GAMEPAD_X] >= PRESSED) buttons |= 1UL << HALO_OVERLAY_PAD_X;
+	if (pad->bAnalogButtons[XINPUT_GAMEPAD_Y] >= PRESSED) buttons |= 1UL << HALO_OVERLAY_PAD_Y;
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_WHITE] >= PRESSED) buttons |= 1UL << HALO_OVERLAY_PAD_LEFT_SHOULDER;
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_BLACK] >= PRESSED) buttons |= 1UL << HALO_OVERLAY_PAD_RIGHT_SHOULDER;
 	if (gamepad)
@@ -429,7 +468,8 @@ static void overlay_pad_take(int port, XINPUT_GAMEPAD *pad, SDL_Gamepad *gamepad
 		if (SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_DPAD_DOWN))
 			buttons |= 1UL << HALO_OVERLAY_PAD_DPAD_DOWN;
 	}
-	if (overlay_menu_take_pad((short)port, buttons))
+	/* (the overlay first, which opens over the host's screen too) */
+	if (overlay_menu_take_pad((short)port, buttons) || host_dashboard_take_pad((short)port, buttons))
 	{
 		overlay_held_buttons[port] = pad->wButtons;
 		overlay_held_analog[port] = 0;
@@ -1404,9 +1444,9 @@ int halo_push_to_talk_held(void)
 	and the game still gets it, network_chat.c; not in a replay's playback,
 	whose D-pad Down is its camera's: network_replay_playback.c) */
 	{
-		extern unsigned char network_replay_playing(void);
+		extern unsigned char network_replay_viewing(void);
 
-		return !input.menus && !network_replay_playing() && (chat_pad[0] & (1UL << HALO_CHAT_PAD_DOWN)) != 0;
+		return !input.menus && !network_replay_viewing() && (chat_pad[0] & (1UL << HALO_CHAT_PAD_DOWN)) != 0;
 	}
 }
 
@@ -1815,7 +1855,14 @@ static BOOL menu_buttons_swapped(BOOL menus)
 		read_at = config_changes();
 		swap = config_boolean("controls.nintendo_menu_buttons") != 0;
 	}
-	return (menus || game_engine_showing_postgame() || network_replay_playing()) && swap;
+	/* (and hosting from the menus: the host's screen is a menu, in a game too,
+	port/linux/game/host_dashboard.c) */
+	/* (and the text chat's on-screen keyboard, a menu's keys over the game:
+	A types, B cancels, network_chat.c) */
+	extern unsigned char network_chat_keyboard_open(void);
+
+	return (menus || game_engine_showing_postgame() || network_replay_playing() || halo_server_hosting() ||
+		network_chat_keyboard_open()) && swap;
 #else
 	(void)menus;
 	return FALSE;
@@ -1831,29 +1878,32 @@ int xinput_menu_buttons_swapped(void)
 
 /* the bottom and right face buttons held when the menus' swap of them starts or ends count as up until let go of:
 the right button that chose the level is not the game's B, a melee, at its first frame (as keys_held_over_switch) */
-static void face_buttons_held_over_swap(SDL_Gamepad *gamepad, BOOL swap, BOOL *held_back)
+static void face_buttons_held_over_swap(int port, SDL_Gamepad *gamepad, BOOL swap, BOOL *held_back)
 {
-	static int swapped = -1;
-	static BOOL held_south, held_east;
+	/* (each port's: a split screen player's menu swaps theirs alone) */
+	static int swapped[PORT_COUNT] = { -1, -1, -1, -1 };
+	static BOOL held_south[PORT_COUNT], held_east[PORT_COUNT];
 	BOOL south = SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_SOUTH);
 	BOOL east = SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_EAST);
 
-	if (swapped != (int)swap)
+	if (port < 0 || port >= PORT_COUNT)
+		return;
+	if (swapped[port] != (int)swap)
 	{
-		if (swapped >= 0)
+		if (swapped[port] >= 0)
 		{
-			held_south = south;
-			held_east = east;
+			held_south[port] = south;
+			held_east[port] = east;
 		}
-		swapped = (int)swap;
+		swapped[port] = (int)swap;
 	}
 	if (!south)
-		held_south = FALSE;
+		held_south[port] = FALSE;
 	if (!east)
-		held_east = FALSE;
-	if (held_south)
+		held_east[port] = FALSE;
+	if (held_south[port])
 		held_back[SDL_GAMEPAD_BUTTON_SOUTH] = TRUE;
-	if (held_east)
+	if (held_east[port])
 		held_back[SDL_GAMEPAD_BUTTON_EAST] = TRUE;
 }
 
@@ -2456,17 +2506,25 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		/* (a replay's playback has no voice chat and no game's controls: its
 		own take every button, a shoulder bound to talk its speed too:
 		port/linux/game/network_replay_playback.c) */
-		BOOL replay = network_replay_playing() != 0;
+		BOOL replay = network_replay_viewing() != 0;
 
 		for (index = 0; index < INPUT_GAMEPAD_END - INPUT_GAMEPAD; index++)
 			held_back[index] = !replay &&
 				(gamepad_bound_to_talk[index] || (!input.menus && gamepad_bound_in_game[index]));
-		face_buttons_held_over_swap(gamepad, swap, held_back);
+		face_buttons_held_over_swap(0, gamepad, swap, held_back);
 		sdl_gamepad_state(gamepad, &physical, held_back, scoreboard_picking_port == 0, swap);
 	}
 	else if (port != 0 && gamepad)
 	{
-		sdl_gamepad_state(gamepad, &physical, NULL, scoreboard_picking_port == port, menu_buttons_swapped(menus_up));
+		/* (its own player's menu, in a game: a split screen player's pause
+		menu, not player 1's, swaps its face buttons: ui_widget.c's
+		halo_ui_controller_menu_up) */
+		BOOL swap = menu_buttons_swapped(halo_ui_controller_menu_up((short)port) != 0);
+		BOOL held_back[INPUT_GAMEPAD_END - INPUT_GAMEPAD];
+
+		memset(held_back, 0, sizeof(held_back));
+		face_buttons_held_over_swap(port, gamepad, swap, held_back);
+		sdl_gamepad_state(gamepad, &physical, held_back, scoreboard_picking_port == port, swap);
 	}
 	/* Keep the opening chat press so even B can open it without immediately closing it. */
 	chat_pad_record((short)port, &physical);

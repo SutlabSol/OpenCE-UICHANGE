@@ -28,3 +28,5 @@ host_android_import_mods
 host_android_import_vk_drivers
 # the map lists' IMPORT (port/android/host/host_main.c; port/linux/game/menu_functions.c)
 host_android_import_maps
+# Settings > Gameplay > GAME FILES (port/android/host/host_main.c; menu_functions.c)
+host_android_move_game_files

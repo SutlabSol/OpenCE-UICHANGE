@@ -749,6 +749,85 @@ static void playlist_profile_create_default_profiles_on_disk(
 	return;
 }
 
+/* port: gametype files' blocks, kept by their index while the saved games'
+index is the same (saved_game_files_index_generation) and nothing here has
+written one. A gametype list read every gametype's file to sort them
+(OpenCE's or not) and to show the one chosen, each an open, a read and the
+card's lock waited for while a map was copied: 0.7 s to open the list on
+the Switch. */
+#define PLAYLIST_BLOCKS_KEPT 64
+static struct playlist_block_kept
+{
+	boolean used;
+	long index;
+	unsigned long generation;
+	byte block[SAVED_GAME_FILE_BLOCK_SIZE];
+} *playlist_blocks_kept;
+static short playlist_blocks_next;
+
+static unsigned long playlist_blocks_changes;
+
+/* port: a number that changes whenever a gametype's file may have (its
+blocks forgotten: one written), for what the menus keep of the gametypes */
+unsigned long playlist_profile_changes(
+	void)
+{
+	return playlist_blocks_changes;
+}
+
+static void playlist_blocks_forget(
+	void)
+{
+	playlist_blocks_changes++;
+	if (playlist_blocks_kept)
+		csmemset(playlist_blocks_kept, 0, PLAYLIST_BLOCKS_KEPT * sizeof(*playlist_blocks_kept));
+}
+
+/* the profile's file's block: kept, or read (and kept); with the saved
+games' mutex held */
+static boolean playlist_block_get(
+	long playlist_profile_index,
+	byte *block)
+{
+	struct file_reference file;
+	unsigned long generation = saved_game_files_index_generation();
+	short index;
+	boolean success = FALSE;
+
+	if (!playlist_blocks_kept)
+	{
+		playlist_blocks_kept = malloc(PLAYLIST_BLOCKS_KEPT * sizeof(*playlist_blocks_kept));
+		playlist_blocks_forget();
+	}
+	for (index = 0; playlist_blocks_kept && index < PLAYLIST_BLOCKS_KEPT; index++)
+	{
+		struct playlist_block_kept const *kept = &playlist_blocks_kept[index];
+
+		if (kept->used && kept->index == playlist_profile_index && kept->generation == generation)
+		{
+			csmemcpy(block, kept->block, SAVED_GAME_FILE_BLOCK_SIZE);
+			return TRUE;
+		}
+	}
+	if (saved_game_file_open(&file, playlist_profile_index))
+	{
+		success = file_read(&file, SAVED_GAME_FILE_BLOCK_SIZE, block);
+		saved_game_file_close(&file, playlist_profile_index);
+	}
+	/* (kept only if the index did not change while it was read) */
+	if (success && playlist_blocks_kept && generation == saved_game_files_index_generation())
+	{
+		struct playlist_block_kept *kept = &playlist_blocks_kept[playlist_blocks_next];
+
+		playlist_blocks_next = (short)((playlist_blocks_next + 1) % PLAYLIST_BLOCKS_KEPT);
+		kept->used = TRUE;
+		kept->index = playlist_profile_index;
+		kept->generation = generation;
+		csmemcpy(kept->block, block, SAVED_GAME_FILE_BLOCK_SIZE);
+	}
+	return success;
+}
+
 static boolean playlist_profile_read(
 	long playlist_profile_index,
 	struct game_variant *variant)
@@ -781,59 +860,49 @@ static boolean playlist_profile_read(
 	{
 		if (saved_game_files_take_mutex())
 		{
-			if (saved_game_file_open(&file, playlist_profile_index))
+			/* port: kept, or read (playlist_block_get) */
+			if (playlist_block_get(playlist_profile_index, block))
 			{
-				if (file_read(&file, sizeof(block), block))
+				saved_game_file_generate_checksum(
+					block,
+					PLAYLIST_PROFILE_CHECKSUM_DATA_SIZE,
+					&checksum);
+
+				if (!csmemcmp(
+					&checksum,
+					block + PLAYLIST_PROFILE_CHECKSUM_DATA_SIZE,
+					sizeof(checksum)))
 				{
-					saved_game_file_generate_checksum(
+					csmemcpy(
+						variant,
 						block,
-						PLAYLIST_PROFILE_CHECKSUM_DATA_SIZE,
-						&checksum);
-
-					if (!csmemcmp(
-						&checksum,
-						block + PLAYLIST_PROFILE_CHECKSUM_DATA_SIZE,
-						sizeof(checksum)))
-					{
-						csmemcpy(
-							variant,
-							block,
-							sizeof(struct game_variant));
-					}
-					else
-					{
-						default_variant = *build_game_variant_slayer(&temporary);
-						error(
-							_error_silent,
-							"checksum failed on playlist profile file, sanitizing memory resident version...");
-						default_variant.flags = 0;
-						ustrncpy(
-							(wchar_t *)&default_variant,
-							saved_game_file_get_display_name(playlist_profile_index),
-							MAXIMUM_GAME_VARIANT_NAME_LENGTH - 1);
-						default_variant.human_readable_game_description[MAXIMUM_GAME_VARIANT_NAME_LENGTH - 1] = 0;
-						csmemcpy(
-							variant,
-							&default_variant,
-							sizeof(struct game_variant));
-					}
-
-					success = TRUE;
+						sizeof(struct game_variant));
 				}
 				else
 				{
+					default_variant = *build_game_variant_slayer(&temporary);
 					error(
 						_error_silent,
-						"failed to read playlist profile from file");
+						"checksum failed on playlist profile file, sanitizing memory resident version...");
+					default_variant.flags = 0;
+					ustrncpy(
+						(wchar_t *)&default_variant,
+						saved_game_file_get_display_name(playlist_profile_index),
+						MAXIMUM_GAME_VARIANT_NAME_LENGTH - 1);
+					default_variant.human_readable_game_description[MAXIMUM_GAME_VARIANT_NAME_LENGTH - 1] = 0;
+					csmemcpy(
+						variant,
+						&default_variant,
+						sizeof(struct game_variant));
 				}
 
-				saved_game_file_close(&file, playlist_profile_index);
+				success = TRUE;
 			}
 			else
 			{
 				error(
 					_error_silent,
-					"failed to open playlist profile file");
+					"failed to read playlist profile from file");
 			}
 
 			saved_game_files_release_mutex();
@@ -973,6 +1042,7 @@ static void playlist_profile_write(
 		playlist_profile_globals.thread = NULL;
 	}
 
+	playlist_blocks_forget(); /* port: (its block written) */
 	playlist_profile_globals.thread_input.playlist_profile_index = playlist_profile_index;
 	csmemcpy(
 		&playlist_profile_globals.thread_input.variant,
@@ -1006,11 +1076,7 @@ static boolean playlist_profile_read_block(
 	}
 	if (saved_game_files_take_mutex())
 	{
-		if (saved_game_file_open(&file, playlist_profile_index))
-		{
-			success = file_read(&file, SAVED_GAME_FILE_BLOCK_SIZE, block);
-			saved_game_file_close(&file, playlist_profile_index);
-		}
+		success = playlist_block_get(playlist_profile_index, block); /* port */
 		saved_game_files_release_mutex();
 	}
 	return success;

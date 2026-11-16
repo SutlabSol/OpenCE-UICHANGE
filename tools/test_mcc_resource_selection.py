@@ -29,6 +29,29 @@ def build_resource_tool(work, android=False):
 #define SetEvent(h) ((void)(h))
 #define WaitForSingleObject(h,t) ((void)(h),(void)(t),WAIT_OBJECT_0)
 #define CloseHandle(h) ((void)(h))
+/* (the resource checksums' cache stamps files as Win32 does: by stat here,
+once however often this header is included) */
+#ifndef TEST_XTL_FILE_ATTRIBUTES
+#define TEST_XTL_FILE_ATTRIBUTES
+#include <sys/stat.h>
+typedef unsigned long DWORD;
+typedef struct { DWORD dwLowDateTime, dwHighDateTime; } FILETIME;
+typedef struct { DWORD dwFileAttributes; FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+    DWORD nFileSizeHigh, nFileSizeLow; } WIN32_FILE_ATTRIBUTE_DATA;
+#define GetFileExInfoStandard 0
+static __inline__ int GetFileAttributesExA(char const *path, int level, WIN32_FILE_ATTRIBUTE_DATA *data) {
+    struct stat status;
+    (void)level;
+    if (stat(path, &status)) return 0;
+    data->dwFileAttributes = S_ISDIR(status.st_mode) ? 16 : 128;
+    data->ftCreationTime.dwLowDateTime = data->ftLastWriteTime.dwLowDateTime = (DWORD)status.st_mtime;
+    data->ftCreationTime.dwHighDateTime = data->ftLastWriteTime.dwHighDateTime = 1;
+    data->ftLastAccessTime = data->ftLastWriteTime;
+    data->nFileSizeLow = (DWORD)status.st_size;
+    data->nFileSizeHigh = (DWORD)((unsigned long long)status.st_size >> 32);
+    return 1;
+}
+#endif
 ''')
     resources = (game / 'mcc_resources.c').read_text().replace('../../third_party/zlib/zlib_prefixed.h',
         (ROOT / 'port/third_party/zlib/zlib_prefixed.h').as_posix())

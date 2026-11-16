@@ -688,6 +688,7 @@ struct widget_instance;
 #include "text/text_group.h"
 #include "text/unicode.h"
 #include "ui_widget.h"
+#include "saved games/game_state.h" /* port: game_state_persistent_storage_check_ahead */
 #include "mcc_pause_runtime.h" /* port: port/linux/game/mcc_pause_runtime.h */
 #include "mcc_pause.h" /* port: port/linux/game/mcc_pause.h */
 #include "mcc_ui_network.h" /* port: port/linux/game/mcc_ui_network.h */
@@ -1397,6 +1398,14 @@ boolean pc_menu_tag(
 split screen, the lobby's (port/linux/game/menu_functions.c) */
 unsigned char pc_menu_split_players(
 	void);
+/* port: joining a network game in progress: the box's screen, whether a
+controller may, the screen's name (menu_functions.c's ingame_join) */
+unsigned char pc_menu_ingame_join_screen(
+	struct widget_instance const *widget);
+unsigned char pc_menu_ingame_join_allowed(
+	short controller_index);
+char const *pc_menu_ingame_join_name(
+	void);
 /* port: local_player_count, 0 before the players' globals are made
 (source/game/players.c) */
 short players_port_local_player_count(
@@ -2052,6 +2061,13 @@ void display_error_when_main_menu_loaded(
 {
 	/* port: a match left before its end recorded as why (port/linux/game/social.c) */
 	social_match_error(error_code);
+	/* port: hosting from the menus stopping as the host asked, its own
+	client's "the host went down" (port/linux/src/server_mode.c) */
+	if (halo_server_host_stopping())
+	{
+		error(_error_silent, "the hosted server stopped: error %d not shown", error_code);
+		return;
+	}
 	if (widget_globals.main_menu_deferred_error_code == NONE)
 	{
 		widget_globals.main_menu_deferred_error_code = error_code;
@@ -2304,6 +2320,21 @@ static void pop_widget(
 	*data = node->data;
 	*top = node->next;
 	dispose_pointer(widget_memory_pool, node);
+
+	return;
+}
+
+/* port: the newest screen of the widget's player's history forgotten, so
+that its Back goes past it (port/linux/game/menu_functions.c's Host Server:
+Round Options back to the Playlist Builder, past Select Gametype) */
+void ui_widget_port_history_drop(
+	struct widget_instance *widget)
+{
+	short widget_stack = (!widget || widget->local_player_index == NONE) ? 0 : widget->local_player_index;
+	struct widget_stack_data data;
+
+	if (widget_globals.widget_stack[widget_stack])
+		pop_widget(&widget_globals.widget_stack[widget_stack], &data);
 
 	return;
 }
@@ -6978,6 +7009,13 @@ static void ui_mouse_list_directions(
 		*back = _widget_event_dpad_left;
 		*forward = _widget_event_dpad_right;
 	}
+	else if (ui_widget_port_pointer_steps_with_stick(widget))
+	{
+		/* port: a list whose d-pad up and down do something else (the
+		server browser's sort) is stepped with the stick */
+		*back = _widget_event_left_stick_up;
+		*forward = _widget_event_left_stick_down;
+	}
 	else
 	{
 		*back = _widget_event_dpad_up;
@@ -7095,6 +7133,9 @@ static long ui_mouse_wheel_room(
 					room++;
 				}
 			}
+			/* port: and the items past its rows, which its steps at the end
+			scroll in */
+			room += ui_widget_port_list_hidden(widget, (unsigned char)forward);
 
 			return room;
 		}
@@ -7164,6 +7205,30 @@ static boolean ui_mouse_menus_active(
 	/* (and the scores after a game, which take A and B like the menus:
 	game_engine_update_non_deterministic) */
 	return virtual_keyboard_active() || ui_mouse_menu() != NULL || game_engine_showing_postgame();
+}
+
+/* port: whether the controller's presses are a menu's (xinput_sdl.c: the
+Switch's face buttons then as its own menus have them). At the main menu
+every controller drives the one screen; in a game, a controller's own menu
+(a split screen player's pause menu, a joining controller's box), not
+another player's */
+unsigned char halo_ui_controller_menu_up(
+	short controller_index)
+{
+	long widget_index;
+
+	if (we_are_at_the_main_menu)
+		return ui_mouse_menus_active();
+	if (widget_globals.initialization_thread || progress_bar_is_active())
+		return FALSE;
+	for (widget_index = 0; widget_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; widget_index++)
+	{
+		struct widget_instance *widget = widget_globals.active_widgets[widget_index];
+
+		if (widget && widget->local_player_index == controller_index)
+			return TRUE;
+	}
+	return FALSE;
 }
 
 /* port: a row of a list to choose from (the PC version's menus' lists of
@@ -7507,7 +7572,15 @@ static void ui_widgets_process_mouse(
 		}
 		if (ui_mouse_press_count)
 		{
-			event_manager_post_button(controller_index, ui_mouse_presses[0]);
+			/* port: (a step with the stick: ui_mouse_list_directions) */
+			if (ui_mouse_presses[0] == _widget_event_left_stick_up ||
+				ui_mouse_presses[0] == _widget_event_left_stick_down)
+			{
+				event_manager_post_left_stick(controller_index,
+					(short)(ui_mouse_presses[0] == _widget_event_left_stick_up ? 1 : -1));
+			}
+			else
+				event_manager_post_button(controller_index, ui_mouse_presses[0]);
 			csmemmove(ui_mouse_presses, ui_mouse_presses + 1, --ui_mouse_press_count * sizeof(ui_mouse_presses[0]));
 		}
 	}
@@ -7607,27 +7680,48 @@ static void widget_instance_render_recursive(
 		0,
 		frame_index);
 	/* port: the color and profile screens' Spartan, the model and not its
-	picture (port/linux/game/menu_chief.c; the profile screen's picture is
-	also the split-screen lobby's, which keeps it) */
-	if (bitmap && widget->name &&
-		(!strcmp(widget->name, "color_right_pic") ||
-			(!strcmp(widget->name, "qtr_screen_profile_color_pic") && widget->parent && widget->parent->name &&
-				!strcmp(widget->parent->name, "player_profile_right_item"))))
+	picture (port/linux/game/menu_chief.c); and ADD PLAYER's, a quarter's
+	(menu_functions.c's join4): the picture its quarter (join4_qtr_select,
+	_ready, _playing) has first, the Xbox's, found by its place (its name is
+	ui.map's) */
 	{
-		extern boolean menu_chief_draw(short x0, short y0, short x1, short y1, short color_index, boolean controlled);
-		/* (neither screen's picture is in the middle of its panel, as he, with
-		what he holds out to one side, must be) */
-		short chief_left = (short)(definition->bounds.x0 + offset.x + halo_screen_ui_offset_current() -
-			(widget->name[0] == 'q' ? 20 : 5));
-		short chief_top = (short)(definition->bounds.y0 + offset.y);
+		boolean color_screen = widget->name && !strcmp(widget->name, "color_right_pic");
+		boolean profile_screen = widget->name && !strcmp(widget->name, "qtr_screen_profile_color_pic") &&
+			widget->parent && widget->parent->name && !strcmp(widget->parent->name, "player_profile_right_item");
+		boolean join_quarter = widget->parent && widget->parent->child == widget && widget->parent->name &&
+			!strncmp(widget->parent->name, "join4_qtr_", 10) && strcmp(widget->parent->name, "join4_qtr_join");
 
-		if (menu_chief_draw(chief_left, chief_top,
-				(short)(chief_left + definition->bounds.x1 - definition->bounds.x0),
-				(short)(chief_top + definition->bounds.y1 - definition->bounds.y0),
-				frame_index,
-				widget->name[0] == 'c'))
+		if (bitmap && (color_screen || profile_screen || join_quarter))
 		{
-			bitmap = NULL;
+			extern boolean menu_chief_draw(short x0, short y0, short x1, short y1, short color_index, boolean controlled);
+			/* (no screen's picture is in the middle of its panel, as he, with
+			what he holds out to one side, must be) */
+			short chief_left = (short)(definition->bounds.x0 + offset.x + halo_screen_ui_offset_current() -
+				(color_screen ? 5 : join_quarter ? 10 : 20));
+			short chief_top = (short)(definition->bounds.y0 + offset.y);
+			short color_index = frame_index;
+
+			/* (a player's who chose theirs, or plays: their profile's color, the
+			spinner's picture showing the one it is on) */
+			if (join_quarter && strcmp(widget->parent->name, "join4_qtr_select") &&
+				widget->parent->local_player_index >= 0 &&
+				widget->parent->local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS &&
+				player_ui_get_active_player_profile_index(widget->parent->local_player_index) != NONE)
+			{
+				struct player_profile profile;
+
+				player_ui_get_active_player_profile(widget->parent->local_player_index, &profile);
+				color_index = (short)PIN(profile.primary_color_index, 0,
+					player_profile_number_of_available_primary_colors() - 1);
+			}
+			if (menu_chief_draw(chief_left, chief_top,
+					(short)(chief_left + definition->bounds.x1 - definition->bounds.x0),
+					(short)(chief_top + definition->bounds.y1 - definition->bounds.y0),
+					color_index,
+					color_screen))
+			{
+				bitmap = NULL;
+			}
 		}
 	}
 	if (bitmap)
@@ -7905,7 +7999,13 @@ static boolean widget_fullscreen_over_split(
 	short screen_height;
 	short design_height;
 
-	if (local_player_count() <= 1 || !widget)
+	if (!widget)
+		return FALSE;
+	/* port: the box of a controller joining the game in progress, which has
+	no pane of its own (menu_functions.c's ingame_join) */
+	if (pc_menu_ingame_join_screen(widget))
+		return TRUE;
+	if (local_player_count() <= 1)
 		return FALSE;
 	definition = ui_widget_definition_get(widget->definition_tag_index);
 	if (!definition)
@@ -7937,8 +8037,10 @@ void render_ui_widgets(
 	if (bink_playback_ui_rendering_inhibited())
 		return;
 	/* port: the tag packs being written: the main menu's background alone
-	behind their checklist (tag_pack.c) */
-	if (tag_pack_checklist_shown())
+	behind their checklist (tag_pack.c); and hosting from the menus, the
+	host's screen is drawn in their place (port/linux/game/host_dashboard.c),
+	the lobby's screen under it unseen */
+	if (tag_pack_checklist_shown() || halo_server_hosting())
 		return;
 	if (!virtual_keyboard_active())
 	{
@@ -8079,8 +8181,7 @@ void render_ui_widgets_over_split_screen(
 	long widget_index;
 	boolean any;
 
-	if (local_player_count() <= 1)
-		return;
+	/* (with one pane, only a joining controller's box: widget_fullscreen_over_split) */
 	any = FALSE;
 	for (widget_index = 0;
 		widget_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS;
@@ -8442,9 +8543,11 @@ static void widget_instance_process_one_event_recursive(
 		"c:\\halo\\SOURCE\\interface\\ui_widget.c",
 		3067,
 		widget && definition && event && return_widget_deleted);
-	if (event->type == _event_type_button &&
+	/* port: (the stick too: a list's end moves it on, list_scrolls_at_end) */
+	if ((event->type == _event_type_button &&
 		event->data.button.index >= _widget_event_dpad_up &&
-		event->data.button.index <= _widget_event_dpad_right)
+		event->data.button.index <= _widget_event_dpad_right) ||
+		event->type == _event_type_left_stick)
 	{
 		ui_mouse_focused_last = FALSE;
 		/* port: (ui_mouse_hovered_last) */
@@ -8933,6 +9036,70 @@ static void widget_instance_process_one_event_recursive(
 	return;
 }
 
+/* port: a controller's menus closed, and its screen history let go (a split
+screen player who left the network game: network_client_manager.c's
+network_game_client_remove_player) */
+void ui_widgets_port_close_for_controller(
+	short controller_index)
+{
+	if (controller_index < 0 || controller_index >= MAXIMUM_NUMBER_OF_LOCAL_PLAYERS)
+		return;
+	if (widget_globals.active_widgets[controller_index])
+		ui_widget_delete(widget_globals.active_widgets[controller_index]);
+	while (widget_globals.widget_stack[controller_index])
+	{
+		struct widget_stack_data data;
+
+		pop_widget(&widget_globals.widget_stack[controller_index], &data);
+	}
+}
+
+/* port: a controller with no player pressing START in a network game in
+progress opens its box to join it (menu_functions.c's ingame_join); TRUE if
+one did, whose START is then not the box's too (as a pause press is not the
+pause screen's) */
+static boolean ui_check_for_ingame_join(
+	void)
+{
+	short controller_index;
+
+	if (!game_in_progress() ||
+		cinematic_in_progress() ||
+		game_connection() == _game_connection_film_playback ||
+		we_are_at_the_main_menu ||
+		widget_globals.pause_disabled_ticks != 0 ||
+		!network_game_is_active())
+	{
+		return FALSE;
+	}
+	for (controller_index = 0;
+		controller_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS;
+		controller_index++)
+	{
+		if (input_has_gamepad(controller_index) &&
+			!widget_globals.active_widgets[controller_index] &&
+			local_player_get_player_index(controller_index) == NONE &&
+			input_get_gamepad_state(controller_index)->buttons[_gamepad_binary_button_start] == 1 &&
+			pc_menu_ingame_join_allowed(controller_index))
+		{
+			if (!ui_widget_load_by_name_or_tag(
+				pc_menu_ingame_join_name(),
+				NONE,
+				NULL,
+				controller_index,
+				NONE,
+				NONE,
+				NONE))
+			{
+				error(_error_silent, "failed to load the in-game join box");
+				return FALSE;
+			}
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 static boolean ui_check_for_pause_game(
 	void)
 {
@@ -9254,6 +9421,10 @@ void process_ui_widgets(
 	}
 	if (progress_bar_is_active())
 		return;
+	/* port: the saved game checked ahead, for the campaign menus
+	(game_state_xbox.c): only in the main menu, never while a game plays */
+	if (main_menu_is_active())
+		game_state_persistent_storage_check_ahead();
 	if (virtual_keyboard_active())
 	{
 		virtual_keyboard_process();
@@ -9314,6 +9485,8 @@ void process_ui_widgets(
 		return;
 	}
 	pause_pressed = ui_check_for_pause_game();
+	if (!pause_pressed)
+		pause_pressed = ui_check_for_ingame_join();
 	any_modal_widget_active = FALSE;
 	for (widget_index = 0;
 		widget_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS;

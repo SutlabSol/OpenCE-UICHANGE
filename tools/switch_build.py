@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .android_build import (ANDROID_API, ANDROID_DEFINES, GUEST_CODE_FLAGS, MUSL_DIRECTORIES, MUSL_EXCLUDE,
+from .android_build import (ANDROID_API, ANDROID_DEFINES, GUEST_CODE_FLAGS, MUSL_DIRECTORIES, MUSL_EXCLUDE, compiler_include,
                             MUSL_FILES, MUSL_THREAD_PREFIXES, MUSL_URL, MUSL_VERSION, VARIADIC_PROTOTYPE_FILES,
                             ZLIB_DEFINES, ZLIB_DIR, ZLIB_SOURCES,
                             _musl_sources, _find_ndk, fetch_third_party, guest_abi_flags)
@@ -493,6 +493,7 @@ def generate_switch_build(n: Writer, sln: Any) -> None:
     libc_includes = [
         f"-isystem {libc_include}", f"-isystem {arch}", f"-isystem {arch_generic}", f"-isystem {MUSL_DIR}/arch/generic",
         f"-isystem {MUSL_DIR}/include",
+        f"-idirafter {compiler_include(guest_cc)}",
     ]
 
     musl_cflags = " ".join([
@@ -559,7 +560,9 @@ def generate_switch_build(n: Writer, sln: Any) -> None:
     # the deko3d renderer's take their place, below
     opengl_only = {"d3d8_gl.c", "xbox_textures.c", "xgpu_post.c"}
     for source in sorted((LINUX_DIR / "src").glob("*.c")):
-        if source.name.startswith("posix_") or source.name in guest_host_only or source.name in opengl_only:
+        # (posix_server.c is the guest's: the clock and files of hosting from the
+        # menus, over the guest's own C library; the other posix_ files are the host's)
+        if (source.name.startswith("posix_") and source.name != "posix_server.c") or source.name in guest_host_only or source.name in opengl_only:
             continue
         objects.append(guest_object(source, f"{platform_cflags} {forge_source_flags(source)}"))
     for source in hud_assets_build(n, "switch", gen_dir / "hud_hires_assets.c"):
@@ -700,12 +703,23 @@ def generate_switch_build(n: Writer, sln: Any) -> None:
         host_sources = [source for source in host_sources if source.name != "host_dk_compiler_stub.c"]
     host_sources += [
         LINUX_DIR / "src" / "posix_files.c",
-        # (MCC packages' previews and host-only shares, as Android's)
-        LINUX_DIR / "src" / "posix_mcc_preview.c",
-        LINUX_DIR / "src" / "posix_mcc_share.c",
+        # MCC's package previews and download staging (posix.h)
+        LINUX_DIR / "src" / "posix_mcc_preview.c", LINUX_DIR / "src" / "posix_mcc_share.c",
         TOML_DIR / "tomlc17.c",
         # a replay's records in the host's memory, as Android's and the PS5's
         ANDROID_PORT_DIR / "host" / "host_replay.c",
+        # the map lists' IMPORT, as Android's and the PS5's, and its JSON reader
+        ANDROID_PORT_DIR / "host" / "host_mcc_import.c", LINUX_DIR / "src" / "server_json.c",
+        # an MCC map's conversion on the host's threads, as Android's and the PS5's
+        ANDROID_PORT_DIR / "host" / "host_mcc_convert.c",
+        # an MCC package's fingerprint on the host's threads, as Android's and the PS5's
+        ANDROID_PORT_DIR / "host" / "host_mcc_hash.c",
+        # the game's map cache files kept in memory, as Android's and the PS5's
+        ANDROID_PORT_DIR / "host" / "host_memory_files.c",
+        # files over a connection of their own, as Android's and the PS5's, with
+        # Monocypher's X25519 and ChaCha20-Poly1305
+        ANDROID_PORT_DIR / "host" / "host_file_share.c", ANDROID_PORT_DIR / "host" / "host_file_share_crypto.c",
+        MONOCYPHER_DIR / "monocypher.c",
     ]
     # the port's zlib (inflate only, its names z_), for the high-res HUD's
     # PNGs, which the host decodes as a map loads (host_dk_hud.c)
@@ -745,8 +759,20 @@ def generate_switch_build(n: Writer, sln: Any) -> None:
             cflags = " ".join([host_cflags, f"-I{ZLIB_DIR}", *ZLIB_DEFINES])
         if source in upnp_sources:
             cflags = upnp_cflags + (" -w" if source.name != "posix_upnp.c" else "")
-        if source.name == "host_dk_hud.c":
+        # (the port's zlib: the high-res HUD's PNGs, and the map lists' IMPORT's .zip files)
+        if source.name in ("host_dk_hud.c", "host_mcc_import.c", "steam_cm.c"):
             cflags = f"{host_cflags} -I{ZLIB_DIR}"
+        # (the Steam client's chunk unpacker: the LZMA SDK's and Zstandard's
+        # decoders, whose warnings are not ours)
+        if source.name == "steam_unpack.c":
+            cflags = f"{host_cflags} -I{ZLIB_DIR} -w"
+        # (an MCC map's conversion: the guest's codecs, whose bcdec shifts
+        # signed values as the guest's -fwrapv defines)
+        if source.name == "host_mcc_convert.c":
+            cflags = f"{host_cflags} -fwrapv"
+        # (the file connection's: Monocypher's X25519 and ChaCha20-Poly1305)
+        if source.name in ("host_file_share_crypto.c", "monocypher.c"):
+            cflags = f"{host_cflags} -I{MONOCYPHER_DIR}"
         n.build(outputs=obj, rule="switch_host_cc", inputs=source, variables={"cflags": cflags},
                 implicit=[syscall_h])
         host_objects.append(obj)

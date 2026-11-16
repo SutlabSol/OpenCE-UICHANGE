@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .guest_arch import ARM64_32, GuestArch
-from .linux_build import (GAME_DATA_FILES, LINUX_PROFILE, MINIUPNPC_DEFINES, MINIUPNPC_DIR, MUSL_MATH_DIR, STB_VORBIS_SOURCE, XDK_INCLUDE,
+from .linux_build import (DYNAMIC_LIGHTING_GAME_SOURCES, DYNAMIC_LIGHTING_PLATFORM_SOURCES, GAME_DATA_FILES, LINUX_PROFILE, MINIUPNPC_DEFINES, MINIUPNPC_DIR, MUSL_MATH_DIR, STB_VORBIS_SOURCE, XDK_INCLUDE,
                           compile_launcher, configuration_defines, game_defines_and_includes, game_sources,
                           miniupnpc_sources, musl_math_sources, opus_cflags, opus_sources, pgo_mode, pgo_profile,
                           profile_use_flags, updater_defines, xdk_headers)
@@ -577,8 +577,12 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
         if source.as_posix() in VARIADIC_PROTOTYPE_FILES:
             cflags += f" -include {PORT_DIR}/include/halo_android_variadic_prototypes.h"
         objects.append(guest_object(source, f"{cflags} {forge_source_flags(source)}"))
+    dynamic_lighting_objects = []
     for source in sorted(Path(config["game_sources"]).glob("*.c")):
-        objects.append(guest_object(source, f"{game_cflags} {forge_source_flags(source)}"))
+        if source.name in DYNAMIC_LIGHTING_GAME_SOURCES:
+            dynamic_lighting_objects.append(guest_object(source, f"{game_cflags} {forge_source_flags(source)}"))
+        else:
+            objects.append(guest_object(source, f"{game_cflags} {forge_source_flags(source)}"))
     # (Content Extended's Forge: tools/forge_build.py)
     for source in forge_sources():
         objects.append(guest_object(source, forge_cflags(game_cflags, ZLIB_DIR)))
@@ -598,9 +602,13 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
     gl_textures_object = None
     gl_post_object = None
     for source in sorted((LINUX_DIR / "src").glob("*.c")):
-        if source.name.startswith("posix_") or source.name in guest_host_only:
+        # (posix_server.c is the guest's: the clock and files of hosting from the
+        # menus, over the guest's own C library; the other posix_ files are the host's)
+        if (source.name.startswith("posix_") and source.name != "posix_server.c") or source.name in guest_host_only:
             continue
-        if source.name == "updater.c" and updater_cflags:
+        if source.name in DYNAMIC_LIGHTING_PLATFORM_SOURCES:
+            dynamic_lighting_objects.append(guest_object(source, platform_cflags))
+        elif source.name == "updater.c" and updater_cflags:
             objects.append(guest_object(source, f"{platform_cflags} {updater_cflags}"))
         else:
             objects.append(guest_object(source, f"{platform_cflags} {forge_source_flags(source)}"))
@@ -703,7 +711,9 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
     if relocatable:
         link_implicit.append(Path("tools/guest_relocations.py"))
     relocations = build / "halo_guest.relocs"
-    n.build(outputs=image, rule=f"{prefix}_guest_link", inputs=objects,
+    # (the OpenGL renderer's image: the dynamic lighting's hooks do nothing)
+    gl_objects = objects + [guest_object(PORT_DIR / "guest" / "dynamic_lighting_disabled.c", game_cflags)]
+    n.build(outputs=image, rule=f"{prefix}_guest_link", inputs=gl_objects,
             implicit_outputs=[relocations] if relocatable else None, implicit=link_implicit,
             variables={"relocations": str(relocations)} if relocatable else None)
     # what the host cannot give the image: thread-local storage, the thread
@@ -729,6 +739,7 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
         # (its texture cache, xbox_textures_vk.c, takes the place of xbox_textures.c the same way)
         vk_image = build / "halo_guest_vk.elf"
         vk_objects = [obj for obj in objects if obj not in (gl_renderer_object, gl_textures_object, gl_post_object)]
+        vk_objects.extend(dynamic_lighting_objects)
         vk_objects.append(guest_object(PORT_DIR / "guest" / "xbox_textures_vk.c", platform_cflags))
         vk_objects.append(guest_object(PORT_DIR / "guest" / "d3d8_vk.c", platform_cflags))
         # the generators for glslang (port/android/VULKAN.md, phase 4): the originals stay in both images
@@ -903,12 +914,24 @@ def generate_android_build(n: Writer, sln: Any) -> None:
         LINUX_DIR / "src" / "posix_files.c", LINUX_DIR / "src" / "posix_net.c",
         LINUX_DIR / "src" / "posix_mcc_preview.c",
         LINUX_DIR / "src" / "posix_mcc_share.c",
+        # the map lists' IMPORT's JSON reader (host_mcc_import.c)
+        LINUX_DIR / "src" / "server_json.c",
         # the app reads debug.sample_seconds from config.toml (host_main.c)
         TOML_DIR / "tomlc17.c",
+        # the file connection's X25519 and ChaCha20-Poly1305 (host_file_share_crypto.c)
+        MONOCYPHER_DIR / "monocypher.c",
     ]
     for source in host_sources:
         obj = host_obj_dir / (source.name + ".o")
-        n.build(outputs=obj, rule="android_host_cc", inputs=source, variables={"cflags": host_cflags},
+        # (the Steam client's chunk unpacker: the LZMA SDK's and Zstandard's
+        # decoders, whose warnings are not ours)
+        # (an MCC map's conversion: the guest's codecs, whose bcdec shifts
+        # signed values as the guest's -fwrapv defines, host_mcc_convert.c)
+        n.build(outputs=obj, rule="android_host_cc", inputs=source,
+                variables={"cflags": host_cflags + (" -w" if source.name == "steam_unpack.c" else "") +
+                           (" -fwrapv" if source.name == "host_mcc_convert.c" else "") +
+                           (f" -I{MONOCYPHER_DIR}" if source.name in ("host_file_share_crypto.c", "monocypher.c")
+                            else "")},
                 implicit=[build_stamp] if source.name == "host_vk_probe.c" else None)
         host_objects.append(obj)
     # internet play's UPnP (posix_upnp.c, with port/third_party/miniupnpc),

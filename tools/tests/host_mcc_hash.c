@@ -1,6 +1,6 @@
 /* tools/test_host_mcc_hash.py's driver: port/android/host/host_mcc_hash.c's
-fingerprints of a package folder and of one map, printed for the test to
-check against Python's hashlib and zlib. */
+ * fingerprints of a package folder and of one map, printed for the test to
+ * check against Python's hashlib and zlib. */
 #define HOST_MCC_HASH_TEST 1
 #include "../../port/android/host/host_mcc_hash.c"
 

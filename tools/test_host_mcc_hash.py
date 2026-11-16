@@ -1,8 +1,9 @@
 """port/android/host/host_mcc_hash.c's MCC fingerprints against the guest's
 definition (port/linux/game/mcc_resource_check.inl), worked out again here
 with hashlib and zlib: one map's, a package's kept in each way, the SHA-256
-and CRC32 by the portable code and by ARMv8's instructions (under
-qemu-aarch64, when there is an NDK and qemu)."""
+and CRC32 by the portable code and by the CPU's instructions (x86-64's SHA
+extensions here when it has them, ARMv8's under qemu-aarch64 when there is
+an NDK and qemu)."""
 import hashlib
 import os
 import shutil
@@ -14,7 +15,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / "tools/tests/host_mcc_hash.c"
-ZLIB = ROOT / "port/third_party/zlib"
 NDK = Path(os.environ.get("ANDROID_NDK_HOME") or os.environ.get("ANDROID_NDK_ROOT") or "/nonexistent",
            "toolchains/llvm/prebuilt/linux-x86_64/bin/clang")
 PREFIX = b"GulchCE MCC content v1"
@@ -72,19 +72,18 @@ def check(command, tmp_path, expect_kind=None):
 
 def build(tmp_path, compiler, *flags, threads=("-lpthread",)):
     exe = tmp_path / "driver"
-    # (with the port's zlib, whose CRC-32 is the portable one's)
-    zlib_objects = []
-    for source in ["crc32.c", "zutil.c"]:
-        zlib_objects.append(tmp_path / (source + ".o"))
-        subprocess.run([*compiler, "-O2", "-w", "-DZ_PREFIX", "-c", str(ZLIB / source), "-o", str(zlib_objects[-1])],
-                       check=True)
-    subprocess.run([*compiler, "-O2", "-std=gnu11", "-Wall", "-Werror", "-I", str(ZLIB), *flags, str(DRIVER),
-                    *map(str, zlib_objects), "-o", str(exe), *threads], check=True)
+    subprocess.run([*compiler, "-O2", "-std=gnu11", "-Wall", "-Werror", *flags, str(DRIVER),
+                    "-o", str(exe), *threads], check=True)
     return exe
 
 
 def test_portable(tmp_path):
     check([str(build(tmp_path, ["cc"], "-DHOST_MCC_HASH_PORTABLE"))], tmp_path, "portable portable")
+
+
+def test_native(tmp_path):
+    has_sha = "sha_ni" in Path("/proc/cpuinfo").read_text()
+    check([str(build(tmp_path, ["cc"]))], tmp_path, "x86 SHA extensions" if has_sha else None)
 
 
 @pytest.mark.skipif(not NDK.exists() or not shutil.which("qemu-aarch64-static"), reason="no NDK or qemu-aarch64")

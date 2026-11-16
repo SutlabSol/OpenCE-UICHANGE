@@ -27,12 +27,12 @@ struct mcc_runtime {
 /* Only ranges actually loaded into tags are accessible here. BSP data is
  * checked against its own region by the geometry adapter. */
 void *mcc_runtime_pointer(struct mcc_runtime *runtime, uint32_t address, uint32_t bytes);
-/* Where the tag window moved (its linked address taken: mcc_cache.c), an
- * address in it as the map was linked, and a linked one where it is now.
- * Anything outside the window, and everything when it did not move, is
- * returned as it is. */
-uint32_t mcc_runtime_linked_address(struct mcc_runtime const *runtime, void const *address);
-void *mcc_runtime_moved_address(struct mcc_runtime const *runtime, uint32_t address);
+/* an address in the tags as the map was written for, whichever form it is
+given in (mcc_cache.c; the tags may be elsewhere: halo_port_window.h); one
+outside them is returned as it is */
+uint32_t mcc_runtime_linked(struct mcc_runtime const *runtime, uint32_t address);
+/* and where it is in memory now; NULL outside the tags */
+void *mcc_runtime_actual(struct mcc_runtime const *runtime, uint32_t address);
 int mcc_runtime_read(struct mcc_runtime *runtime, uint32_t offset, uint32_t bytes, void *out);
 
 /* Appends aligned runtime data below the lowest BSP, never overwriting tags. */

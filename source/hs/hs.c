@@ -2852,6 +2852,7 @@ symbols in this file:
 #include "mcc_script_parameters.h" /* port: port/linux/game/mcc_script_parameters.h */
 #include "mcc_syntax.h" /* port: port/linux/game/mcc_syntax.h */
 #include "mcc_scripts.h" /* port: port/linux/game/mcc_scripts.c */
+#include "custom_campaigns.h" /* port: port/linux/game/custom_campaigns.c */
 
 /* ---------- constants */
 
@@ -13085,10 +13086,13 @@ static short hs_syntax_node_check(
 	/* port: map_name in a campaign level's scripts (hs_scenario_campaign), and
 	in a Custom Edition map's (not a downloaded one's), which goes on only to a
 	map in its own folder (main_script_set_map_name): a campaign of several
-	maps, Lumoria's, goes from each to the next */
+	maps, Lumoria's, goes from each to the next; a mounted custom campaign's
+	maps also change the level and difficulty as the game's own campaign does
+	(port/linux/game/custom_campaigns.c) */
 	if (from_map && !hs_function_allowed_in_maps[function_index] &&
 		!(hs_scenario_campaign && !csstrcmp(function->name, "map_name")) &&
-		!(function->evaluate == main_set_map_name_evaluate && !hs_scenario_downloaded && custom_edition_cache_tags_loaded()))
+		!(function->evaluate == main_set_map_name_evaluate && !hs_scenario_downloaded && custom_edition_cache_tags_loaded()) &&
+		!custom_campaign_script_may_call(cache_file_loaded_map_name(), function->name))
 	{
 		return _hs_node_refusal_function;
 	}

@@ -3,6 +3,7 @@
 #include "mcc_package.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define MCC_SHARE_ASK_TIMEOUT 30000u
 #define MCC_SHARE_STALL_TIMEOUT 60000u
@@ -639,6 +640,7 @@ static void client_idle(struct mcc_share *share)
     share->have_pending=0;
     share->state=MCC_SHARE_CLIENT_IDLE;
     share->outstanding=0;
+    share->external_bytes=0;
 }
 
 static int client_send(struct mcc_share *share, uint8_t op, uint8_t file, uint8_t flags,
@@ -689,6 +691,13 @@ static void client_pump(struct mcc_share *share)
 {
     int current=share->stage.current;
     if (share->reuse_stream || share->have_pending || current>=share->stage.count) return;
+    /* (the files coming another way: the host hears from us meanwhile) */
+    if (share->env.transfer_elsewhere && share->env.transfer_elsewhere(share->env.user)) {
+        uint32_t now=share_now(share);
+        if (share_elapsed(now,share->reported_at,MCC_SHARE_OFFER_HEARTBEAT) &&
+            client_send(share,MCC_SHARE_OP_MANIFEST,0,0,0,0)) share->reported_at=now;
+        return;
+    }
     if (share->reuse_checked_file!=current && share->request_file==current && !share->request_offset &&
         !share->outstanding) {
         struct mcc_share_file const *file=&share->stage.files[current];
@@ -729,11 +738,15 @@ static void client_pump(struct mcc_share *share)
 static void client_reuse(struct mcc_share *share)
 {
     uint32_t budget=MCC_SHARE_REUSE_SLICE,began=share_now(share);
-    static unsigned char block[65536];
+    /* (from the heap at the first use: the guest images have no room for it as static data) */
+    static unsigned char (*block_storage)[65536];
+    unsigned char *block;
+    if (!block_storage && !(block_storage=malloc(sizeof(*block_storage)))) return;
+    block=*block_storage;
     while (share->reuse_stream && budget && !share_elapsed(share_now(share),began,MCC_SHARE_REUSE_MILLISECONDS)) {
         uint32_t want=mcc_share_stage_wanted(&share->stage);
         enum mcc_share_stage_result result;
-        if (want>sizeof(block)) want=sizeof(block);
+        if (want>sizeof(*block_storage)) want=sizeof(*block_storage);
         if (want>budget) want=budget;
         if (!want || fread(block,1,want,share->reuse_stream)!=want) {
             client_fail(share,"A previously downloaded resource could not be read. Nothing was installed.");
@@ -907,6 +920,72 @@ static void client_chunk(struct mcc_share *share, struct mcc_share_response cons
     }
 }
 
+int mcc_share_client_external(struct mcc_share *share, void const *data, uint32_t bytes)
+{
+    uint8_t const *at=data;
+    while (bytes) {
+        enum mcc_share_stage_result result;
+        uint32_t wanted;
+        if (share->state!=MCC_SHARE_CLIENT_TRANSFERRING) return 0;
+        wanted=mcc_share_stage_wanted(&share->stage);
+        if (!wanted) return 0;
+        if (wanted>bytes) wanted=bytes;
+        result=mcc_share_stage_write(&share->stage,at,wanted);
+        share->progress_at=share_now(share);
+        at+=wanted;
+        bytes-=wanted;
+        if (result==MCC_SHARE_STAGE_ALL_DONE) {
+            share->state=MCC_SHARE_CLIENT_VERIFYING;
+            return 1;
+        }
+        if (result==MCC_SHARE_STAGE_BAD_HASH) {
+            client_fail(share,"A file from the host did not match its SHA-256. Nothing was installed.");
+            return -1;
+        }
+        if (result!=MCC_SHARE_STAGE_OK && result!=MCC_SHARE_STAGE_FILE_DONE) {
+            client_fail(share,"The files from the host could not be written. Nothing was installed.");
+            return -1;
+        }
+    }
+    return 1;
+}
+
+void mcc_share_client_external_fail(struct mcc_share *share, char const *message)
+{
+    if (share->state==MCC_SHARE_CLIENT_TRANSFERRING) client_fail(share,message);
+}
+
+int mcc_share_client_external_file(struct mcc_share *share)
+{
+    enum mcc_share_stage_result result;
+    if (share->state!=MCC_SHARE_CLIENT_TRANSFERRING) return 0;
+    result=mcc_share_stage_external_done(&share->stage);
+    share->external_bytes=0;
+    share->progress_at=share_now(share);
+    if (result==MCC_SHARE_STAGE_ALL_DONE) {
+        share->state=MCC_SHARE_CLIENT_VERIFYING;
+        return 1;
+    }
+    if (result!=MCC_SHARE_STAGE_FILE_DONE) {
+        client_fail(share,"The files from the host could not be written. Nothing was installed.");
+        return -1;
+    }
+    return 1;
+}
+
+void mcc_share_client_external_progress(struct mcc_share *share, uint32_t bytes)
+{
+    if (share->state!=MCC_SHARE_CLIENT_TRANSFERRING) return;
+    if (bytes!=share->external_bytes) share->progress_at=share_now(share);
+    share->external_bytes=bytes;
+}
+
+void mcc_share_client_external_abort(struct mcc_share *share)
+{
+    mcc_share_stage_external_abort(&share->stage);
+    share->external_bytes=0;
+}
+
 void mcc_share_client_response(struct mcc_share *share, void const *message, unsigned bytes)
 {
     struct mcc_share_response head;
@@ -992,7 +1071,7 @@ int mcc_share_client_percent(struct mcc_share const *share)
     if (share->state==MCC_SHARE_CLIENT_IDLE) return -1;
     if (share->state==MCC_SHARE_CLIENT_VERIFYING) return 100;
     if (share->state!=MCC_SHARE_CLIENT_TRANSFERRING || !share->stage.total) return 0;
-    return (int)(((uint64_t)share->stage.done*100u)/share->stage.total);
+    return (int)(((uint64_t)(share->stage.done+share->external_bytes)*100u)/share->stage.total);
 }
 
 static void client_update(struct mcc_share *share)

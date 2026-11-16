@@ -118,13 +118,21 @@ static short mcc_hud_button_index(struct icon_hud_element_definition const *icon
     short i;
     struct icon_hud_element_definition const *buttons;
     if (!hud_globals) return NONE;
-    buttons=hud_globals->messaging.button_icons.address;
+    buttons=TAG_BLOCK_ADDRESS(hud_globals->messaging.button_icons);
     if (!buttons) return NONE;
     for (i=0;i<18 && i<hud_globals->messaging.button_icons.count;i++)
         if (icon==buttons+i) return i<6 ? i :
             config_boolean("display.high_res_hud") ? hud_button_control_slot(i,
                 icon->frame_rate>0 ? game_time_get()/icon->frame_rate : 0) : NONE;
     return NONE;
+}
+
+/* the High-Res HUD's button style, as hud_hires_tags.c reads it: 0 classic,
+1 gems, 2 the menus' gems (this fork has no per-controller glyph styles) */
+static short mcc_hud_button_style(void)
+{
+    char const *style=config_string("display.hud_button_style");
+    return (!strcmp(style,"dark_gems") || !strcmp(style,"menu_gems")) ? 2 : !strcmp(style,"gems");
 }
 
 static struct bitmap_data const *mcc_hud_button_bitmap(short index)

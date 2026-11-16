@@ -124,8 +124,10 @@ static void screen_keyboard_update(void);
 /* SDL's text input run while a line is typed from the keyboard, for the
 layout's characters */
 static void text_layout_update(void);
-/* dsound_sdl.c's: the output device followed */
+#endif
+/* dsound_sdl.c's: the output device (and Android's realtime audio) followed */
 void dsound_sdl_output_device_check(void);
+#ifndef HALO_ANDROID
 /* updater.c's: the desktop self-updater */
 void updater_start(void);
 void updater_poll(SDL_Window *window);
@@ -282,7 +284,7 @@ BOOL platform_sdl_initialize(void)
 	/* a dedicated server (server_mode.c) runs where there is no display,
 	sound or controller (a service, a container): SDL's drivers that need
 	none, and its events alone */
-	if (halo_server_mode())
+	if (halo_server_headless())
 	{
 		SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy");
 		SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
@@ -311,12 +313,12 @@ BOOL platform_sdl_initialize(void)
 	server's were, by server_mode.c) */
 	platform_data_root();
 #ifndef HALO_WEB
-	if (!halo_server_mode())
+	if (!halo_server_headless())
 		data_check_maps();
 #endif
 	/* (a new version looked for meanwhile, updater_poll asking about it; a
 	dedicated server's is server.auto_update's) */
-	if (!halo_server_mode())
+	if (!halo_server_headless())
 	{
 		updater_start();
 		/* (a player's public game on the master servers too, with a
@@ -326,7 +328,7 @@ BOOL platform_sdl_initialize(void)
 #endif
 	/* (a Discord account linked at a master server: its passes asked for
 	again before they run out, player_link.c) */
-	if (!halo_server_mode())
+	if (!halo_server_headless())
 		player_link_start();
 	/* (the mods, and whether to play those that say they cannot be played
 	together, before the window opens: port_mods.c) */
@@ -2383,7 +2385,7 @@ static void platform_pump_events_headless(void)
 	if (SDL_GetCurrentThreadID() != thread)
 		return;
 	/* (a dedicated server stops itself: server_director.c) */
-	if (!halo_server_mode())
+	if (!halo_server_headless())
 		exit_after_check();
 #ifndef HALO_ANDROID
 	if (config_string("debug.update_answer")[0])
@@ -2426,9 +2428,10 @@ void platform_pump_events(void)
 #endif
 #ifndef HALO_ANDROID
 	updater_poll(platform_window);
-	/* (Settings > Audio's output device, as it changes: dsound_sdl.c) */
-	dsound_sdl_output_device_check();
 #endif
+	/* (Settings > Audio's output device, and Android's realtime audio, as
+	they change: dsound_sdl.c) */
+	dsound_sdl_output_device_check();
 	screen_keyboard_update();
 #ifndef HALO_ANDROID
 	text_layout_update();

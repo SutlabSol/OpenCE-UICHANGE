@@ -1,9 +1,7 @@
 /* The same CRC and SHA framing as the synchronous load checks, with bounded
  * slices for lobby navigation. Owns its readers and never draws or ticks game
  * state. The source stream belongs to mcc_validation and outlives this check. */
-/* port: the Android app's host alone has it (the Switch's guest is HALO_ANDROID's
- * too, its host not) */
-#if defined(HALO_ANDROID) && !defined(HALO_SWITCH)
+#if defined(HALO_ANDROID)
 /* The hashing is the host's (port/android/host/host_mcc_hash.c): the CPU's
  * SHA-256 and CRC32 instructions on two threads, and the results kept on the
  * card, a Steam Workshop package's worked out as it was installed. The
@@ -19,7 +17,7 @@ struct mcc_host_hash_result {uint32_t crc;unsigned char digest[32];};
 
 static int mcc_resources_host_fingerprint(struct mcc_runtime *runtime,unsigned char digest[32])
 {
-#if defined(HALO_ANDROID) && !defined(HALO_SWITCH)
+#if defined(HALO_ANDROID)
     static char paths[3][1024];
     static struct mcc_host_hash_request request;
     static struct mcc_host_hash_result result;
@@ -60,7 +58,7 @@ struct mcc_resource_check {
     uint32_t crc, offset, size;
     unsigned type, mask;
     int framed;
-#if defined(HALO_ANDROID) && !defined(HALO_SWITCH)
+#if defined(HALO_ANDROID)
     /* the files' paths on the host (map, bitmaps, sounds; "" not used), and
      * the host's job (-1 none yet, -2 none: the guest hashes) */
     char host_paths[3][1024];
@@ -87,7 +85,7 @@ int mcc_resources_check_paths(struct mcc_resource_check const *check, char paths
 void mcc_resources_check_end(struct mcc_resource_check *check)
 {
     if (!check) return;
-#if defined(HALO_ANDROID) && !defined(HALO_SWITCH)
+#if defined(HALO_ANDROID)
     if (check->host_job>=0) host_mcc_hash_cancel(check->host_job);
 #endif
     mcc_resources_dispose(&check->runtime);
@@ -156,7 +154,7 @@ struct mcc_resource_check *mcc_resources_check_begin_candidate(char const *name,
     enum mcc_cache_status status=MCC_CACHE_READ_FAILED;
     check=calloc(1,sizeof(*check));
     if (!check) return NULL;
-#if defined(HALO_ANDROID) && !defined(HALO_SWITCH)
+#if defined(HALO_ANDROID)
     /* (no job of its own yet: a failure below must not cancel the host's job 0) */
     check->host_job=-2;
 #endif
@@ -183,7 +181,7 @@ struct mcc_resource_check *mcc_resources_check_begin_candidate(char const *name,
     check->mask=(check->runtime.report.external_bitmap_count ? 1u : 0u) |
         (check->runtime.report.external_sound_count ? 2u : 0u);
     check->crc=check->runtime.report.identity.checksum;
-#if defined(HALO_ANDROID) && !defined(HALO_SWITCH)
+#if defined(HALO_ANDROID)
     /* (the paths now, while a staged package's redirect holds: the worker
      * hashes after it is cleared) */
     check->host_job=-2;
@@ -227,7 +225,7 @@ int mcc_resources_check_step(struct mcc_resource_check *check, uint32_t *checksu
     uint32_t bytes,spent=0;
     unsigned long began=system_milliseconds();
     long size;
-#if defined(HALO_ANDROID) && !defined(HALO_SWITCH)
+#if defined(HALO_ANDROID)
     /* (the host's, when it takes it: the guest's own below otherwise) */
     if (check->host_job==-1 && !check->offset && !check->type && !check->framed) {
         unsigned part;

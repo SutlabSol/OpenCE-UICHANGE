@@ -132,7 +132,7 @@ ARM64_32 = GuestArch(
     integer_registers=8,
     packed_stack_arguments=True,
     zlib_flags=("-U__ARM_FEATURE_CRC32",),
-    compiler_headers=False,
+    compiler_headers=True,
     thread_pointer_instructions=(r"\btpidr(ro)?_el0\b",),
     # x21 holds the base, x22 is the rewrite's scratch register (and
     # full-width jump tables: the rewrite moves code too far apart for the

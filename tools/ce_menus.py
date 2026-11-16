@@ -117,7 +117,7 @@ CHILD_OFFSETS = {
         f"ui\\shell\\main_menu\\multiplayer_type_select\\{row}"): port_settings.multiplayer_row_place(row)
        for row in port_settings.MULTIPLAYER_ROWS[:7]},
     ("ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_select_screen",
-     "ui\\shell\\main_menu\\blueline"): (64, 349),
+     "ui\\shell\\main_menu\\blueline"): (64, 376),
     # the profile settings' rows, eleven in the nine's room
     # (port_settings.PROFILE_ROWS)
     **{("ui\\shell\\main_menu\\settings_select\\player_setup\\player_profile_edit\\profile_edit_select_list",
@@ -711,6 +711,13 @@ def pause_art(art):
         heights += list(port_settings.PAUSE_BOX_EXTRA_HEIGHTS)
         lines.append(art.port_picture(f"pause/pausebox_{piece}", [
             (port_settings.pause_box_svg(piece, height), 4 if piece == "center" else 16, 256) for height in heights]))
+    # (the in-game join box's: the 3-button box's frames alone, which the
+    # pause menu's own does not change: port_settings.py's _ingame_join)
+    for piece in ("left", "center", "right"):
+        width = 4 if piece == "center" else 16
+        lines.append(f'\t<bitmap name="pause/joinbox_{piece}">\n'
+                     f'\t\t<frame png="ce/port/pause/pausebox_{piece}__0.png" width="{width}" height="256"/>\n'
+                     '\t</bitmap>')
     for piece in ("left", "center", "right"):
         lines.append(art.port_picture(f"pause/objectives_{piece}", [
             (port_settings.pause_box_svg(piece, height, header=True), 4 if piece == "center" else 16, 256)
@@ -855,6 +862,8 @@ def main() -> None:
         shutil.copy2(MENUS / "controllers" / f"{controller}.svg", MENUS / "port_svg/controllers" / f"{controller}.svg")
     lines += [art.port_picture(name, frames) for name, frames in port_settings.layout_overlay_pictures()]
     lines += [art.port_picture(name, frames) for name, frames in port_settings.browser_hint_pictures()]
+    # (Host Server's screens' tabs, panels, rows and pills: port_settings._host)
+    lines += [art.port_picture(name, frames) for name, frames in port_settings.host_pictures()]
     # (nothing: what a game map draws for a frame of ui.map's it has not,
     # menu_tags.c)
     lines.append(art.port_picture("blank", [

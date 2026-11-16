@@ -121,7 +121,9 @@ static int base_resources(char const *level,char const resources[2][128],unsigne
 
 void mcc_share_package_build(char const *level, struct mcc_share_host_package *package)
 {
-    static char list[65537];
+    /* (from the heap at the first build: the guest images have no room for it as static data) */
+    static char (*list_storage)[65537];
+    char *list;
     static char const *credits[]={"credits.txt","readme.txt","license.txt"};
     struct mcc_share_metadata_plan *plan;
     struct mcc_workshop_item item;
@@ -157,10 +159,15 @@ void mcc_share_package_build(char const *level, struct mcc_share_host_package *p
         return;
     }
     *end=0;
+    if (!list_storage && !(list_storage=calloc(1,sizeof(*list_storage)))) {
+        error(_error_silent,"mcc share: not offering %s: no memory for the share list",canonical);
+        return;
+    }
+    list=*list_storage;
     file=fopen(MCC_SHARE_LIST_FILE,"rb");
     if (file) {
-        length=fread(list,1,sizeof(list),file);
-        if (ferror(file) || length==sizeof(list)) length=0;
+        length=fread(list,1,sizeof(*list_storage),file);
+        if (ferror(file) || length==sizeof(*list_storage)) length=0;
         fclose(file);
     }
     package->refusal=mcc_share_admit(canonical,config_boolean("network.map_share"),
