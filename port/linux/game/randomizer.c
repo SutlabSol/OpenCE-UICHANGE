@@ -1984,6 +1984,7 @@ static int vault_profile_has_enabled_tags(long profile)
 the injector reads first) and the profile, either of which may be none */
 extern int forge_ai_saved_actor_count(void);
 extern void forge_ai_saved_clear(void);
+extern void forge_level_local_tags_clear(void);
 
 /* a Forge map's AI's tags come from Forge's own pack, else (a player who has
 never opened Forge's menu) the randomizer's: the same maps' same tags */
@@ -2157,7 +2158,10 @@ static int forge_level_tags(char const *scenario_name, int firefight, long *forg
 	*forge_baked = NONE;
 	/* (the last level's actors are not this one's) */
 	if (!saved)
+	{
 		forge_ai_saved_clear();
+		forge_level_local_tags_clear();
+	}
 	if (!g_forge_session_enabled && !saved && !forge_session_import)
 		return 0;
 	baked = saved ? forge_level_baked_open(scenario_name) : NONE;
@@ -2555,7 +2559,10 @@ void randomizer_tags_loaded(char const *scenario_name)
 	/* (an MCC map is never Forge's: none of a saved Forge map's of the same
 	name, nor the last level's actors) */
 	if (mcc_vanilla_level)
+	{
 		forge_ai_saved_clear();
+		forge_level_local_tags_clear();
+	}
 	else if (forge_level_tags(scenario_name, firefight, &forge_profile, &forge_baked))
 		return;
 #endif

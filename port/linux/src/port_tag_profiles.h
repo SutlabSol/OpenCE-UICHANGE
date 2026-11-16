@@ -156,6 +156,12 @@ the tags given (their profile and tag, `count` of them) and archives them as
 _shared_build does, returning how many; _unpack makes the folder of an
 archive, which _scratch_path names a place for. */
 long port_tag_profiles_baked_build(const long *profiles, const long *tags, long count, const char *archive);
+/* ... as _build, MCC's own content kept: a folder of this machine's alone,
+never sent anywhere (a saved map's tags its bake left out, from this
+machine's profiles: forge_runtime_tags.c). _tag_mcc_own, whether a tag is
+MCC's own content (it never leaves this machine: no share, no bake) */
+long port_tag_profiles_baked_build_local(const long *profiles, const long *tags, long count, const char *archive);
+int port_tag_profiles_tag_mcc_own(long profile, long tag);
 int port_tag_profiles_baked_unpack(const char *archive, const char *id);
 int port_tag_profiles_baked_present(const char *id);
 long port_tag_profiles_baked_open(const char *id);

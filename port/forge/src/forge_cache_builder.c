@@ -5295,6 +5295,7 @@ extern int forge_baked_archive_make(
 	char *id,
 	unsigned long id_size,
 	uint32_t *size);
+extern int forge_baked_local_lines(struct forge_scenario_edit_state const *edits, char *text, unsigned long text_size);
 
 static int append_forge_map_metadata_and_preview_trailer(
 	struct forge_byte_buf *out,
@@ -5524,6 +5525,20 @@ static int append_forge_map_metadata_and_preview_trailer(
 		}
 	}
 
+	/* (the tags the bake leaves out, MCC's own content: each machine reads
+	them from its own profiles, forge_level_local_tags_add) */
+	if (edits && !ce_base_map && state_buf.data)
+	{
+		char *local_lines = (char *)malloc(0x20000u);
+		int local_length = local_lines ? forge_baked_local_lines(edits, local_lines, 0x20000u) : 0;
+
+		if (local_length > 0)
+		{
+			uint32_t o = buf_alloc(&state_buf, (uint32_t)local_length, 1);
+			if (state_buf.data) memcpy(state_buf.data + o, local_lines, (size_t)local_length);
+		}
+		free(local_lines);
+	}
 	if (edits && !ce_base_map &&
 		forge_baked_archive_make(edits, baked_path, sizeof(baked_path), baked_id, sizeof(baked_id), &baked_size) &&
 		baked_size)

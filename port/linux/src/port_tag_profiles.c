@@ -2133,7 +2133,14 @@ long port_tag_profiles_props_open(void)
 	return PROPS_PROFILE;
 }
 
-long port_tag_profiles_baked_build(const long *profiles, const long *tags, long count, const char *archive)
+int port_tag_profiles_tag_mcc_own(long profile, long tag)
+{
+	return tag_mcc_own_content(profile, tag);
+}
+
+/* (keep_mcc_own: a level's own copy, on this machine alone, of the tags a
+saved map names but could not bake: port_tag_profiles_baked_build_local) */
+static long baked_build(const long *profiles, const long *tags, long count, const char *archive, int keep_mcc_own)
 {
 	char folder[MAXIMUM_PATH_LENGTH];
 	struct tag_profile baked;
@@ -2173,7 +2180,7 @@ long port_tag_profiles_baked_build(const long *profiles, const long *tags, long 
 
 		if (!source || !tag || !tag->size)
 			continue;
-		if (tag_mcc_own_content(profiles[index], tags[index]))
+		if (!keep_mcc_own && tag_mcc_own_content(profiles[index], tags[index]))
 		{
 			platform_log("tag injector: %s is MCC's own content, which stays on this machine: it is not baked into "
 				"the map", tag->name);
@@ -2241,6 +2248,16 @@ long port_tag_profiles_baked_build(const long *profiles, const long *tags, long 
 	free(baked.tags);
 	folder_delete(folder);
 	return written ? index : 0;
+}
+
+long port_tag_profiles_baked_build(const long *profiles, const long *tags, long count, const char *archive)
+{
+	return baked_build(profiles, tags, count, archive, 0);
+}
+
+long port_tag_profiles_baked_build_local(const long *profiles, const long *tags, long count, const char *archive)
+{
+	return baked_build(profiles, tags, count, archive, 1);
 }
 
 /* the marker beside a share a client took a copy of (the copy's folder in

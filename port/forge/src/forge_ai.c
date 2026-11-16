@@ -8,6 +8,7 @@
  */
 
 #include "cseries.h"
+#include "cseries/errors.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -441,6 +442,8 @@ static int s_markers_scanned;
 /* Forge mode: the AI stands still as models on its markers, none of it
 playing, the encounters hidden from the engine so none respawn */
 static int s_ai_held;
+/* (diagnostic: the first units a level's AI places, in debug.txt) */
+static int s_ai_units_placed_logged;
 static struct scenario *s_held_scenario;
 static long s_held_encounter_count;
 
@@ -889,6 +892,18 @@ static void forge_ai_encounters_build(void)
 	original_palette = (struct tag_reference *)scen->ai_actor_palette.address;
 	original_palette_count = scen->ai_actor_palette.count;
 	entries = forge_ai_level_spawns(&entry_count, &replace_own);
+	s_ai_units_placed_logged = 0;
+	/* (diagnostic, debug.txt: why a level's Forge AI does or does not play) */
+	if (scen->type == _scenario_type_multiplayer && (entries || s_saved.has_spawns || g_forge_session_enabled))
+	{
+		error(_error_silent, "forge ai: building the level's AI: %d spawns (%s), replace own %d, map encounters %ld, "
+			"session %d, live %d, saved applied %d has %d count %d, engine running %d, engine %ld, firefight %d, connection %d",
+			entry_count, entries == NULL ? "none" : entries == s_saved.entries ? "saved map" : "Forge edits",
+			replace_own, original_count, g_forge_session_enabled, (int)g_forge.live_instance_count, s_saved.applied,
+			s_saved.has_spawns, s_saved.count, (int)game_engine_running(),
+			game_engine_running() ? (long)game_engine_get_variant()->game_engine_index : -1L, firefight,
+			(int)game_connection());
+	}
 	/* (a map that uses no AI is left alone, and a campaign level always is) */
 	if (scen->type != _scenario_type_multiplayer || (!entries && (!firefight || original_count == 0)))
 		return;
@@ -933,13 +948,20 @@ static void forge_ai_encounters_build(void)
 		entry_added[i] = NONE;
 		entry_variant[i] = NONE;
 		if (!forge_ai_entry_plays(entry))
+		{
+			error(_error_silent, "forge ai: spawn %d (%s) does not play in this game (active %d, modes %04x)", i,
+				entry->actor_variant_path, (int)entry->active, forge_ai_entry_modes(entry));
 			continue;
+		}
 		entry_variant[i] = forge_ai_tag_need('actv', entry->actor_variant_path);
 		if (entry_variant[i] == NONE)
 		{
-			platform_log("Forge: an AI spawn's actor is not in this level: %s", entry->actor_variant_path);
+			error(_error_silent, "forge ai: spawn %d's actor is not in this level: %s", i, entry->actor_variant_path);
 			continue;
 		}
+		error(_error_silent, "forge ai: spawn %d plays: %s (tag %08lx), %d units, team %d, encounter %d, own squad %d", i,
+			entry->actor_variant_path, (unsigned long)entry_variant[i], (int)entry->unit_count, (int)entry->team,
+			(int)entry->encounter_index, forge_ai_entry_own_squad(entry));
 		if (!forge_ai_entry_own_squad(entry))
 			continue;
 		team = forge_ai_entry_team(entry, entry_variant[i]);
@@ -1154,6 +1176,8 @@ static void forge_ai_encounters_build(void)
 	scen->ai_encounters.count = original_count + added_count;
 	scen->ai_actor_palette.address = s_built.palette;
 	scen->ai_actor_palette.count = palette_count;
+	error(_error_silent, "forge ai: the level has %ld encounters (%d added, %ld firing positions made), palette %ld",
+		(long)scen->ai_encounters.count, added_count, firing_cursor, palette_count);
 }
 
 /* (from ai_initialize_for_new_map, the game's type known, every tag in) */
@@ -1177,6 +1201,8 @@ void forge_ai_encounters_apply(void)
 	forge_ai_encounters_build();
 	if (s_ai_held)
 	{
+		error(_error_silent, "forge ai: the AI is held (Forge mode): its %ld encounters hidden",
+			(long)scen->ai_encounters.count);
 		s_held_scenario = scen;
 		s_held_encounter_count = scen->ai_encounters.count;
 		scen->ai_encounters.count = 0;
@@ -1420,6 +1446,13 @@ static void forge_ai_weapon_give(long unit_index, long weapon_definition)
 void forge_ai_unit_placed(long unit_index, struct actor_starting_location const *location)
 {
 	short slot = (short)(location->flags >> FORGE_AI_LOCATION_WEAPON_SHIFT);
+
+	if (s_ai_units_placed_logged < 4)
+	{
+		s_ai_units_placed_logged++;
+		error(_error_silent, "forge ai: a unit placed at (%.1f %.1f %.1f)", location->position.x,
+			location->position.y, location->position.z);
+	}
 
 	if (slot > 0 && slot <= s_built.weapon_count)
 		forge_ai_weapon_give(unit_index, s_built.weapons[slot - 1]);

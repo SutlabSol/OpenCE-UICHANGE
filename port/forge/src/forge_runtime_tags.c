@@ -7,6 +7,7 @@
  */
 
 #include "cseries.h"
+#include "cseries/errors.h"
 #include "halo_port_limits.h" /* HALO_PORT_NETWORK_VERSION: OpenCE's protocol for standard sessions */
 #include "game/game.h"
 #include "objects/objects.h"
@@ -267,6 +268,11 @@ static void forge_pack_donor_close(void)
 }
 
 extern long port_tag_profiles_baked_build(const long *profiles, const long *tags, long count, const char *archive);
+extern long port_tag_profiles_baked_build_local(const long *profiles, const long *tags, long count, const char *archive);
+extern int port_tag_profiles_tag_mcc_own(long profile, long tag);
+extern const char *port_tag_profiles_folder(long profile);
+extern unsigned long port_tag_profiles_tag_size(long profile, long tag);
+extern unsigned long port_tag_profiles_tag_signature(long profile, long tag);
 extern int port_tag_profiles_baked_unpack(const char *archive, const char *id);
 extern int port_tag_profiles_baked_present(const char *id);
 extern long port_tag_profiles_baked_open(const char *id);
@@ -5826,6 +5832,191 @@ static int forge_file_part_copy(FILE *f, uint32_t offset, uint32_t size, char co
 and flags, which the level then plays): the profile, NONE for none */
 static void forge_saved_markers_apply(char const *text);
 
+/* ---------- a saved map's tags its bake could not hold
+
+MCC's own content never leaves the machine it was taken on (its EULA), so a
+map's bake leaves out any placed object or AI spawn's actor or weapon taken
+out of an MCC map (port_tag_profiles_baked_build). The save names each
+instead (LOCAL_TAG|group|profile folder|path), and a level of the map reads
+them from this machine's own profiles: the map's bake and these, copied
+together once into a bake of this machine's alone (.baked/l<id>), never
+sent anywhere. A machine without them plays the map without them */
+#define FORGE_MAX_LOCAL_TAGS 256
+
+struct forge_local_tag
+{
+	uint32_t group_tag;
+	char folder[64];
+	char path[256];
+};
+
+/* (the level's, as its save named them: a profile folder for a tag a later
+save finds in the level's own bake) */
+static struct forge_local_tag s_level_local_tags[FORGE_MAX_LOCAL_TAGS];
+static int s_level_local_tag_count;
+
+static int forge_local_tags_parse(char const *text, struct forge_local_tag *tags, int capacity)
+{
+	char const *cur = text;
+	int count = 0;
+
+	while ((cur = strstr(cur, "LOCAL_TAG|")) != NULL && count < capacity)
+	{
+		unsigned int group = 0;
+		struct forge_local_tag *tag = &tags[count];
+		char const *folder;
+		char const *path;
+		size_t length;
+
+		cur += 10;
+		memset(tag, 0, sizeof(*tag));
+		folder = strchr(cur, '|');
+		path = folder ? strchr(folder + 1, '|') : NULL;
+		if (!path || sscanf(cur, "%x", &group) != 1)
+			continue;
+		/* (an empty folder: any of this machine's profiles) */
+		length = (size_t)(path - folder - 1);
+		snprintf(tag->folder, sizeof(tag->folder), "%.*s", (int)(length < sizeof(tag->folder) ? length : 0), folder + 1);
+		if (sscanf(path + 1, "%255[^\r\n]", tag->path) == 1)
+		{
+			tag->group_tag = (uint32_t)group;
+			count++;
+		}
+	}
+	return count;
+}
+
+/* this machine's profile and tag of a local tag, by its folder first: 0 when
+none has it */
+static int forge_local_tag_find(struct forge_local_tag const *local, long *profile, long *tag)
+{
+	long count = port_tag_profiles_count();
+	long index;
+
+	*profile = local->folder[0] ? port_tag_profiles_find(local->folder) : NONE;
+	*tag = *profile >= 0 ? port_tag_profiles_tag_find(*profile, local->group_tag, local->path) : NONE;
+	for (index = 0; *tag < 0 && index < count; index++)
+	{
+		*profile = index;
+		*tag = port_tag_profiles_tag_find(index, local->group_tag, local->path);
+	}
+	return *tag >= 0;
+}
+
+/* the level's bake: `baked` (the map's, NONE for none) with the map's local
+tags this machine has added, made once. The profile, `baked` when there are
+none */
+static long forge_level_local_tags_add(char const *text, long baked, char const *baked_id)
+{
+	struct forge_local_tag *locals = s_level_local_tags;
+	long *profiles = NULL;
+	long *tags = NULL;
+	long baked_count = baked != NONE ? port_tag_profiles_tag_count(baked) : 0;
+	int local_count;
+	int found = 0;
+	int i;
+	uint32_t low = 0x811C9DC5u, high = 0x9E3779B9u;
+	char id[40];
+	long local = NONE;
+
+	s_level_local_tag_count = local_count = forge_local_tags_parse(text, locals, FORGE_MAX_LOCAL_TAGS);
+	if (!local_count)
+		return baked;
+	profiles = (long *)malloc((size_t)(baked_count + local_count) * sizeof(*profiles));
+	tags = (long *)malloc((size_t)(baked_count + local_count) * sizeof(*tags));
+	if (!profiles || !tags)
+	{
+		free(profiles);
+		free(tags);
+		return baked;
+	}
+	for (i = 0; i < baked_count; i++)
+	{
+		profiles[i] = baked;
+		tags[i] = i;
+	}
+	/* (the profiles this machine has now: the level's bake keeps its slot) */
+	port_tag_profiles_scan();
+	for (i = 0; baked_id && baked_id[i]; i++)
+		low = (low ^ (uint8_t)baked_id[i]) * 16777619u;
+	for (i = 0; i < local_count; i++)
+	{
+		long profile, tag;
+		char const *c;
+		unsigned long size;
+		unsigned long signature;
+
+		if (baked != NONE && port_tag_profiles_tag_find(baked, locals[i].group_tag, locals[i].path) >= 0)
+			continue;
+		if (!forge_local_tag_find(&locals[i], &profile, &tag))
+		{
+			error(_error_silent, "forge: the map's %s is not in any of this machine's Tag Injector profiles: it is "
+				"played without it", locals[i].path);
+			continue;
+		}
+		profiles[baked_count + found] = profile;
+		tags[baked_count + found] = tag;
+		found++;
+		size = port_tag_profiles_tag_size(profile, tag);
+		signature = port_tag_profiles_tag_signature(profile, tag);
+		for (c = locals[i].path; *c; c++)
+			low = (low ^ (uint8_t)*c) * 16777619u;
+		low = (low ^ locals[i].group_tag) * 16777619u;
+		high = (high + (uint32_t)size) * 2654435761u;
+		high = (high + (uint32_t)signature) * 2654435761u;
+	}
+	if (found)
+	{
+		snprintf(id, sizeof(id), "l%08x%08x", (unsigned int)high, (unsigned int)low);
+		if (!port_tag_profiles_baked_present(id))
+		{
+			char scratch[1024];
+
+			port_tag_profiles_baked_scratch_path(scratch, sizeof(scratch));
+			if (!port_tag_profiles_baked_build_local(profiles, tags, baked_count + found, scratch) ||
+				!port_tag_profiles_baked_unpack(scratch, id))
+			{
+				error(_error_silent, "forge: the map's tags from this machine's profiles cannot be copied");
+			}
+			remove(scratch);
+		}
+		/* (the map's own bake closed, as this one opens) */
+		if (port_tag_profiles_baked_present(id))
+			local = port_tag_profiles_baked_open(id);
+		if (local == NONE || local < 0)
+		{
+			local = NONE;
+			if (baked_id && baked_id[0])
+				baked = port_tag_profiles_baked_open(baked_id);
+		}
+		else
+			error(_error_silent, "forge: %d of the map's %d tags from this machine's profiles added (%s)", found,
+				local_count, id);
+	}
+	free(profiles);
+	free(tags);
+	return local != NONE ? local : baked;
+}
+
+/* a level that is no saved map: none named */
+void forge_level_local_tags_clear(void)
+{
+	s_level_local_tag_count = 0;
+}
+
+/* the profile folder the level's save named for a local tag, "" for none */
+static char const *forge_local_tag_folder(uint32_t group_tag, char const *path)
+{
+	int i;
+
+	for (i = 0; i < s_level_local_tag_count; i++)
+	{
+		if (s_level_local_tags[i].group_tag == group_tag && !_stricmp(s_level_local_tags[i].path, path))
+			return s_level_local_tags[i].folder;
+	}
+	return "";
+}
+
 long forge_level_baked_open(char const *scenario_name)
 {
 	FILE *f = forge_saved_map_open(scenario_name);
@@ -5856,10 +6047,87 @@ long forge_level_baked_open(char const *scenario_name)
 			profile = NONE;
 		}
 	}
+	s_level_local_tag_count = 0;
+	if (text)
+		profile = forge_level_local_tags_add(text, profile, profile != NONE ? id : NULL);
 	free(text);
 	if (f)
 		fclose(f);
 	return profile;
+}
+
+/* the LOCAL_TAG lines of a save (forge_level_local_tags_add): what is placed
+and the AI spawns use that the bake leaves out as MCC's own content, each
+once, into `text`; and those a level of the map named but this machine has
+not got, kept for the machines that have. Its length */
+int forge_baked_local_lines(struct forge_scenario_edit_state const *edits, char *text, unsigned long text_size)
+{
+	long baked = tag_injector_level_baked_profile();
+	long playing = tag_injector_level_profile();
+	int capacity = edits ? edits->placed_object_count + edits->ai_spawn_count * 2 : 0;
+	unsigned long length = 0;
+	int i;
+
+	if (!text || !text_size)
+		return 0;
+	text[0] = 0;
+	for (i = 0; i < capacity; i++)
+	{
+		int is_ai = i >= edits->placed_object_count;
+		int ai_index = (i - edits->placed_object_count) / 2;
+		int is_ai_weapon = is_ai && ((i - edits->placed_object_count) & 1);
+		uint32_t group = is_ai_weapon ? 'weap' : is_ai ? 'actv' : edits->placed_objects[i].group_tag;
+		char const *name = is_ai_weapon ? edits->ai_spawns[ai_index].weapon_path :
+			is_ai ? edits->ai_spawns[ai_index].actor_variant_path :
+			edits->placed_objects[i].tag_path;
+		char const *folder = NULL;
+		long profile = baked;
+		long tag = NONE;
+		char line[400];
+		int line_length;
+
+		if (!name[0] || (!is_ai && edits->placed_objects[i].x < -90000.0f) ||
+			(is_ai && !edits->ai_spawns[ai_index].active))
+			continue;
+		if (baked != NONE)
+			tag = port_tag_profiles_tag_find(baked, group, name);
+		if (tag == NONE && playing != NONE)
+		{
+			profile = playing;
+			tag = port_tag_profiles_tag_find(playing, group, name);
+		}
+		if (tag != NONE && port_tag_profiles_tag_mcc_own(profile, tag))
+		{
+			folder = forge_local_tag_folder(group, name);
+			/* (a regular profile's folder: a level's bake or a share is no
+			profile of anyone's) */
+			if (!folder[0] && profile == playing && port_tag_profiles_folder(profile)[0] != '.')
+				folder = port_tag_profiles_folder(profile);
+		}
+		else if (tag == NONE)
+		{
+			int known;
+
+			for (known = 0; known < s_level_local_tag_count &&
+				!(s_level_local_tags[known].group_tag == group && !_stricmp(s_level_local_tags[known].path, name));
+				known++)
+			{
+			}
+			if (known < s_level_local_tag_count)
+				folder = s_level_local_tags[known].folder;
+		}
+		if (!folder)
+			continue;
+		line_length = snprintf(line, sizeof(line), "LOCAL_TAG|%08x|%s|%s\r\n", (unsigned int)group, folder, name);
+		if (line_length <= 0 || (unsigned long)line_length >= sizeof(line) || strstr(text, line) ||
+			length + (unsigned long)line_length >= text_size)
+		{
+			continue;
+		}
+		memcpy(text + length, line, (size_t)line_length + 1);
+		length += (unsigned long)line_length;
+	}
+	return (int)length;
 }
 
 /* the tags of what is placed that are not the game's, into an archive to
