@@ -3050,6 +3050,21 @@ static void ai_place_pending_mounted_weapons(
 {
 	short unit_number;
 
+	/* port: no built-in gunner on a multiplayer map but in Firefight (its
+	dropships' guns). A vehicle taken out of a campaign map (the Tag
+	Injector's, a Forge map's: a Falcon's gunner) brings its gunner's actor
+	along, which belongs to no player's team: it fires at every player, and
+	no player gets into a vehicle an enemy rides */
+	{
+		extern boolean firefight_active(void);
+
+		if (global_scenario_get()->type == _scenario_type_multiplayer && !firefight_active())
+		{
+			ai_globals->mounted_weapon_unit_count = 0;
+			return;
+		}
+	}
+
 	for (unit_number = 0;
 		unit_number < ai_globals->mounted_weapon_unit_count;
 		unit_number++)
