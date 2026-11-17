@@ -1042,6 +1042,12 @@ void map_manager_poll(
 	picture_choose(row_get(manager.chosen[manager.list]));
 }
 
+boolean map_manager_library_shown(
+	void)
+{
+	return manager.library && manager.list == _list_library;
+}
+
 short map_manager_list(
 	void)
 {

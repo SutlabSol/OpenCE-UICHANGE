@@ -227,7 +227,7 @@
 		<on event="back" back="true"/>
 		<child widget="main_menu/new_select/sel_list_desc_bkd"/>
 		<child widget="main_menu/mods/hub/hub_list"/>
-		<child widget="main_menu/mods/header_mods"/>
+		<child widget="main_menu/mods/hub/header_hub"/>
 		<child widget="main_menu/mods/hub/community_content"/>
 	</widget>
 	<widget name="main_menu/mods/hub/hub_list" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_children" description="main_menu/mods/hub/details">
@@ -279,6 +279,8 @@
 		<on event="a" back="true"/>
 		<on event="start" back="true"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<widget name="main_menu/mods/hub/header_hub" type="text" controller="1" left="35" top="11" width="363" height="59" text="MAPS &amp; MODS" font="ui\large_ui" color="#FFFFFFFF" text_x="13" text_y="16">
 	</widget>
 	<widget name="main_menu/mods/hub/community_content" type="text" controller="1" left="32" top="163" width="372" height="22" text="COMMUNITY CONTENT (COMING SOON)" font="ui\large_ui" color="#FF4C5866" text_y="4" text_flags="no_focus_test">
 	</widget>
@@ -361,8 +363,11 @@
 		<child widget="main_menu/new_select/sel_list_desc_bkd"/>
 		<child widget="main_menu/mods/ce_maps/maps_list"/>
 		<child widget="main_menu/mods/ce_maps/header_ce"/>
+		<child widget="main_menu/mods/ce_maps/browse_maps"/>
 	</widget>
 	<widget name="main_menu/mods/ce_maps/header_ce" type="text" controller="1" left="35" top="11" width="363" height="59" text="CUSTOM EDITION MAPS" font="ui\large_ui" color="#FFFFFFFF" text_x="13" text_y="16">
+	</widget>
+	<widget name="main_menu/mods/ce_maps/browse_maps" type="text" controller="1" left="32" width="372" height="22" text="BROWSE MAPS (COMING SOON)" font="ui\large_ui" color="#FF4C5866" text_y="4" text_flags="no_focus_test">
 	</widget>
 	<widget name="main_menu/mods/ce_maps/maps_list" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_children" description="main_menu/map_manager/map_details">
 		<data input="port maps update"/>

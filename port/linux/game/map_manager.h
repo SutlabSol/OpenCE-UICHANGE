@@ -103,6 +103,10 @@ longer there, and what was typed taken */
 void map_manager_poll(
 	void);
 
+/* whether the library's own list is shown (its first: REQUIRED FILES...) */
+boolean map_manager_library_shown(
+	void);
+
 /* the list shown (an index of its own, which changes as lists are opened),
 how many rows it has, and the first shown and the one chosen (the screen's
 to keep) */

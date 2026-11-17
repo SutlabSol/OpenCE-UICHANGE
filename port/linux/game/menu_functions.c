@@ -1940,11 +1940,15 @@ static boolean map_import_report_take(char *text, size_t size)
 	return TRUE;
 }
 
-/* whether this build imports maps by the Mods screens' IMPORT rows (the web
-build's launcher imports its own way) */
+/* whether this build imports maps by the Mods screens' IMPORT rows: Android's
+file picker and the desktop's file dialog (not the consoles, whose map lists
+keep their upload page, nor the web build, whose launcher imports its own
+way) */
 static boolean map_import_available(void)
 {
-#if (defined(HALO_ANDROID) && !defined(HALO_SWITCH)) || defined(HALO_SWITCH) || defined(HALO_PS5)
+#if defined(HALO_SWITCH) || defined(HALO_PS5)
+	return FALSE;
+#elif defined(HALO_ANDROID)
 	return TRUE;
 #else
 	return platform_import_file_pick_available() != 0;
@@ -11851,6 +11855,9 @@ under them (map_picture, drawn by ui_widget.c). A goes down a list or does
 what the row says, B goes back up, and from the first to the map list */
 
 #define MAP_MANAGER_ROWS 11
+/* where the rows are: the first's top, and from one to the next */
+#define MAP_MANAGER_ROW_TOP 73
+#define MAP_MANAGER_ROW_PITCH 30
 /* the details' lines above the picture */
 #define MAP_MANAGER_DETAILS_LINES 8
 
@@ -11932,6 +11939,17 @@ static void maps_update(struct widget_instance *list)
 	first = map_manager_first();
 	chosen = map_manager_chosen();
 	count = map_manager_count();
+	/* (CE MAPS' BROWSE MAPS, greyed under the library's rows, a row's
+	place below the last: tools/port_settings.py's _mods_hub) */
+	{
+		struct widget_instance *browse = named(screen_of(list), "browse_maps", 0);
+
+		if (browse)
+		{
+			visible_set(browse, map_manager_library_shown());
+			browse->vertical_offset = (short)(MAP_MANAGER_ROW_TOP + MAP_MANAGER_ROW_PITCH * count);
+		}
+	}
 	/* (a list opened: its row chosen focused) */
 	if (map_manager_list() != maps_screen.list_shown)
 	{

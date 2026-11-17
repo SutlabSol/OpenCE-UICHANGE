@@ -825,7 +825,7 @@ def main() -> None:
     # status icons: Lucide's, port/assets/icons/lucide)
     lines.append(art.port_picture("main_menu/menu_daily", port_settings.menu_item_frames(
         "DAILY CHALLENGE", art.redraws, port_settings.DAILY_ITEM_WIDTH)))
-    lines.append(art.port_picture("main_menu/menu_mods", port_settings.menu_item_frames("MODS", art.redraws)))
+    lines.append(art.port_picture("main_menu/menu_mods", port_settings.menu_item_frames("MAPS & MODS", art.redraws)))
     # (and its THEATER: port_settings._theater)
     lines.append(art.port_picture("main_menu/menu_theater", port_settings.menu_item_frames("THEATER", art.redraws)))
     # (and its PLAY, Campaign's and Multiplayer's: port_settings._play)

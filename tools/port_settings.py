@@ -6134,11 +6134,73 @@ MENU_ITEM_SPACES = {"MO": 3.17, "OD": 2.8, "DS": 2.3,
                     "SO": 2.6, "OL": 3.0, "LO": 0.4, "T V": 8.5, "VA": -3.5, "AR": 1.0, "RI": 3.2, "IA": 1.2,
                     "AN": 1.1, "NT": 1.7, "TS": 1.6, "SI": 3.3, "IN": 4.2, "GL": 3.3, "E P": 12.0, "YE": 0.5,
                     "ED": 3.3, "DI": 3.4, "IT": 2.0, "T M": 11.0, "MA": 1.2, "AP": 1.0, "PS": 2.0, "TA": 0.4,
-                    "AG": 1.0, "G I": 13.0, "NJ": 3.0, "JE": 3.8, "EC": 2.9, "CT": 1.5, "TO": 1.4}
-# letters no redraw has, drawn from theirs: V from A's strokes, J from L's
+                    "AG": 1.0, "G I": 13.0, "NJ": 3.0, "JE": 3.8, "EC": 2.9, "CT": 1.5, "TO": 1.4,
+                    # (MAPS & MODS': the spaces about the ampersand as
+                    # between words, set by eye)
+                    "S &": 9.0, "& M": 9.0}
+# letters no redraw has, drawn from theirs: V from A's strokes, J from L's, and
+# the ampersand of MAPS & MODS
 MENU_ITEM_LETTERS = {"V": "M0,0L4.67,0L11.44,16.6L18.21,0L22.88,0L14.11,21.5L8.77,21.5Z",
                      "J": "M10.24,0L14.92,0L14.92,14.24C14.92,18.25 11.67,21.5 7.66,21.5L0,21.5L0,17.66L6.79,17.66"
-                          "C8.69,17.66 10.24,16.12 10.24,14.22Z"}
+                          "C8.69,17.66 10.24,16.12 10.24,14.22Z",
+                     # (MAPS & MODS': an ampersand of the redraws' stroke,
+                     # 4.3 wide as M's stems, its ends cut square as theirs)
+                     "&": ("M4.88,9.17L4.81,9.10L4.76,9.05L4.55,8.83L4.49,8.76L4.29,8.54L4.21,8.44L4.04,8.22L3.93,8.06L3.79,7.85"
+                          "L3.69,7.68L3.59,7.48L3.54,7.36L3.44,7.16L3.40,7.04L3.32,6.82L3.28,6.70L3.21,6.48L3.18,6.35L3.13,6.14"
+                          "L3.10,5.99L3.06,5.78L3.04,5.63L3.03,5.42L3.02,5.25L3.01,5.04L3.02,4.87L3.03,4.66L3.05,4.48L3.08,4.27"
+                          "L3.12,4.08L3.17,3.88L3.22,3.71L3.29,3.50L3.35,3.35L3.44,3.14L3.50,3.01L3.60,2.80L3.67,2.68L3.79,2.47"
+                          "L3.86,2.36L3.99,2.16L4.07,2.04L4.22,1.86L4.32,1.74L4.47,1.56L4.59,1.44L4.75,1.29L4.90,1.16L5.06,1.02"
+                          "L5.28,0.87L5.46,0.76L5.69,0.64L5.89,0.54L6.08,0.47L6.29,0.39L6.44,0.34L6.67,0.28L6.79,0.25L7.02,0.20"
+                          "L7.11,0.19L7.35,0.15L7.41,0.14L7.64,0.10L7.68,0.10L7.91,0.07L7.92,0.07L8.14,0.04L8.33,0.02L8.53,-0.0"
+                          "1L8.57,-0.01L8.75,-0.03L8.81,-0.04L8.99,-0.05L9.05,-0.06L9.22,-0.07L9.29,-0.07L9.46,-0.07L9.54,-0.07"
+                          "L9.71,-0.07L9.79,-0.07L9.96,-0.06L10.04,-0.06L10.21,-0.04L10.29,-0.04L10.47,-0.01L10.54,-0.00L10.73,"
+                          "0.02L10.76,0.03L10.96,0.06L10.97,0.06L11.19,0.10L11.21,0.10L11.44,0.15L11.48,0.15L11.71,0.20L11.78,0"
+                          ".22L12.01,0.27L12.10,0.29L12.32,0.36L12.43,0.39L12.65,0.47L12.79,0.52L13.00,0.61L13.18,0.69L13.36,0."
+                          "79L13.58,0.93L13.75,1.04L13.96,1.22L14.11,1.35L14.26,1.51L14.40,1.66L14.52,1.81L14.64,1.98L14.74,2.1"
+                          "2L14.85,2.30L14.93,2.44L15.03,2.63L15.09,2.76L15.18,2.95L15.23,3.08L15.30,3.28L15.34,3.41L15.40,3.61"
+                          "L15.44,3.75L15.48,3.95L15.51,4.10L15.54,4.29L15.55,4.46L15.57,4.65L15.57,4.82L15.57,5.02L15.56,5.18L"
+                          "15.54,5.38L15.52,5.52L15.49,5.72L15.46,5.86L15.42,6.06L15.38,6.19L15.32,6.39L15.28,6.52L15.21,6.71L1"
+                          "5.15,6.84L15.07,7.02L15.01,7.15L14.92,7.33L14.84,7.46L14.74,7.63L14.68,7.72L14.57,7.88L14.51,7.96L14"
+                          ".41,8.09L14.31,8.21L14.21,8.32L14.10,8.44L13.98,8.55L13.87,8.66L13.74,8.77L13.65,8.84L13.49,8.96L13."
+                          "43,9.00L13.25,9.13L13.21,9.16L12.99,9.31L12.97,9.32L12.70,9.49L12.70,9.49L12.38,9.70L12.35,9.72L12.2"
+                          "6,9.78L15.38,12.32L15.86,11.80L16.51,11.12L16.51,11.11L17.04,10.54L17.05,10.53L17.45,10.11L20.56,13."
+                          "09L20.17,13.50L19.64,14.06L19.00,14.74L18.72,15.04L21.97,17.68L19.25,21.02L15.74,18.16L15.26,18.64L1"
+                          "5.23,18.67L14.62,19.27L14.57,19.32L14.06,19.78L13.99,19.85L13.60,20.18L13.50,20.25L13.18,20.49L13.04"
+                          ",20.59L12.78,20.75L12.57,20.87L12.35,20.98L12.07,21.09L11.88,21.15L11.57,21.23L11.40,21.25L11.18,21."
+                          "28L11.02,21.29L10.96,21.29L10.85,21.29L10.81,21.29L10.71,21.31L10.48,21.36L10.37,21.38L10.11,21.42L1"
+                          "0.02,21.43L9.75,21.46L9.68,21.46L9.41,21.48L9.35,21.48L9.08,21.50L9.03,21.50L8.76,21.50L8.73,21.50L8"
+                          ".45,21.50L8.43,21.50L8.15,21.50L8.15,21.50L7.87,21.50L7.61,21.50L7.36,21.50L7.08,21.51L6.79,21.51L6."
+                          "78,21.51L6.48,21.52L6.45,21.52L6.16,21.52L6.10,21.51L5.81,21.51L5.74,21.50L5.45,21.48L5.35,21.48L5.0"
+                          "8,21.45L4.95,21.43L4.69,21.38L4.53,21.35L4.28,21.28L4.13,21.24L3.89,21.16L3.79,21.12L3.55,21.03L3.45"
+                          ",20.99L3.22,20.88L3.11,20.83L2.89,20.72L2.78,20.66L2.57,20.53L2.46,20.46L2.26,20.32L2.15,20.24L1.96,"
+                          "20.09L1.85,20.00L1.67,19.84L1.55,19.73L1.39,19.56L1.28,19.43L1.13,19.25L1.02,19.10L0.90,18.91L0.81,1"
+                          "8.77L0.69,18.56L0.62,18.42L0.52,18.20L0.46,18.07L0.37,17.84L0.32,17.71L0.25,17.47L0.21,17.34L0.15,17"
+                          ".09L0.12,16.96L0.07,16.71L0.05,16.56L0.02,16.32L0.01,16.16L0.00,15.92L0.00,15.74L0.01,15.51L0.02,15."
+                          "34L0.05,15.11L0.08,14.96L0.12,14.73L0.15,14.58L0.22,14.35L0.26,14.21L0.34,13.98L0.39,13.85L0.48,13.6"
+                          "2L0.54,13.50L0.65,13.27L0.71,13.16L0.84,12.93L0.90,12.83L1.05,12.60L1.11,12.50L1.28,12.27L1.34,12.19"
+                          "L1.53,11.96L1.59,11.88L1.79,11.66L1.85,11.59L2.06,11.37L2.13,11.30L2.35,11.09L2.41,11.03L2.66,10.81L"
+                          "2.71,10.77L2.97,10.55L3.02,10.51L3.30,10.29L3.34,10.26L3.65,10.03L3.68,10.00L4.01,9.77L4.04,9.75L4.3"
+                          "9,9.50L4.41,9.49L4.80,9.22L4.84,9.20ZM8.73,6.88L8.75,6.87L9.26,6.57L9.69,6.31L10.05,6.09L10.35,5.89L"
+                          "10.60,5.73L10.80,5.60L10.93,5.50L11.01,5.45L11.04,5.42L11.04,5.42L11.04,5.42L11.07,5.39L11.11,5.32L1"
+                          "1.14,5.26L11.17,5.21L11.20,5.15L11.22,5.09L11.24,5.02L11.26,4.96L11.26,4.91L11.27,4.86L11.27,4.84L11"
+                          ".27,4.83L11.26,4.80L11.25,4.75L11.23,4.69L11.21,4.62L11.18,4.55L11.15,4.50L11.10,4.48L10.98,4.44L10."
+                          "82,4.41L10.65,4.37L10.46,4.34L10.26,4.30L10.07,4.27L9.93,4.25L9.82,4.24L9.72,4.23L9.62,4.23L9.53,4.2"
+                          "3L9.43,4.23L9.32,4.23L9.20,4.24L9.06,4.26L8.88,4.28L8.88,4.28L8.67,4.31L8.66,4.31L8.44,4.34L8.23,4.3"
+                          "6L8.04,4.39L7.88,4.42L7.74,4.45L7.65,4.47L7.63,4.48L7.63,4.48L7.58,4.53L7.53,4.61L7.47,4.69L7.42,4.7"
+                          "8L7.37,4.87L7.34,4.95L7.32,5.00L7.32,5.02L7.32,5.04L7.31,5.07L7.32,5.11L7.32,5.17L7.33,5.23L7.35,5.3"
+                          "1L7.37,5.40L7.41,5.48L7.45,5.57L7.48,5.63L7.50,5.67L7.57,5.75L7.69,5.89L7.84,6.05L8.02,6.23L8.22,6.4"
+                          "1L8.41,6.59L8.59,6.76L8.61,6.77ZM8.30,12.10L8.07,12.24L7.60,12.53L7.20,12.79L6.84,13.03L6.51,13.27L6"
+                          ".21,13.48L5.94,13.68L5.70,13.87L5.49,14.05L5.31,14.21L5.14,14.37L4.99,14.53L4.86,14.68L4.74,14.83L4."
+                          "64,14.97L4.55,15.10L4.48,15.23L4.43,15.34L4.38,15.44L4.35,15.54L4.33,15.63L4.31,15.71L4.30,15.78L4.3"
+                          "0,15.84L4.30,15.91L4.31,16.01L4.33,16.11L4.36,16.22L4.40,16.33L4.44,16.43L4.48,16.52L4.51,16.58L4.54"
+                          ",16.62L4.57,16.66L4.61,16.70L4.67,16.75L4.74,16.81L4.83,16.87L4.93,16.93L5.05,16.99L5.17,17.05L5.30,"
+                          "17.10L5.41,17.13L5.50,17.16L5.62,17.18L5.78,17.20L5.98,17.21L6.20,17.22L6.45,17.22L6.72,17.21L7.00,1"
+                          "7.21L7.00,17.21L7.29,17.20L7.31,17.20L7.59,17.20L7.62,17.20L7.89,17.20L7.90,17.20L8.17,17.20L8.44,17"
+                          ".20L8.69,17.20L8.92,17.20L9.14,17.19L9.34,17.17L9.53,17.16L9.69,17.13L9.89,17.09L9.93,17.08L10.16,17"
+                          ".04L10.36,17.02L10.55,17.00L10.66,16.99L10.68,16.99L10.88,16.85L11.19,16.58L11.63,16.18L12.21,15.61L"
+                          "12.39,15.43Z")}
+# (a letter's id in an item's SVG: & is no name's)
+MENU_ITEM_IDS = {"&": "amp"}
 # Firefight's and Forge's menus' rows, as Campaign's: each picture's name, its
 # words and its width (content_extended_menus.py centres them by it)
 MENU_ITEMS = [("main_menu/menu_solo", "SOLO", 256),
@@ -6182,15 +6244,16 @@ def menu_item_frames(text: str, redraws: Path, width: int = 256, disabled: bool 
         parse_path(letters[letter], pen)
         widths.append(pen.bounds[2])
     # (each pair's space; a pair a space parts is keyed with it, "Y C")
-    pairs = re.findall(r"(?=([A-Z] ?[A-Z]))", text)
+    pairs = re.findall(r"(?=([A-Z&] ?[A-Z&]))", text)
     spaces = [MENU_ITEM_SPACES[pair] for pair in pairs]
     middle = MENU_ITEM_MIDDLE + (width - 256) / 2
     x = middle - (sum(widths) + sum(spaces)) * MENU_ITEM_SCALE / 2
     uses = []
     for index, letter in enumerate(glyphs):
-        uses.append(f'<use href="#g{letter}" transform="translate({x:.2f},{MENU_ITEM_TOP}) scale({MENU_ITEM_SCALE})"/>')
+        uses.append(f'<use href="#g{MENU_ITEM_IDS.get(letter, letter)}" '
+                    f'transform="translate({x:.2f},{MENU_ITEM_TOP}) scale({MENU_ITEM_SCALE})"/>')
         x += (widths[index] + (spaces[index] if index < len(spaces) else 0)) * MENU_ITEM_SCALE
-    paths = [f'    <path id="g{letter}" d="{letters[letter]}"/>' for letter in sorted(set(glyphs))]
+    paths = [f'    <path id="g{MENU_ITEM_IDS.get(letter, letter)}" d="{letters[letter]}"/>' for letter in sorted(set(glyphs))]
     head = ['<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
             f'width="{width}" height="64" viewBox="0 0 {width} 64">', "  <defs>", *paths]
     if disabled:
@@ -6520,8 +6583,10 @@ def _mods_hub() -> list:
     # (COMMUNITY CONTENT: words where a fourth row would be, greyed, no row
     # to choose)
     lines = _hub_screen(MODS_HUB, f"{MODS}/hub_screen", "hub_list",
-                        [f'<child widget="{MODS}/header_mods"/>', f'<child widget="{MODS_HUB}/community_content"/>'],
+                        [f'<child widget="{MODS_HUB}/header_hub"/>', f'<child widget="{MODS_HUB}/community_content"/>'],
                         MODS_HUB_ROWS)
+    # (its title as the main menu's item has it; OPEN CE MODS' screen keeps MODS')
+    lines += _hub_header(f"{MODS_HUB}/header_hub", "MAPS & MODS")
     lines += _widget(f"{MODS_HUB}/community_content",
                      [("type", "text"), ("controller", 1), ("left", 32), ("top", 73 + 30 * MODS_HUB_ROWS),
                       ("width", 372), ("height", 22), ("text", "COMMUNITY CONTENT (COMING SOON)"),
@@ -6537,8 +6602,16 @@ def _mods_hub() -> list:
                                                   ("flags", "pass_unhandled_to_focused_child pause_game"),
                                                   ("bitmap", "bitmaps/gradient")],
                      [*back, '<child widget="main_menu/new_select/sel_list_desc_bkd"/>',
-                      f'<child widget="{MODS_CE}/maps_list"/>', f'<child widget="{MODS_CE}/header_ce"/>'])
+                      f'<child widget="{MODS_CE}/maps_list"/>', f'<child widget="{MODS_CE}/header_ce"/>',
+                      f'<child widget="{MODS_CE}/browse_maps"/>'])
     lines += _hub_header(f"{MODS_CE}/header_ce", "CUSTOM EDITION MAPS")
+    # (BROWSE MAPS: words under the library's rows, greyed, no row to
+    # choose; the code places it below the last row, and hides it in the
+    # other lists: menu_functions.c's maps_update)
+    lines += _widget(f"{MODS_CE}/browse_maps",
+                     [("type", "text"), ("controller", 1), ("left", 32), ("width", 372), ("height", 22),
+                      ("text", "BROWSE MAPS (COMING SOON)"), ("font", "ui\\large_ui"), ("color", "#FF4C5866"),
+                      ("text_y", 4), ("text_flags", "no_focus_test")], [])
     lines += _widget(f"{MODS_CE}/maps_list", [("type", "column_list"), ("width", 640), ("height", 480),
                                               ("flags", "pass_unhandled_to_focused_child up_down_tabs_children"),
                                               ("description", f"{MAPS}/map_details")],
