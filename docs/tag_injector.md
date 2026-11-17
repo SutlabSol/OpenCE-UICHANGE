@@ -933,17 +933,26 @@ menu opens it (TAG INJECTOR).
   CUSTOM once a value is changed) and the fog's color, density, start,
   full-fog distance, fog indoors and the sky behind the fog. PLAYER BIPEDS has
   RED TEAM, BLUE TEAM and FREE FOR ALL (left and right choose the biped, A
-  opens the team's page: BIPED, HANDS and TEST SPAWN). A biped chosen chooses
+  opens the team's page: BIPED, HANDS, MOVEMENT and TEST SPAWN). MOVEMENT
+  SPARTAN moves the biped as the map's own player biped does: its player
+  physics (strafing, the player's speeds), turning, flying none, slopes,
+  jump and landings are copied onto the biped's tag in memory on every
+  machine (its size, cameras and crouch stay its own; an AI of the same tag
+  moves so too); BIPED'S OWN gives them back (`MAP_MOVEMENT|slot|1`, `!FGM`). A biped chosen chooses
   its hands: of a profile's biped, the hands taken from its map whose path is
   most its own; else the map's. Solo Forge, a single player game, plays the
   FREE FOR ALL biped.
-- **Test spawn.** TEST SPAWN (the host's, or solo) leaves Forge mode, kills
-  the player, who spawns again as that team's biped (whatever team the game
-  gives them), and stands a copy of it a few steps ahead, facing them, which
-  moves as in a mirror: walking, aiming, jumping, crouching and firing as the
-  player does, with the player's weapons (its shots hurt no one; it can be
-  shot, and stands again). Dying spawns as the biped again; Forge mode ends
-  the test.
+- **Test spawn.** TEST SPAWN (the host's, or solo) leaves Forge mode and
+  makes the player that team's biped. Solo, where a death reverts the game to
+  its checkpoint, the player's unit is swapped where it stands: the new one has
+  the weapons it had that the biped has animations for (the status bar says
+  how many it cannot hold; its tag's own starting weapons too) and its
+  grenades. A network game's host is killed and spawns again. A copy of the
+  biped stands a few steps ahead, facing the player, moving as in a mirror:
+  walking, aiming, jumping, crouching and firing as the player does, with the
+  player's weapons (its shots hurt no one; it can be shot, and stands again).
+  Forge mode ends the test. A biped picks up only weapons its animations
+  have, so many custom bipeds cannot hold the stock weapons at all.
 - **Saving and online.** The host alone changes the settings, and tells its
   clients (`!FG` packets: a tag by its index, the tag tables being the
   host's). A save keeps them in the state (`MAP_SETTINGS|1`, `MAP_NAME|`,

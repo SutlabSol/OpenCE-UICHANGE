@@ -57,6 +57,16 @@ enum forge_map_sky_visibility
 	NUMBER_OF_FORGE_SKY_VISIBILITIES
 };
 
+/* how a slot's biped moves: as its tag has it, or as the map's own player
+biped (a Spartan) does: its player physics (strafing, the player's speeds),
+jump, slopes, turning and landings, copied onto the biped's tag in memory */
+enum forge_map_movement
+{
+	_forge_movement_own = 0,
+	_forge_movement_spartan,
+	NUMBER_OF_FORGE_MOVEMENTS
+};
+
 /* what can be chosen for a tag setting: skies, bipeds or hands */
 enum forge_map_settings_kind
 {
@@ -75,6 +85,7 @@ struct forge_map_settings
 	char sky[FORGE_MAP_SETTINGS_PATH_MAX];
 	char biped[NUMBER_OF_FORGE_MAP_SLOTS][FORGE_MAP_SETTINGS_PATH_MAX];
 	char hands[NUMBER_OF_FORGE_MAP_SLOTS][FORGE_MAP_SETTINGS_PATH_MAX];
+	int movement[NUMBER_OF_FORGE_MAP_SLOTS];
 	int atmosphere;
 	float fog_color[3];
 	float fog_density; /* 0 to 1 */
@@ -107,6 +118,7 @@ int forge_map_settings_can_edit(void);
 void forge_map_settings_set_display_name(char const *name);
 void forge_map_settings_set_tag(int kind, int slot, long tag_index);
 void forge_map_settings_set_atmosphere(int atmosphere);
+void forge_map_settings_set_movement(int slot, int movement);
 void forge_map_settings_set_fog(float const color[3], float density, float start, float opaque, int indoors,
 	int sky_visibility);
 void forge_map_settings_reset(void);

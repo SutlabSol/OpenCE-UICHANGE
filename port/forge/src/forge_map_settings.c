@@ -26,6 +26,7 @@ the settings are read anew as each level loads.
 #include "tag_files/tag_files.h"
 #include "objects/objects.h"
 #include "units/units.h"
+#include "units/biped_definitions.h"
 #include "units/unit_control_data.h"
 #include "items/weapons.h"
 #include "render/render_cameras.h"
@@ -50,6 +51,8 @@ extern long port_tag_profiles_tag_find(long profile, unsigned long group, const 
 extern void forge_network_send_text(long machine_index, char const *text);
 extern void unit_network_add_weapon(long unit_index, long weapon_index, short slot);
 extern void unit_network_forget_weapon(long unit_index, short slot);
+extern boolean unit_can_hold_weapon_definition(long unit_index, long weapon_definition_index);
+extern boolean unit_has_weapon_definition_index(long unit_index, long definition_index);
 
 /* ---------- constants */
 
@@ -238,6 +241,122 @@ static struct game_globals_first_person_interface *first_person_interface(void)
 	return TAG_BLOCK_GET_ELEMENT(&globals->first_person_interface, 0, struct game_globals_first_person_interface);
 }
 
+/* ---- a biped's movement as a Spartan's (forge_map_movement) */
+
+#define MAXIMUM_MOVEMENT_PATCHES NUMBER_OF_FORGE_MAP_SLOTS
+
+/* the biped tags whose movement is the Spartan's now, each as it was (the
+level they are of, and the settings they were made for) */
+static struct
+{
+	long serial;
+	long generation;
+	short count;
+	long tags[MAXIMUM_MOVEMENT_PATCHES];
+	struct _biped_definition originals[MAXIMUM_MOVEMENT_PATCHES];
+} movement_state = { -1, -1, 0 };
+
+/* the map's own player biped: its multiplayer unit, else its player's */
+static long spartan_biped(void)
+{
+	struct game_globals *globals = scenario_get_game_globals();
+	long unit = NONE;
+
+	if (!globals)
+		return NONE;
+	if (globals->multiplayer_information.count > 0)
+		unit = TAG_BLOCK_GET_ELEMENT(&globals->multiplayer_information, 0,
+			struct game_globals_multiplayer_information)->unit.index;
+	if (unit == NONE && globals->player_information.count > 0)
+		unit = TAG_BLOCK_GET_ELEMENT(&globals->player_information, 0,
+			struct game_globals_player_information)->player_unit.index;
+	return unit != NONE && instance_of(unit) && (unsigned long)instance_of(unit)->group_tag == BIPED_GROUP_TAG ?
+		unit : NONE;
+}
+
+/* a biped's movement made the Spartan's: how it moves (player physics,
+turning, flying none), its slopes, jump and landings; its size, cameras,
+crouching and the rest its own */
+static void movement_copy(struct _biped_definition *biped, struct _biped_definition const *spartan)
+{
+	unsigned long const moving_flags = FLAG(_biped_turns_without_animating_bit) | FLAG(_biped_uses_player_physics_bit) |
+		FLAG(_biped_flying_bit) | FLAG(_biped_rotate_while_airborne_bit) | FLAG(_biped_uses_old_player_physics_bit);
+
+	biped->flags = (biped->flags & ~moving_flags) | (spartan->flags & moving_flags);
+	biped->moving_turning_speed = spartan->moving_turning_speed;
+	biped->stationary_turning_threshold = spartan->stationary_turning_threshold;
+	biped->runtime_cosine_stationary_turning_threshold = spartan->runtime_cosine_stationary_turning_threshold;
+	biped->maximum_slope_angle = spartan->maximum_slope_angle;
+	biped->downhill_falloff_angle = spartan->downhill_falloff_angle;
+	biped->downhill_cutoff_angle = spartan->downhill_cutoff_angle;
+	biped->downhill_velocity_scale = spartan->downhill_velocity_scale;
+	biped->uphill_falloff_angle = spartan->uphill_falloff_angle;
+	biped->uphill_cutoff_angle = spartan->uphill_cutoff_angle;
+	biped->uphill_velocity_scale = spartan->uphill_velocity_scale;
+	biped->runtime_minimum_normal_k = spartan->runtime_minimum_normal_k;
+	biped->runtime_downhill_k0 = spartan->runtime_downhill_k0;
+	biped->runtime_downhill_k1 = spartan->runtime_downhill_k1;
+	biped->runtime_uphill_k0 = spartan->runtime_uphill_k0;
+	biped->runtime_uphill_k1 = spartan->runtime_uphill_k1;
+	biped->jump_velocity = spartan->jump_velocity;
+	biped->maximum_soft_landing_time = spartan->maximum_soft_landing_time;
+	biped->maximum_hard_landing_time = spartan->maximum_hard_landing_time;
+	biped->minimum_soft_landing_velocity = spartan->minimum_soft_landing_velocity;
+	biped->minimum_hard_landing_velocity = spartan->minimum_hard_landing_velocity;
+	biped->maximum_hard_landing_velocity = spartan->maximum_hard_landing_velocity;
+	biped->death_hard_landing_velocity = spartan->death_hard_landing_velocity;
+}
+
+/* the bipeds' movements as the settings want them: each patched tag given
+back, then each slot's SPARTAN biped patched (a tag two slots share moves
+as a Spartan if either wants it). A level's own tags are new: none of the
+last level's is given back */
+static void movement_apply(void)
+{
+	long spartan;
+	short index;
+	int slot;
+
+	if (movement_state.serial == level_serial && movement_state.generation == settings_generation)
+		return;
+	if (movement_state.serial == level_serial)
+	{
+		for (index = 0; index < movement_state.count; index++)
+		{
+			struct settings_tag_instance const *instance = instance_of(movement_state.tags[index]);
+
+			if (instance)
+				((struct biped_definition *)instance->base_address)->biped = movement_state.originals[index];
+		}
+	}
+	movement_state.count = 0;
+	movement_state.serial = level_serial;
+	movement_state.generation = settings_generation;
+	spartan = spartan_biped();
+	for (slot = 0; spartan != NONE && slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
+	{
+		long biped = forge_map_settings_tag(_forge_map_kind_biped, slot);
+		struct biped_definition *definition;
+
+		if (settings.movement[slot] != _forge_movement_spartan || biped == NONE || biped == spartan ||
+			!instance_of(biped))
+		{
+			continue;
+		}
+		for (index = 0; index < movement_state.count && movement_state.tags[index] != biped; index++)
+		{
+		}
+		if (index < movement_state.count || movement_state.count >= MAXIMUM_MOVEMENT_PATCHES)
+			continue;
+		definition = (struct biped_definition *)instance_of(biped)->base_address;
+		movement_state.tags[movement_state.count] = biped;
+		movement_state.originals[movement_state.count] = definition->biped;
+		movement_state.count++;
+		movement_copy(&definition->biped, &((struct biped_definition *)instance_of(spartan)->base_address)->biped);
+		error(_error_silent, "forge map settings: %s moves as %s", tag_get_name(biped), tag_get_name(spartan));
+	}
+}
+
 /* the scenario's sky references, the chosen sky's in place of each (the
 map's own given back for none). The sky a cluster has is drawn and fogs by
 its reference (scenario_get_sky), so a level's clusters with a sky all get
@@ -326,6 +445,14 @@ static void net_send_atmosphere(long machine_index)
 	forge_network_send_text(machine_index, text);
 }
 
+static void net_send_movement(long machine_index, int slot)
+{
+	char text[64];
+
+	snprintf(text, sizeof(text), "!FGM:%d:%d", slot, settings.movement[slot]);
+	forge_network_send_text(machine_index, text);
+}
+
 static int host_tells(void)
 {
 	return forge_is_multiplayer_session() && game_connection() == _game_connection_network_server;
@@ -346,7 +473,7 @@ int forge_map_settings_any(void)
 		return 1;
 	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
 	{
-		if (settings.biped[slot][0] || settings.hands[slot][0])
+		if (settings.biped[slot][0] || settings.hands[slot][0] || settings.movement[slot])
 			return 1;
 	}
 	return 0;
@@ -385,6 +512,13 @@ void forge_map_settings_level_loading(char const *text)
 		{
 			snprintf(line[4] == 'B' ? settings.biped[slot] : settings.hands[slot], FORGE_MAP_SETTINGS_PATH_MAX, "%s",
 				value);
+		}
+		else if (!strncmp(line, "MAP_MOVEMENT|", 13))
+		{
+			int movement = 0;
+
+			if (sscanf(line + 13, "%d|%d", &slot, &movement) == 2 && slot >= 0 && slot < NUMBER_OF_FORGE_MAP_SLOTS)
+				settings.movement[slot] = PIN(movement, 0, NUMBER_OF_FORGE_MOVEMENTS - 1);
 		}
 		else if (!strncmp(line, "MAP_ATMOSPHERE|", 15))
 		{
@@ -432,6 +566,8 @@ int forge_map_settings_save_lines(char *text, unsigned long size)
 			SETTINGS_LINE("MAP_BIPED|%d|%s\r\n", slot, settings.biped[slot]);
 		if (settings.hands[slot][0])
 			SETTINGS_LINE("MAP_HANDS|%d|%s\r\n", slot, settings.hands[slot]);
+		if (settings.movement[slot])
+			SETTINGS_LINE("MAP_MOVEMENT|%d|%d\r\n", slot, settings.movement[slot]);
 	}
 	if (settings.atmosphere != _forge_atmosphere_map_default)
 	{
@@ -595,6 +731,16 @@ void forge_map_settings_set_atmosphere(int atmosphere)
 	}
 	if (host_tells())
 		net_send_atmosphere(-1);
+}
+
+void forge_map_settings_set_movement(int slot, int movement)
+{
+	if (!forge_map_settings_can_edit() || slot < 0 || slot >= NUMBER_OF_FORGE_MAP_SLOTS)
+		return;
+	settings.movement[slot] = PIN(movement, 0, NUMBER_OF_FORGE_MOVEMENTS - 1);
+	settings_generation++;
+	if (host_tells())
+		net_send_movement(-1, slot);
 }
 
 void forge_map_settings_set_fog(float const color[3], float density, float start, float opaque, int indoors,
@@ -770,6 +916,8 @@ void forge_map_settings_net_send_all(long machine_index)
 		net_send_tag(machine_index, _forge_map_kind_hands, slot);
 	}
 	net_send_atmosphere(machine_index);
+	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
+		net_send_movement(machine_index, slot);
 }
 
 int forge_map_settings_net_receive(char const *text, int from_client)
@@ -803,6 +951,16 @@ int forge_map_settings_net_receive(char const *text, int from_client)
 				sky_apply();
 		}
 	}
+	else if (!strncmp(text, "!FGM:", 5))
+	{
+		int slot = 0, movement = 0;
+
+		if (sscanf(text + 5, "%d:%d", &slot, &movement) == 2 && slot >= 0 && slot < NUMBER_OF_FORGE_MAP_SLOTS)
+		{
+			settings.movement[slot] = PIN(movement, 0, NUMBER_OF_FORGE_MOVEMENTS - 1);
+			settings_generation++;
+		}
+	}
 	else if (!strncmp(text, "!FGA:", 5))
 	{
 		int atmosphere = 0, density = 0, indoors = 0, sky = 0;
@@ -834,6 +992,7 @@ long forge_map_settings_player_biped(long player_index, long unit_definition_ind
 
 	if (firefight_active())
 		return unit_definition_index;
+	movement_apply();
 	biped = forge_map_settings_tag(_forge_map_kind_biped, player_slot(player_index));
 	return biped != NONE ? biped : unit_definition_index;
 }
@@ -862,6 +1021,7 @@ int forge_map_settings_fog(short local_player_index, int indoors, struct render_
 	first frame of each level) */
 	if (settings.sky[0] || sky_state.applied != NONE || sky_state.serial != level_serial)
 		sky_apply();
+	movement_apply();
 	if (settings.atmosphere == _forge_atmosphere_map_default || (indoors && !settings.fog_indoors))
 		return 0;
 	if (settings.atmosphere == _forge_atmosphere_clear || settings.fog_density <= 0.0f)
@@ -1034,6 +1194,85 @@ static void test_mirror_equip(long unit_index)
 	memcpy(mirror->unit.grenade_counts, unit->unit.grenade_counts, sizeof(mirror->unit.grenade_counts));
 }
 
+/* (solo) the player's unit put in place of one of the slot's biped, where
+it stands, with the weapons it had that the biped can hold (one holds a
+weapon its animations have: unit_can_hold_weapon_definition) and its
+grenades: a solo player's death reverts the game to its checkpoint, so the
+test spawns no other way. The new unit, NONE when none could be made */
+static long test_swap(long unit_index)
+{
+	struct unit_datum *unit = test_unit(unit_index);
+	long biped = forge_map_settings_tag(_forge_map_kind_biped, test.slot);
+	long weapons[MAXIMUM_WEAPONS_PER_UNIT];
+	short current;
+	struct object_placement_data placement;
+	long swapped;
+	short color;
+	short slot;
+	int refused = 0;
+	int given = 0;
+
+	if (!unit)
+		return NONE;
+	if (biped == NONE)
+		biped = spartan_biped();
+	if (biped == NONE)
+		return NONE;
+	movement_apply();
+	for (slot = 0; slot < MAXIMUM_WEAPONS_PER_UNIT; slot++)
+	{
+		long held = unit->unit.weapon_object_indices[slot];
+
+		weapons[slot] = held == NONE ? NONE : weapon_get(held)->definition_index;
+	}
+	current = unit->unit.current_weapon_index;
+	object_placement_data_new(&placement, biped, NONE);
+	placement.position = unit->object.position;
+	placement.forward = unit->object.forward;
+	placement.up = unit->object.up;
+	for (color = 0; color < NUMBER_OF_OBJECT_CHANGE_COLORS; color++)
+		placement.change_colors[color] = unit->object.base_change_colors[color];
+	swapped = object_new(&placement);
+	if (swapped == NONE || !test_unit(swapped))
+	{
+		if (swapped != NONE)
+			object_delete(swapped);
+		forge_set_status("Test spawn: %s could not be made", tag_get_name(biped));
+		return NONE;
+	}
+	for (slot = 0; slot < MAXIMUM_WEAPONS_PER_UNIT; slot++)
+	{
+		long weapon;
+
+		if (weapons[slot] == NONE || unit_has_weapon_definition_index(swapped, weapons[slot]))
+			continue;
+		if (!unit_can_hold_weapon_definition(swapped, weapons[slot]))
+		{
+			refused++;
+			continue;
+		}
+		object_placement_data_new(&placement, weapons[slot], swapped);
+		weapon = object_new(&placement);
+		if (weapon != NONE && !unit_add_weapon_to_inventory(swapped, weapon, FALSE))
+			object_delete(weapon);
+		else if (weapon != NONE)
+			given++;
+	}
+	if (current >= 0 && current < MAXIMUM_WEAPONS_PER_UNIT)
+		test_unit(swapped)->unit.desired_weapon_index = current;
+	memcpy(test_unit(swapped)->unit.grenade_counts, unit->unit.grenade_counts,
+		sizeof(test_unit(swapped)->unit.grenade_counts));
+	players_set_local_player_unit(0, swapped);
+	unit_delete_all_weapons(unit_index);
+	object_delete(unit_index);
+	if (refused)
+		forge_set_status("Test spawn: %s cannot hold %d of your weapons (no animations for them)",
+			tag_name_strip_path(tag_get_name(biped)), refused);
+	else if (!given && test_unit(swapped)->unit.weapon_object_indices[0] == NONE)
+		forge_set_status("Test spawn: %s, unarmed", tag_name_strip_path(tag_get_name(biped)));
+	return swapped;
+}
+
 static void test_end(void)
 {
 	test_mirror_delete();
@@ -1085,7 +1324,17 @@ void forge_map_settings_test_tick(int forge_mode)
 		{
 			test.killed_unit = unit_index;
 			test.phase = _test_respawn;
-			unit_kill(unit_index);
+			/* (a network game's host: killed, the game spawns it again as the
+			biped; solo: its unit swapped) */
+			if (game_connection() == _game_connection_local)
+			{
+				if (test_swap(unit_index) == NONE)
+					test_end();
+			}
+			else
+			{
+				unit_kill(unit_index);
+			}
 		}
 		break;
 	case _test_respawn:
