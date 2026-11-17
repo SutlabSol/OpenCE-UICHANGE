@@ -27,14 +27,29 @@ fixes it made there are taken back here (see "From OpenCE").
     depot (976733) into `mcc_maps/_shared/singleplayer` and
     `mcc_maps/_shared/multiplayer`;
   - lists the downloads under way and queued, then the Workshop packages in
-    `mcc_maps`, which it updates or removes.
+    `mcc_maps`, which it updates or removes. Each one's details end with its
+    publisher.
 - **BROWSE WORKSHOP:** the Halo 1 Workshop, 20 items at a time, by search,
-  sort and type, with each item's preview picture.
+  sort and type, with each item's preview picture and its publisher after
+  its description.
 - **SERVER LISTS:** the community server's curated lists of Workshop maps.
 - Installing an item builds it in `mcc_staging/steam_<id>`, then moves it into
   `mcc_maps/<id>/` whole, replacing an older copy. `steam/downloads.txt`
   records which version each item came from, which is how an update is told.
   Downloads wait in a queue of 32.
+
+## Publishers
+
+An item's publisher is the Steam name of the account that published it, who
+may not be the original maker of what it holds ("Publisher" on the screens). Nothing
+on the card names it, so the game asks Steam the first time an item is
+shown in a run (`port/linux/src/workshop_authors.c`), on every platform but
+the web, whose page Steam refuses: the item's creator from
+the public Web API (`ISteamRemoteStorage/GetPublishedFileDetails`, which needs
+no key or sign-in), then the name on that account's profile
+(`steamcommunity.com/profiles/<id>/?xml=1`). The lobby asks the same way for a
+Workshop map, and the MCC map lists under its description. Nothing is written to disk, and an item Steam could not
+answer for is asked about again after 10 minutes at the soonest.
 
 ## Joining an MCC game
 

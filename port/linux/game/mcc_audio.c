@@ -22,7 +22,7 @@
 #define MCC_AUDIO_LIMIT 0x10000000u
 #define MCC_AUDIO_STORAGE_LIMIT 0x40000000u
 
-struct mcc_audio_storage { unsigned char *bytes; uint32_t used, capacity, limit, handle; };
+struct mcc_audio_storage { unsigned char *bytes; uint32_t used, capacity, limit, handle; char const *failure; };
 /* Cache reads carry the owning sound tag. Its virtual offsets can therefore
  * be reused by other sounds, just as MCC bitmap offsets are scoped by tag. */
 struct mcc_audio_tags {
@@ -40,12 +40,14 @@ static int mcc_audio_reserve(struct mcc_audio_storage *storage,uint32_t size,int
 {
     uint32_t capacity;
     unsigned char *larger;
-    if (storage->limit>=MCC_AUDIO_LIMIT || storage->used>storage->limit || size>storage->limit-storage->used) return 0;
+    if (storage->limit>=MCC_AUDIO_LIMIT || storage->used>storage->limit || size>storage->limit-storage->used) {
+        storage->failure="audio storage limit exceeded (less than 256 MiB per sound; 1 GiB total)";return 0;
+    }
     if (storage->used+size<=storage->capacity) return 1;
     capacity=MIN((storage->used+size+0xFFF)&~0xFFFu,storage->limit);
     if (host) {storage->capacity=capacity;return 1;}
     larger=malloc(capacity);
-    if (!larger) return 0;
+    if (!larger) {storage->failure="not enough memory to grow the converted sound buffer";return 0;}
     if (storage->used) memcpy(larger,storage->bytes,storage->used);
     if (storage->bytes) free(storage->bytes);
     storage->bytes=larger;storage->capacity=capacity;
@@ -56,7 +58,7 @@ static int mcc_audio_store(struct mcc_audio_storage *storage, struct mcc_pcm con
     int channels, uint32_t rate, struct sound_permutation *permutation)
 {
     uint32_t frames=0,size=mcc_ima_encoded_size(pcm,channels,rate,&frames);
-    if (!size) return 0;
+    if (!size) {storage->failure="resampled sound exceeds the 16777216-frame limit or is empty";return 0;}
     if (!mcc_audio_reserve(storage,size,FALSE)) return 0;
     mcc_ima_encode(pcm,channels,rate,frames,storage->bytes+storage->used,mcc_loading_pulse);
     permutation->samples.file_offset=MCC_AUDIO_BASE+storage->used;
@@ -80,19 +82,85 @@ static int mcc_audio_store_raw(struct mcc_audio_storage *storage,
     return 1;
 }
 
-/* what failed, for the message that refuses the map */
+/* what failed, for the message that refuses the map. Taken on the host's
+ * threads only once what came before it is, so it names its own tag and
+ * place rather than leaving them in runtime->diagnostic (names: the tag
+ * data's, still loaded when it is taken) */
 struct mcc_audio_failure {
-    uint32_t index;
-    char const *tag_name, *stage;
-    long range, permutation, codec;
+    uint32_t index, handle, offset;
+    char const *tag_name, *stage, *range_name, *permutation_name;
+    long range, permutation, codec, size;
+    long value; /* the header field refused (NONE: none) */
 };
+
+static char const *mcc_audio_codec_name(long codec)
+{
+    switch (codec) {
+    case 0: return "16-bit PCM";
+    case 1: return "Xbox ADPCM";
+    case 2: return "IMA ADPCM (unsupported)";
+    case 3: return "Ogg Vorbis";
+    default: return "unknown";
+    }
+}
+
+static void mcc_audio_failure_reset(struct mcc_audio_failure *failure,uint32_t handle)
+{
+    failure->handle=handle;
+    failure->range=failure->permutation=failure->codec=failure->value=NONE;
+    failure->size=0;failure->offset=0;
+    failure->range_name=failure->permutation_name=NULL;
+    failure->stage="sound header";
+}
 
 static void mcc_audio_refuse(struct mcc_runtime *runtime,struct mcc_audio_failure const *failure)
 {
-    error(_error_silent,"mcc audio: sound tag #%lu '%s', range %ld, permutation %ld, codec %ld: %s; map refused",
-        (unsigned long)failure->index,failure->tag_name,failure->range,failure->permutation,failure->codec,failure->stage);
+    mcc_diagnostic_tag(runtime,failure->handle);
+    if (failure->permutation!=NONE)
+        mcc_diagnostic_at(runtime,"pitch_ranges[%ld] '%.32s'.permutations[%ld] '%.32s'",
+            failure->range,failure->range_name ? failure->range_name : "(unavailable)",
+            failure->permutation,failure->permutation_name ? failure->permutation_name : "(unavailable)");
+    else if (failure->range!=NONE) mcc_diagnostic_at(runtime,"pitch_ranges[%ld]",failure->range);
+    else mcc_diagnostic_at(runtime,"sound header");
+    if (failure->value!=NONE) mcc_diagnostic_fail(runtime,"%s (found %ld)",failure->stage,failure->value);
+    else mcc_diagnostic_fail(runtime,"%s; codec %ld (%s), payload offset 0x%08lx, %ld bytes",
+        failure->stage,failure->codec,mcc_audio_codec_name(failure->codec),
+        (unsigned long)failure->offset,failure->size);
     if (!runtime->failure[0]) snprintf(runtime->failure,sizeof(runtime->failure),
         "Sound conversion failed (codec %ld). See debug.txt for the sound name.",failure->codec);
+}
+
+/* the sound's header refused: 0 where it is one this converts */
+static int mcc_audio_header_refused(struct mcc_audio_failure *failure,struct sound_definition const *sound)
+{
+    if (!sound) {failure->stage="sound header is outside loaded tag data";return 1;}
+    if (sound->encoding<0 || sound->encoding>1) {
+        failure->stage="unsupported encoding (expected 0=mono or 1=stereo)";
+        failure->value=sound->encoding;return 1;
+    }
+    if (sound->sample_rate<NONE || sound->sample_rate>1) {
+        failure->stage="unsupported sample_rate (expected -1=unspecified, 0=22050 Hz or 1=44100 Hz)";
+        failure->value=sound->sample_rate;return 1;
+    }
+    return 0;
+}
+
+/* the permutation's header taken into failure: 0 where it is refused */
+static int mcc_audio_permutation_header(struct mcc_audio_failure *failure,
+    struct sound_pitch_range const *range,uint32_t permutation_index,struct sound_permutation const *permutation)
+{
+    failure->permutation=permutation_index;failure->stage="permutation header";
+    failure->range_name=range->name;
+    failure->permutation_name=permutation ? permutation->name : NULL;
+    failure->codec=permutation ? permutation->compression : NONE;
+    failure->size=permutation ? permutation->samples.size : 0;
+    failure->offset=permutation ? (uint32_t)permutation->samples.file_offset : 0;
+    if (!permutation) {failure->stage="permutation header is outside loaded tag data";return 0;}
+    if (permutation->samples.size<0 || permutation->samples.size>0x4000000) {
+        failure->stage="sample payload size is outside 0..67108864 bytes";
+        failure->value=permutation->samples.size;return 0;
+    }
+    return 1;
 }
 
 static int mcc_audio_prepare_serial(struct mcc_runtime *runtime,struct mcc_audio_tags *audio)
@@ -100,8 +168,7 @@ static int mcc_audio_prepare_serial(struct mcc_runtime *runtime,struct mcc_audio
     struct mcc_audio_storage *storage;
     uint32_t index,converted=0;
     struct mcc_audio_failure failure;
-    failure.range=failure.permutation=failure.codec=NONE;
-    failure.stage="sound header";failure.tag_name="(unavailable)";
+    mcc_audio_failure_reset(&failure,UINT32_MAX);failure.tag_name="(unavailable)";
     for (index=0;index<runtime->report.tag_count;index++) {
         uint32_t *entry=(uint32_t *)(runtime->tag_index+index*0x20);
         struct sound_definition *sound;
@@ -112,12 +179,11 @@ static int mcc_audio_prepare_serial(struct mcc_runtime *runtime,struct mcc_audio
         if (entry[0]!=(uint32_t)SOUND_DEFINITION_TAG) continue;
         storage=&audio->items[index];storage->handle=entry[3];
         storage->limit=MIN(MCC_AUDIO_LIMIT-1u,MCC_AUDIO_STORAGE_LIMIT-audio->capacity);
-        failure.range=failure.permutation=failure.codec=NONE;
-        failure.stage="sound header";
+        mcc_audio_failure_reset(&failure,entry[3]);
         failure.tag_name=mcc_runtime_pointer(runtime,entry[4],256);
         if (!failure.tag_name || !memchr(failure.tag_name,0,256)) failure.tag_name="(unavailable)";
         sound=mcc_runtime_pointer(runtime,entry[5],sizeof(*sound));
-        if (!sound || sound->encoding<0 || sound->encoding>1 || sound->sample_rate<NONE || sound->sample_rate>1) goto failed;
+        if (mcc_audio_header_refused(&failure,sound)) goto failed;
         /* Extended's empty dialogue tags use NONE for the sample rate.
          * Normalize their unused header, but never guess a payload's rate. */
         channels=sound->encoding+1; rate=sound->sample_rate==1 ? 44100 : 22050;
@@ -126,7 +192,7 @@ static int mcc_audio_prepare_serial(struct mcc_runtime *runtime,struct mcc_audio
             struct sound_pitch_range *range=mcc_runtime_pointer(runtime,
                 (uint32_t)sound->pitch_ranges.address+range_index*sizeof(*range),sizeof(*range));
             uint32_t permutation_index;
-            failure.range=range_index;failure.stage="pitch range";
+            failure.range=range_index;failure.permutation=NONE;failure.stage="pitch range is outside loaded tag data";
             if (!range) goto failed;
             for (permutation_index=0;permutation_index<(uint32_t)range->permutations.count;permutation_index++) {
                 struct sound_permutation *permutation=mcc_runtime_pointer(runtime,
@@ -136,9 +202,7 @@ static int mcc_audio_prepare_serial(struct mcc_runtime *runtime,struct mcc_audio
                 int ok,external;
                 char resource_name[288],group_name[288];
                 mcc_loading_pulse();
-                failure.permutation=permutation_index;failure.stage="permutation header";
-                failure.codec=permutation ? permutation->compression : NONE;
-                if (!permutation || permutation->samples.size<0 || permutation->samples.size>0x4000000) goto failed;
+                if (!mcc_audio_permutation_header(&failure,range,permutation_index,permutation)) goto failed;
                 external=(permutation->samples.pad&1)!=0;
                 permutation->unknown0=NONE;
                 permutation->unknown1=0;
@@ -150,9 +214,9 @@ static int mcc_audio_prepare_serial(struct mcc_runtime *runtime,struct mcc_audio
                 failure.stage="nonempty sound has unspecified sample rate";
                 if (sound->sample_rate==NONE) goto failed;
                 data=malloc(permutation->samples.size);
-                failure.stage="input allocation";
+                failure.stage="not enough memory to read the source sound payload";
                 if (!data) goto failed;
-                failure.stage="sample read";
+                failure.stage="embedded sound payload could not be read from the map";
                 if (external) {
                     failure.stage="external samples (selected MCC sounds.map data does not match)";
                     snprintf(resource_name,sizeof(resource_name),"%s__%lu__%lu",failure.tag_name,range_index,permutation_index);
@@ -162,21 +226,30 @@ static int mcc_audio_prepare_serial(struct mcc_runtime *runtime,struct mcc_audio
                 if (!ok) {
                     free(data); goto failed;
                 }
-                failure.stage="codec decode or sample format";
+                failure.stage="codec decode failed";
+                storage->failure=NULL;
                 ok=mcc_pcm_open(data,permutation->samples.size,permutation->compression,channels,rate,&pcm);
+                if (!ok && pcm.failure) failure.stage=pcm.failure;
                 if (ok && (permutation->compression!=1 || rate!=output_rate)) {
                     failure.stage="ADPCM encoding, allocation, or 256 MiB per-sound or 1 GiB total audio limit";
                     ok=mcc_audio_store(storage,&pcm,channels,output_rate,permutation);
+                    if (!ok && storage->failure) failure.stage=storage->failure;
                     if (ok) converted++;
                 } else if (ok && external) {
                     failure.stage="external ADPCM allocation or 256 MiB per-sound or 1 GiB total audio limit";
                     ok=mcc_audio_store_raw(storage,data,permutation);
+                    if (!ok && storage->failure) failure.stage=storage->failure;
                     if (ok) converted++;
                 }
                 free(data);
                 if (ok) permutation->samples.pad&=~1;
                 mcc_pcm_close(&pcm);
-                if (!ok) goto failed;
+                if (!ok) {
+                    error(_error_silent,"mcc sound payload: codec %d, %d channels, %lu Hz, offset 0x%08lx, %ld bytes, %s, decoder error %d",
+                        permutation->compression,channels,(unsigned long)rate,(unsigned long)permutation->samples.file_offset,
+                        permutation->samples.size,external ? "external sounds.map" : "embedded in map",pcm.decoder_error);
+                    goto failed;
+                }
             }
         }
         sound->compression=1;
@@ -243,7 +316,7 @@ static int mcc_audio_commit(struct mcc_runtime *runtime,struct mcc_audio_tags *a
         int result=mcc_convert_finish(entry->job);
         struct sound_permutation *permutation=entry->permutation;
         if (result<0) {
-            entry->failure.stage=result==MCC_CONVERT_FAILED_DECODE ? "codec decode or sample format" :
+            entry->failure.stage=result==MCC_CONVERT_FAILED_DECODE ? "codec decode failed (on the host's threads)" :
                 entry->mode==MCC_AUDIO_COPY ? "external ADPCM allocation or 256 MiB per-sound or 1 GiB total audio limit" :
                 "ADPCM encoding, allocation, or 256 MiB per-sound or 1 GiB total audio limit";
             ok=0;
@@ -252,8 +325,12 @@ static int mcc_audio_commit(struct mcc_runtime *runtime,struct mcc_audio_tags *a
             entry->failure.stage=entry->mode==MCC_AUDIO_COPY ?
                 "external ADPCM allocation or 256 MiB per-sound or 1 GiB total audio limit" :
                 "ADPCM encoding, allocation, or 256 MiB per-sound or 1 GiB total audio limit";
+            storage->failure=NULL;
             if (!size || !mcc_audio_reserve(storage,size,TRUE) ||
-                mcc_convert_audio_append(entry->job,entry->failure.index)!=(long long)storage->used) ok=0;
+                mcc_convert_audio_append(entry->job,entry->failure.index)!=(long long)storage->used) {
+                if (storage->failure) entry->failure.stage=storage->failure;
+                ok=0;
+            }
             else {
                 permutation->samples.file_offset=MCC_AUDIO_BASE+storage->used;
                 if (entry->mode==MCC_AUDIO_ENCODE) {
@@ -303,8 +380,7 @@ static int mcc_audio_prepare_threaded_with(struct mcc_runtime *runtime,struct mc
     uint32_t index;
     struct mcc_audio_failure failure;
     audio->host=TRUE;
-    failure.range=failure.permutation=failure.codec=NONE;
-    failure.stage="sound header";failure.tag_name="(unavailable)";
+    mcc_audio_failure_reset(&failure,UINT32_MAX);failure.tag_name="(unavailable)";
     for (index=0;index<runtime->report.tag_count;index++) {
         uint32_t *entry=(uint32_t *)(runtime->tag_index+index*0x20);
         struct sound_definition *sound;
@@ -314,12 +390,11 @@ static int mcc_audio_prepare_threaded_with(struct mcc_runtime *runtime,struct mc
         failure.index=index;
         mcc_loading_update(MCC_LOADING_AUDIO, index, runtime->report.tag_count);
         if (entry[0]!=(uint32_t)SOUND_DEFINITION_TAG) continue;
-        failure.range=failure.permutation=failure.codec=NONE;
-        failure.stage="sound header";
+        mcc_audio_failure_reset(&failure,entry[3]);
         failure.tag_name=mcc_runtime_pointer(runtime,entry[4],256);
         if (!failure.tag_name || !memchr(failure.tag_name,0,256)) failure.tag_name="(unavailable)";
         sound=mcc_runtime_pointer(runtime,entry[5],sizeof(*sound));
-        if (!sound || sound->encoding<0 || sound->encoding>1 || sound->sample_rate<NONE || sound->sample_rate>1) goto failed;
+        if (mcc_audio_header_refused(&failure,sound)) goto failed;
         channels=sound->encoding+1; rate=sound->sample_rate==1 ? 44100 : 22050;
         output_rate=channels==1 ? 22050 : rate;
         if (queue->count==MCC_AUDIO_QUEUE && !mcc_audio_commit(runtime,audio,queue)) {mcc_audio_abandon(queue);return 0;}
@@ -329,7 +404,7 @@ static int mcc_audio_prepare_threaded_with(struct mcc_runtime *runtime,struct mc
             struct sound_pitch_range *range=mcc_runtime_pointer(runtime,
                 (uint32_t)sound->pitch_ranges.address+range_index*sizeof(*range),sizeof(*range));
             uint32_t permutation_index;
-            failure.range=range_index;failure.stage="pitch range";
+            failure.range=range_index;failure.permutation=NONE;failure.stage="pitch range is outside loaded tag data";
             if (!range) goto failed;
             for (permutation_index=0;permutation_index<(uint32_t)range->permutations.count;permutation_index++) {
                 struct sound_permutation *permutation=mcc_runtime_pointer(runtime,
@@ -338,9 +413,7 @@ static int mcc_audio_prepare_threaded_with(struct mcc_runtime *runtime,struct mc
                 int ok,external;
                 char resource_name[288],group_name[288];
                 mcc_loading_pulse();
-                failure.permutation=permutation_index;failure.stage="permutation header";
-                failure.codec=permutation ? permutation->compression : NONE;
-                if (!permutation || permutation->samples.size<0 || permutation->samples.size>0x4000000) goto failed;
+                if (!mcc_audio_permutation_header(&failure,range,permutation_index,permutation)) goto failed;
                 external=(permutation->samples.pad&1)!=0;
                 permutation->unknown0=NONE;
                 permutation->unknown1=0;
@@ -356,9 +429,9 @@ static int mcc_audio_prepare_threaded_with(struct mcc_runtime *runtime,struct mc
                     queue->bytes+(uint32_t)permutation->samples.size>MCC_AUDIO_QUEUE_BYTES))
                     if (!mcc_audio_commit(runtime,audio,queue)) {mcc_audio_abandon(queue);return 0;}
                 data=malloc(permutation->samples.size);
-                failure.stage="input allocation";
+                failure.stage="not enough memory to read the source sound payload";
                 if (!data) goto failed;
-                failure.stage="sample read";
+                failure.stage="embedded sound payload could not be read from the map";
                 if (external) {
                     failure.stage="external samples (selected MCC sounds.map data does not match)";
                     snprintf(resource_name,sizeof(resource_name),"%s__%lu__%lu",failure.tag_name,range_index,permutation_index);
@@ -419,7 +492,7 @@ static int mcc_audio_prepare_threaded(struct mcc_runtime *runtime,struct mcc_aud
 {
     struct mcc_audio_queue *queue=malloc(sizeof(*queue));
     int result;
-    if (!queue) return 0;
+    if (!queue) return mcc_diagnostic_fail(runtime,"not enough memory for the sound conversion queue");
     memset(queue,0,sizeof(*queue));
     result=mcc_audio_prepare_threaded_with(runtime,audio,queue);
     free(queue);
@@ -430,12 +503,15 @@ int mcc_audio_prepare(struct mcc_runtime *runtime)
 {
     struct mcc_audio_tags *audio;
     uint32_t index;
-    if (runtime->source.size>=MCC_AUDIO_BASE || !runtime->report.tag_count || runtime->report.tag_count>65535) return 0;
+    mcc_diagnostic_tag(runtime,UINT32_MAX);
+    mcc_diagnostic_at(runtime,"sound conversion setup");
+    if (runtime->source.size>=MCC_AUDIO_BASE || !runtime->report.tag_count || runtime->report.tag_count>65535)
+        return mcc_diagnostic_fail(runtime,"map size or tag count exceeds sound converter limits");
     audio=malloc(sizeof(*audio));
-    if (!audio) return 0;
+    if (!audio) return mcc_diagnostic_fail(runtime,"not enough memory for sound conversion state");
     memset(audio,0,sizeof(*audio));runtime->audio=audio;
     audio->items=malloc(runtime->report.tag_count*sizeof(*audio->items));
-    if (!audio->items) return 0;
+    if (!audio->items) return mcc_diagnostic_fail(runtime,"not enough memory for sound storage table");
     audio->count=runtime->report.tag_count;
     memset(audio->items,0,audio->count*sizeof(*audio->items));
     for (index=0;index<audio->count;index++) audio->items[index].handle=0xFFFFFFFFu;

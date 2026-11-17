@@ -14,7 +14,9 @@
 
 #define MCC_AUDIO_FRAME_LIMIT 0x1000000u
 
-struct mcc_pcm { short *samples; uint32_t frames, rate; int channels, vorbis_owned; };
+/* failure, where opening refuses them, says why; decoder_error the Vorbis
+ * decoder's own error number */
+struct mcc_pcm { short *samples; uint32_t frames, rate; int channels, vorbis_owned; char const *failure; int decoder_error; };
 struct mcc_ima { int value, step; };
 
 #define MCC_AUDIO_PIN(value, low, high) ((value) < (low) ? (low) : (value) > (high) ? (high) : (value))
@@ -64,19 +66,20 @@ static int mcc_pcm_open(unsigned char const *bytes, uint32_t size, int compressi
     pcm->channels=channels; pcm->rate=rate;
     if (compression==3) {
         pcm->vorbis_owned=1;
-        return mcc_vorbis_decode(bytes,size,MCC_AUDIO_FRAME_LIMIT,
-            &pcm->samples,&pcm->frames,&pcm->rate,&pcm->channels);
+        pcm->failure="Ogg Vorbis decoding failed: invalid or unsupported stream, frame limit, or decoder allocation failure";
+        return mcc_vorbis_decode_ex(bytes,size,MCC_AUDIO_FRAME_LIMIT,
+            &pcm->samples,&pcm->frames,&pcm->rate,&pcm->channels,&pcm->failure,&pcm->decoder_error);
     }
     if (compression==0) {
-        if (size%(2*channels)) return 0;
+        if (size%(2*channels)) {pcm->failure="PCM byte count is not a whole 16-bit sample frame";return 0;}
         pcm->frames=size/(2*channels);
     } else if (compression==1) {
-        if (size%(36*channels)) return 0;
+        if (size%(36*channels)) {pcm->failure="Xbox ADPCM byte count is not a whole 36-byte block per channel";return 0;}
         pcm->frames=size/(36*channels)*64;
-    } else return 0;
-    if (!pcm->frames || pcm->frames>MCC_AUDIO_FRAME_LIMIT) return 0;
+    } else {pcm->failure="unsupported sound codec (supported: 0=16-bit PCM, 1=Xbox ADPCM, 3=Ogg Vorbis)";return 0;}
+    if (!pcm->frames || pcm->frames>MCC_AUDIO_FRAME_LIMIT) {pcm->failure="decoded frame count is zero or exceeds 16777216 frames";return 0;}
     pcm->samples=malloc(pcm->frames*channels*sizeof(short));
-    if (!pcm->samples) return 0;
+    if (!pcm->samples) {pcm->failure="not enough memory for decoded sound samples";return 0;}
     if (!compression) {
         for (i=0;i<pcm->frames*(uint32_t)channels;i++)
             pcm->samples[i]=(short)(bytes[i*2]|bytes[i*2+1]<<8);
@@ -89,7 +92,7 @@ static int mcc_pcm_open(unsigned char const *bytes, uint32_t size, int compressi
                 uint32_t frame;
                 state.value=(short)(block[channel*4]|block[channel*4+1]<<8);
                 state.step=block[channel*4+2];
-                if (state.step>88 || block[channel*4+3]) return 0;
+                if (state.step>88 || block[channel*4+3]) {pcm->failure="invalid Xbox ADPCM block header (step index exceeds 88 or reserved byte is nonzero)";return 0;}
                 for (frame=0;frame<64;frame++) {
                     unsigned char packed=block[channels*4+(frame/8*channels+channel)*4+frame%8/2];
                     unsigned nibble=(packed>>(frame%2*4))&15;

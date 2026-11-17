@@ -42,6 +42,7 @@ does for an item a host's game named (steam_downloads_want_item).
 */
 
 #include "steam_downloads.h"
+#include "workshop_authors.h"
 #include "community_net.h"
 #include "update.h"
 #include "steam_cm.h"
@@ -3173,6 +3174,20 @@ static void shared_text(char *text, int size)
 }
 
 /* (state_lock held) */
+/* the Workshop item's publisher after the details, once Steam has said
+(workshop_authors.c; asked of it the first time) */
+static void details_publisher(uint64_t item_id, char *body, int body_size)
+{
+	char id[24], name[WORKSHOP_AUTHORS_NAME_SIZE];
+	int used = (int)strlen(body);
+
+	if (!item_id || used >= body_size - 1)
+		return;
+	snprintf(id, sizeof(id), "%llu", (unsigned long long)item_id);
+	if (workshop_authors_get(id, name, (int)sizeof(name)))
+		snprintf(body + used, (size_t)(body_size - used), "\n\nPublisher: %s", name);
+}
+
 static void details_build(int place, char *title, int title_size, char *text, int text_size)
 {
 	int index;
@@ -3276,6 +3291,7 @@ static void details_build(int place, char *title, int title_size, char *text, in
 				package->file.id ? " Up to date." : "");
 		if (package->file.id)
 			preview_want(&package->file);
+		details_publisher(package->id, body, (int)sizeof(body));
 		break;
 	}
 	case ROW_PENDING:
@@ -3323,6 +3339,7 @@ static void details_build(int place, char *title, int title_size, char *text, in
 				installed == 1 ? "Installed (A downloads it again)." :
 				installed == 2 ? "An update is out: A downloads it." : "A installs it in mcc_maps.",
 				file->description);
+		details_publisher(file->id, body, (int)sizeof(body));
 		preview_want(file);
 		break;
 	}

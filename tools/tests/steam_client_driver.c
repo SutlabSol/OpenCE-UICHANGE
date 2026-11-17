@@ -60,6 +60,15 @@ int update_request(const char *method, const char *url, const char *headers, con
 	return 0;
 }
 
+/* (workshop_authors.c's: offline, no author is known) */
+int workshop_authors_get(const char *item_id, char *name, int size)
+{
+	(void)item_id;
+	if (size > 0)
+		name[0] = 0;
+	return 0;
+}
+
 #if defined(STEAM_SESSION_SEALED)
 /* ---------- the Android app's host, standing in: the private folder under the root's "private", and a "seal"
  * that a secret opens (STEAM_SEAL_TEST_SECRET; none, and nothing can be sealed, as a Keystore that refuses) */
