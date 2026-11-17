@@ -217,6 +217,8 @@ struct identity_cache_entry
 	/* (an Xbox multiplayer map: custom_xbox_map_level) */
 	boolean xbox_map;
 	boolean used;
+	/* (a map Forge saved: the name its map settings gave it, or "") */
+	char forge_name[48];
 };
 
 static struct identity_cache_entry identity_cache[IDENTITY_CACHE_SIZE];
@@ -253,7 +255,8 @@ static short identity_cached(
 	char const *path,
 	unsigned long size,
 	uint64_t time,
-	boolean *xbox_map)
+	boolean *xbox_map,
+	char const **forge_name)
 {
 	uint64_t key = name_hash(path, NULL);
 	long slot = (long)(key % IDENTITY_CACHE_SIZE);
@@ -269,6 +272,7 @@ static short identity_cached(
 	if (entry->used && entry->size == size && entry->time == time)
 	{
 		*xbox_map = entry->xbox_map;
+		*forge_name = entry->forge_name;
 		return entry->scenario_type;
 	}
 	if (!entry->used)
@@ -288,6 +292,10 @@ static short identity_cached(
 	entry->used = TRUE;
 	entry->scenario_type = custom_edition_cache_file_scenario_type(path, &entry->xbox_map);
 	*xbox_map = entry->xbox_map;
+	entry->forge_name[0] = 0;
+	if (entry->scenario_type == _scenario_type_multiplayer)
+		custom_edition_cache_file_forge_name(path, entry->forge_name, sizeof(entry->forge_name));
+	*forge_name = entry->forge_name;
 
 	return entry->scenario_type;
 }
@@ -501,6 +509,7 @@ static void custom_edition_map_add(
 	short map_index;
 	short scenario_type;
 	boolean xbox_map = FALSE;
+	char const *forge_name = "";
 
 	if (csstrcasecmp(extension, "map"))
 	{
@@ -530,7 +539,7 @@ static void custom_edition_map_add(
 		return;
 	}
 	csprintf(path, "%s%s.%s", directory, name, extension);
-	scenario_type = identity_cached(path, size, time, &xbox_map);
+	scenario_type = identity_cached(path, size, time, &xbox_map, &forge_name);
 	campaign = scenario_type == _scenario_type_solo;
 	if (!campaign && scenario_type != _scenario_type_multiplayer)
 	{
@@ -574,6 +583,15 @@ static void custom_edition_map_add(
 	csstrncpy(map->category, category, sizeof(map->category) - 1);
 	csprintf(map->level_name, "%s%s", CUSTOM_EDITION_LEVEL_NAME_PREFIX, name);
 	display_name_make(name, map->display_name);
+	/* port: a Forge map's own name (its map settings) */
+	if (forge_name && forge_name[0])
+	{
+		short character;
+
+		for (character = 0; forge_name[character] && character < MAXIMUM_MAP_NAME_LENGTH; character++)
+			map->display_name[character] = (wchar_t)(unsigned char)forge_name[character];
+		map->display_name[character] = 0;
+	}
 	map->xbox_map = xbox_map;
 	custom_edition_map_description_read(map, descriptions);
 	map->own_description = (descriptions & DESCRIPTION_OWN_NAME) != 0;

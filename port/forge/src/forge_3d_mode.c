@@ -46,6 +46,7 @@
 #include "devices/devices.h"
 #include "devices/device_light_fixtures.h"
 #include "forge_engine.h"
+#include "forge_map_settings.h"
 #include "halo_ui_pointer.h"
 
 extern int halo_forge_pointer_update(int wanted, struct halo_ui_pointer *pointer);
@@ -684,7 +685,13 @@ enum
 	_forge_hit_props_row,
 	_forge_hit_save_ok,
 	_forge_hit_save_cancel,
+	/* (MAP SETTINGS': a row, a listed tag or a key, forge_map_settings_menu.inl) */
+	_forge_hit_settings_row,
 };
+
+static void forge_map_settings_menu_hover(int index);
+static int forge_map_settings_menu_row_has_value(int index);
+static int forge_map_settings_menu_paging(void);
 
 struct forge_hit
 {
@@ -692,7 +699,8 @@ struct forge_hit
 	short kind, index;
 };
 
-static struct forge_hit s_hits[32];
+/* (MAP SETTINGS' keyboard has 44 keys) */
+static struct forge_hit s_hits[64];
 static int s_hit_count;
 /* what the pointer did this update, for the keys' reading */
 static struct
@@ -743,6 +751,8 @@ static void forge_pointer_poll(void)
 			g_forge.palette_cursor = hit->index;
 		else if (hit->kind == _forge_hit_props_row)
 			g_forge.props_cursor = hit->index;
+		else if (hit->kind == _forge_hit_settings_row)
+			forge_map_settings_menu_hover(hit->index);
 	}
 	if (pointer.wheel_steps)
 	{
@@ -755,6 +765,11 @@ static void forge_pointer_poll(void)
 		{
 			s_pointer_input.left = pointer.wheel_steps < 0;
 			s_pointer_input.right = pointer.wheel_steps > 0;
+		}
+		else if (g_forge.active_modal == _forge_modal_map_settings && forge_map_settings_menu_paging())
+		{
+			s_pointer_input.up = pointer.wheel_steps > 0;
+			s_pointer_input.down = pointer.wheel_steps < 0;
 		}
 	}
 	if (pointer.right_clicks)
@@ -790,6 +805,14 @@ static void forge_pointer_poll(void)
 		break;
 	case _forge_hit_save_ok:
 		s_pointer_input.enter = 1;
+		break;
+	case _forge_hit_settings_row:
+		forge_map_settings_menu_hover(hit->index);
+		/* (on a value's left, back; anything else, as A) */
+		if (pointer.click_x < (hit->x0 + hit->x1) / 2 && forge_map_settings_menu_row_has_value(hit->index))
+			s_pointer_input.left = 1;
+		else
+			s_pointer_input.enter = 1;
 		break;
 	}
 }
@@ -6520,6 +6543,15 @@ static int forge_point_in_sight(float x, float y, float z)
 		FLAG(_collision_test_back_facing_surfaces_bit), &from, &vector, NONE, &collision);
 }
 
+#include "forge_map_settings_menu.inl"
+
+/* (the palette's button: pressed and let go, the palette; held, the map's
+settings. When it went down, and whether holding it did something) */
+static uint32_t s_palette_press_ms;
+static int s_palette_press_used;
+/* (B or Esc pressed in the map settings this frame: its pages go back) */
+static int s_map_settings_back;
+
 void forge_3d_update(float dt)
 {
 	static int prev_f1, prev_f2, prev_f4, prev_f5, prev_f8, prev_esc, prev_x, prev_bk, prev_lmb;
@@ -6977,8 +7009,31 @@ void forge_3d_update(float dt)
 				}
 			}
 		}
+		/* (the palette's button: let go of quickly, the palette, as it was
+		on its press; held, MAP SETTINGS. A press with either open closes it) */
+		{
+			uint32_t now_ms = (uint32_t)system_milliseconds();
+
+			if (cur_f2 && !prev_f2)
+			{
+				s_palette_press_ms = now_ms ? now_ms : 1u;
+				s_palette_press_used = 0;
+				if (modal_before_hotkeys == _forge_modal_spawn_palette || modal_before_hotkeys == _forge_modal_map_settings)
+				{
+					g_forge.active_modal = _forge_modal_none;
+					s_palette_press_used = 1;
+				}
+			}
+			if (cur_f2 && s_palette_press_ms && !s_palette_press_used &&
+				now_ms - s_palette_press_ms >= FORGE_MAP_SETTINGS_HOLD_MS)
+			{
+				s_palette_press_used = 1;
+				if (g_forge.mode == _forge_mode_3d_monitor)
+					forge_map_settings_menu_show();
+			}
+		}
 		/* Point 1: Only allow F2 / Controller B to toggle Forge Menu when the player is in Forge Mode (_forge_mode_3d_monitor)! */
-		if (cur_f2 && !prev_f2)
+		if (!cur_f2 && prev_f2 && s_palette_press_ms && !s_palette_press_used)
 		{
 			if (g_forge.mode == _forge_mode_3d_monitor)
 			{
@@ -7025,7 +7080,14 @@ void forge_3d_update(float dt)
 			else
 				forge_props_open();
 		}
+		s_map_settings_back = 0;
 		if (((cur_esc && !prev_esc) || (cur_bk && !prev_bk)) &&
+			modal_before_hotkeys == _forge_modal_map_settings)
+		{
+			/* (its pages go back to its first: forge_map_settings_menu_input) */
+			s_map_settings_back = 1;
+		}
+		else if (((cur_esc && !prev_esc) || (cur_bk && !prev_bk)) &&
 			modal_before_hotkeys != _forge_modal_none &&
 			modal_before_hotkeys != _forge_modal_save_copy_as)
 		{
@@ -7134,6 +7196,27 @@ void forge_3d_update(float dt)
 	cur_copy = (g_forge.active_modal == _forge_modal_none && !cur_rot) ? forge_action_down(FORGE_BIND_COPY_OBJECT) : 0;
 	cur_look_settings = (g_forge.active_modal == _forge_modal_none && !cur_rot) ?
 		forge_action_down(FORGE_BIND_LOOK_SETTINGS) : 0;
+
+	/* MAP SETTINGS (the palette's button held: forge_map_settings_menu.inl) */
+	if (g_forge.active_modal == _forge_modal_map_settings)
+	{
+		/* (typing: the keyboard's keys are the name's, not the game's) */
+		if (s_map_settings_menu.page == _map_settings_page_name)
+		{
+			director_inhibit_input(0);
+			director_inhibit_facing(0);
+		}
+		forge_map_settings_menu_input(cur_up && !prev_up, cur_down && !prev_down, cur_left && !prev_left,
+			cur_right && !prev_right, cur_enter && !prev_enter, s_map_settings_back);
+		s_map_settings_back = 0;
+		/* (not the press that closed it, once it is) */
+		if (g_forge.active_modal != _forge_modal_map_settings)
+		{
+			prev_enter = 1;
+			prev_lmb = 1;
+		}
+		goto update_prev_keys;
+	}
 
 	/* Unified Tabbed Spawn Palette Menu: [<-] / [->] switches category, [Up] / [Down] / Scroll selects item */
 	if (g_forge.active_modal == _forge_modal_spawn_palette)
@@ -9412,7 +9495,8 @@ void forge_3d_draw_hud(
 				}
 				else
 				{
-					snprintf(buf, sizeof(buf), "%s OBJECTS  %s GRAB  %s COPY  %s PLAY", p_pal, p_click, p_copy, p_toggle);
+					snprintf(buf, sizeof(buf), "%s OBJECTS (HOLD: MAP)  %s GRAB  %s COPY  %s PLAY", p_pal, p_click, p_copy,
+						p_toggle);
 					draw_sized_bottom_pill_bar(
 						font_index, window_x0, window_x1, (short)(window_y1 - 2),
 						buf, NULL, 0, _forge_ui_area_bottom_bar, 0xFF2896FFu, &bar_top_y);
@@ -9770,6 +9854,10 @@ void forge_3d_draw_hud(
 				draw_quad(&undo_bar, 0xFF2896FFu);
 			}
 		}
+
+		/* MAP SETTINGS (the palette's button held) */
+		if (g_forge.active_modal == _forge_modal_map_settings)
+			forge_map_settings_menu_draw(window_x0, window_y0, font_index);
 
 		/* ========================================================================
 		 * INITIAL SAVE MAP DIALOG BOX (Opened from Esc -> SAVE MAP..)

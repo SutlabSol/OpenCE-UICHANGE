@@ -133,7 +133,10 @@ enum forge_ui_modal
 	_forge_modal_spawn_palette,
 	_forge_modal_object_properties,
 
-	_forge_modal_save_copy_as
+	_forge_modal_save_copy_as,
+	/* the map's general settings (the palette's button held:
+	forge_map_settings_menu.inl) */
+	_forge_modal_map_settings
 };
 
 enum forge_palette_category

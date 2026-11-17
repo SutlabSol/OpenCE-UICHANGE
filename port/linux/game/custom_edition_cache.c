@@ -1472,6 +1472,47 @@ boolean custom_edition_cache_playable(
 		(custom_edition_cache_identify(level_name, &identity) || custom_xbox_map_level(level_name));
 }
 
+boolean custom_edition_cache_file_forge_name(
+	char const *path,
+	char *name,
+	long size)
+{
+	/* (forge_map_settings.h's FORGE_DISPLAY_NAME_HEADER_*) */
+	enum
+	{
+		FORGE_NAME_OFFSET = 0x1A0,
+		FORGE_NAME_SIZE = 0x44,
+	};
+	struct custom_edition_file file;
+	unsigned char signature[4] = { 0 };
+	unsigned char field[FORGE_NAME_SIZE + 1];
+	boolean found = FALSE;
+	long index;
+
+	if (size <= 0)
+		return FALSE;
+	name[0] = 0;
+	if (!custom_edition_file_open(&file, path))
+		return FALSE;
+	csmemset(field, 0, sizeof(field));
+	if (file.source.read(file.source.context, 0x1FC, 4, signature) &&
+		(*(uint32_t const *)signature == 0x464C4731u || !memcmp(signature, "FLG1", 4)) &&
+		file.source.read(file.source.context, FORGE_NAME_OFFSET, FORGE_NAME_SIZE, field) && !memcmp(field, "FGDN", 4))
+	{
+		for (index = 0; index + 1 < size && field[4 + index] && 4 + index < FORGE_NAME_SIZE; index++)
+		{
+			unsigned char character = field[4 + index];
+
+			name[index] = character >= ' ' && character < 0x7F ? (char)character : '?';
+		}
+		name[index] = 0;
+		found = index > 0;
+	}
+	custom_edition_file_close(&file);
+
+	return found;
+}
+
 short custom_edition_cache_file_scenario_type(
 	char const *path,
 	boolean *xbox_map)

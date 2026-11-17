@@ -12,6 +12,7 @@ scenario exporter (.map, 140x114 .bmp, .txt).
 #endif
 #include "cseries/cseries.h"
 #include "forge_cache_builder.h"
+#include "forge_map_settings.h"
 #include "cache_file_formats.h"
 #include "tag_schema.h"
 #include "math/real_math.h"
@@ -5538,6 +5539,20 @@ static int append_forge_map_metadata_and_preview_trailer(
 		}
 	}
 
+	/* the map's general settings (forge_map_settings.c): its name, sky,
+	players' bipeds and hands, atmosphere; read as its level loads */
+	if (edits && state_buf.data)
+	{
+		char settings_lines[4096];
+		int settings_length = forge_map_settings_save_lines(settings_lines, sizeof(settings_lines));
+
+		if (settings_length > 0)
+		{
+			uint32_t o = buf_alloc(&state_buf, (uint32_t)settings_length, 1);
+			if (state_buf.data) memcpy(state_buf.data + o, settings_lines, (size_t)settings_length);
+		}
+	}
+
 	/* (the tags the bake leaves out, MCC's own content: each machine reads
 	them from its own profiles, forge_level_local_tags_add) */
 	if (edits && !ce_base_map && state_buf.data)
@@ -5655,6 +5670,26 @@ static int append_forge_map_metadata_and_preview_trailer(
 	write_u32(out->data + 0x1F4u, desc_foff ? desc_foff + file_bias : 0u);
 	write_u32(out->data + 0x1F8u, desc_len);
 	write_u32(out->data + 0x1FCu, 0x464C4731u); /* 'FLG1' OpenCE : Forge map signature */
+	/* the name map lists show it by (custom_edition_maps.c), 'FGDN' then
+	the name: where the header has nothing, or a name of before */
+	{
+		uint8_t *name_field = out->data + FORGE_DISPLAY_NAME_HEADER_OFFSET;
+		char const *display_name = forge_map_settings_get()->display_name;
+		int empty = 1;
+		uint32_t b;
+
+		for (b = 0; b < FORGE_DISPLAY_NAME_HEADER_SIZE; b++)
+			empty = empty && !name_field[b];
+		if (empty || read_u32(name_field) == FORGE_DISPLAY_NAME_MAGIC)
+		{
+			memset(name_field, 0, FORGE_DISPLAY_NAME_HEADER_SIZE);
+			if (display_name[0])
+			{
+				write_u32(name_field, FORGE_DISPLAY_NAME_MAGIC);
+				snprintf((char *)name_field + 4, FORGE_DISPLAY_NAME_HEADER_SIZE - 4, "%s", display_name);
+			}
+		}
+	}
 	return 1;
 }
 

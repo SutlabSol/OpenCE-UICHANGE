@@ -55,6 +55,7 @@
 #include <stdarg.h>
 
 #include "forge_engine.h"
+#include "forge_map_settings.h"
 
 #undef fopen
 #undef fclose
@@ -6141,6 +6142,8 @@ long forge_level_baked_open(char const *scenario_name)
 	id[0] = 0;
 	if (text)
 		forge_saved_markers_apply(text);
+	/* (its name, sky, bipeds, hands and atmosphere: forge_map_settings.c) */
+	forge_map_settings_level_loading(text);
 	if (line && sscanf(line + 11, "%x|%u|%39[^\r\n]", &offset, &size, id) == 3 && id[0] && offset >= 0x800u)
 	{
 		if (!port_tag_profiles_baked_present(id))
@@ -6176,7 +6179,12 @@ int forge_baked_local_lines(struct forge_scenario_edit_state const *edits, char 
 {
 	long baked = tag_injector_level_baked_profile();
 	long playing = tag_injector_level_profile();
-	int capacity = edits ? edits->placed_object_count + edits->ai_spawn_count * 2 : 0;
+	/* (and the map settings' sky, bipeds and hands: forge_map_settings_tags) */
+	uint32_t settings_groups[8];
+	char const *settings_paths[8];
+	int settings_count = forge_map_settings_tags(settings_groups, settings_paths, 8);
+	int object_capacity = edits ? edits->placed_object_count + edits->ai_spawn_count * 2 : 0;
+	int capacity = edits ? object_capacity + settings_count : 0;
 	unsigned long length = 0;
 	int i;
 
@@ -6185,11 +6193,14 @@ int forge_baked_local_lines(struct forge_scenario_edit_state const *edits, char 
 	text[0] = 0;
 	for (i = 0; i < capacity; i++)
 	{
-		int is_ai = i >= edits->placed_object_count;
+		int is_setting = i >= object_capacity;
+		int is_ai = !is_setting && i >= edits->placed_object_count;
 		int ai_index = (i - edits->placed_object_count) / 2;
 		int is_ai_weapon = is_ai && ((i - edits->placed_object_count) & 1);
-		uint32_t group = is_ai_weapon ? 'weap' : is_ai ? 'actv' : edits->placed_objects[i].group_tag;
-		char const *name = is_ai_weapon ? edits->ai_spawns[ai_index].weapon_path :
+		uint32_t group = is_setting ? settings_groups[i - object_capacity] :
+			is_ai_weapon ? 'weap' : is_ai ? 'actv' : edits->placed_objects[i].group_tag;
+		char const *name = is_setting ? settings_paths[i - object_capacity] :
+			is_ai_weapon ? edits->ai_spawns[ai_index].weapon_path :
 			is_ai ? edits->ai_spawns[ai_index].actor_variant_path :
 			edits->placed_objects[i].tag_path;
 		char const *folder = NULL;
@@ -6198,7 +6209,7 @@ int forge_baked_local_lines(struct forge_scenario_edit_state const *edits, char 
 		char line[400];
 		int line_length;
 
-		if (!name[0] || (!is_ai && edits->placed_objects[i].x < -90000.0f) ||
+		if (!name[0] || (!is_ai && !is_setting && edits->placed_objects[i].x < -90000.0f) ||
 			(is_ai && !edits->ai_spawns[ai_index].active))
 			continue;
 		if (baked != NONE)
@@ -6256,7 +6267,13 @@ int forge_baked_archive_make(
 {
 	long baked = tag_injector_level_baked_profile();
 	long playing = tag_injector_level_profile();
-	int capacity = edits ? edits->placed_object_count + edits->ai_spawn_count * 2 : 0;
+	/* (and after them, the tags the map's general settings name: its sky,
+	the players' bipeds and hands, forge_map_settings_tags) */
+	uint32_t settings_groups[8];
+	char const *settings_paths[8];
+	int settings_count = forge_map_settings_tags(settings_groups, settings_paths, 8);
+	int object_capacity = edits ? edits->placed_object_count + edits->ai_spawn_count * 2 : 0;
+	int capacity = object_capacity + settings_count;
 	long *profiles;
 	long *tags;
 	int count = 0;
@@ -6264,7 +6281,7 @@ int forge_baked_archive_make(
 	long made = 0;
 
 	*size = 0;
-	if (capacity <= 0 || (baked == NONE && playing == NONE))
+	if (!edits || capacity <= 0 || (baked == NONE && playing == NONE))
 		return 0;
 	profiles = (long *)malloc((size_t)capacity * sizeof(*profiles));
 	tags = (long *)malloc((size_t)capacity * sizeof(*tags));
@@ -6276,19 +6293,22 @@ int forge_baked_archive_make(
 	}
 	for (i = 0; i < capacity; i++)
 	{
-		int is_ai = i >= edits->placed_object_count;
+		int is_setting = i >= object_capacity;
+		int is_ai = !is_setting && i >= edits->placed_object_count;
 		/* (an AI spawn's actor, then its weapon) */
 		int ai_index = (i - edits->placed_object_count) / 2;
 		int is_ai_weapon = is_ai && ((i - edits->placed_object_count) & 1);
-		uint32_t group = is_ai_weapon ? 'weap' : is_ai ? 'actv' : edits->placed_objects[i].group_tag;
-		char const *name = is_ai_weapon ? edits->ai_spawns[ai_index].weapon_path :
+		uint32_t group = is_setting ? settings_groups[i - object_capacity] :
+			is_ai_weapon ? 'weap' : is_ai ? 'actv' : edits->placed_objects[i].group_tag;
+		char const *name = is_setting ? settings_paths[i - object_capacity] :
+			is_ai_weapon ? edits->ai_spawns[ai_index].weapon_path :
 			is_ai ? edits->ai_spawns[ai_index].actor_variant_path :
 			edits->placed_objects[i].tag_path;
 		long profile = baked;
 		long tag = NONE;
 		int other;
 
-		if (!name[0] || (!is_ai && edits->placed_objects[i].x < -90000.0f))
+		if (!name[0] || (!is_ai && !is_setting && edits->placed_objects[i].x < -90000.0f))
 			continue;
 		if (baked != NONE)
 			tag = port_tag_profiles_tag_find(baked, group, name);

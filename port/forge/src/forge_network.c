@@ -27,6 +27,7 @@
 #include "network_chat.h"
 
 #include "forge_engine.h"
+#include "forge_map_settings.h"
 
 extern unsigned long system_milliseconds(void);
 extern void orig_network_objects_handle_changes(void const *entries, short count);
@@ -238,6 +239,23 @@ static void forge_broadcast_packet_to_clients(char const *text, long exclude_mac
 	{
 		if (machines[i] != exclude_machine_index)
 			forge_send_packet_to_machine(machines[i], text);
+	}
+}
+
+/* a packet of Forge's from the host to one client, or to all of them (-1);
+a client's goes to the host (forge_map_settings.c) */
+void forge_network_send_text(long machine_index, char const *text)
+{
+	if (!forge_is_multiplayer_session())
+		return;
+	if (game_connection() == _game_connection_network_client)
+		forge_send_packet_to_host(text);
+	else if (game_connection() == _game_connection_network_server)
+	{
+		if (machine_index >= 0)
+			forge_send_packet_to_machine(machine_index, text);
+		else
+			forge_broadcast_packet_to_clients(text, -1);
 	}
 }
 
@@ -1365,6 +1383,10 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 		return 1;
 	}
 
+	/* (the map's general settings: forge_map_settings.c) */
+	if (forge_map_settings_net_receive(text, is_from_client_to_host))
+		return 1;
+
 	/* 2. Client Full-State Sync Request (!FQ) */
 	if (strncmp(text, "!FQ", 3) == 0)
 	{
@@ -1376,6 +1398,7 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 				g_host_machine_sync_cursor[machine_index] = 0;
 				g_host_machine_mon_synced[machine_index] = 0;
 			}
+			forge_map_settings_net_send_all(machine_index);
 		}
 		return 1;
 	}

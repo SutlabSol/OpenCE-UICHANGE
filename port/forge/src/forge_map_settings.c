@@ -1,0 +1,820 @@
+/*
+FORGE_MAP_SETTINGS.C
+
+A Forge map's general settings (forge_map_settings.h): its display name,
+sky, the players' bipeds and first-person hands, and its atmosphere.
+
+Each tag is kept by its path, and found in the level's tag table when it is
+wanted (forge_map_settings_tag): the map's own, the profile's in a Forge
+session, the map's bake once saved (forge_baked_archive_make bakes them
+with the placed objects' tags). A level of another map has none of them:
+the settings are read anew as each level loads.
+*/
+
+#include "cseries.h"
+#include "cseries/errors.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "game/game.h"
+#include "game/game_engine.h"
+#include "game/game_globals.h"
+#include "game/players.h"
+#include "tag_files/tag_groups.h"
+#include "tag_files/tag_files.h"
+#include "objects/objects.h"
+#include "units/units.h"
+#include "render/render_cameras.h"
+#include "scenario/scenario.h"
+#include "scenario/scenario_definitions.h"
+
+#include "forge_engine.h"
+#include "forge_map_settings.h"
+
+/* ---------- externs */
+
+extern void *cache_files_tag_instances(long *count);
+extern boolean firefight_active(void);
+extern long tag_injector_level_profile(void);
+extern long tag_injector_level_baked_profile(void);
+extern long port_tag_profiles_count(void);
+extern long port_tag_profiles_tag_count(long profile);
+extern unsigned long port_tag_profiles_tag_group(long profile, long tag);
+extern const char *port_tag_profiles_tag_name(long profile, long tag);
+extern const char *port_tag_profiles_tag_map(long profile, long tag);
+extern long port_tag_profiles_tag_find(long profile, unsigned long group, const char *name);
+extern void forge_network_send_text(long machine_index, char const *text);
+
+/* ---------- constants */
+
+#define SKY_GROUP_TAG 'sky '
+#define BIPED_GROUP_TAG 'bipd'
+#define GBXMODEL_GROUP_TAG 'mod2'
+#define MAXIMUM_SKY_REFERENCES 16
+
+/* ---------- structures */
+
+struct settings_tag_instance
+{
+	long group_tag;
+	long parent_group_tags[2];
+	long tag_index;
+	char *name;
+	void *base_address;
+	unsigned long unused[2];
+};
+
+struct atmosphere_preset
+{
+	char const *name;
+	float color[3];
+	float density;
+	float start;
+	float opaque;
+	int indoors;
+};
+
+/* ---------- globals */
+
+static struct atmosphere_preset const atmosphere_presets[NUMBER_OF_FORGE_ATMOSPHERES] =
+{
+	{ "MAP DEFAULT", { 0.0f, 0.0f, 0.0f }, 0.0f, 0.0f, 0.0f, 0 },
+	{ "CLEAR", { 0.0f, 0.0f, 0.0f }, 0.0f, 0.0f, 0.0f, 1 },
+	{ "LIGHT FOG", { 0.70f, 0.74f, 0.80f }, 0.45f, 10.0f, 160.0f, 0 },
+	{ "HEAVY FOG", { 0.60f, 0.62f, 0.66f }, 0.95f, 2.0f, 50.0f, 1 },
+	/* (Floodfection's: infection.c) */
+	{ "FLOOD FOG", { 0.16f, 0.20f, 0.09f }, 1.0f, 3.0f, 55.0f, 1 },
+	{ "CUSTOM", { 0.0f, 0.0f, 0.0f }, 0.0f, 0.0f, 0.0f, 0 },
+};
+
+static struct forge_map_settings settings;
+
+/* the sky references of the scenario last changed, as the map had them, so
+MAP DEFAULT gives them back; the level they are of (level_serial) */
+static struct
+{
+	struct scenario *scenario;
+	long serial;
+	short count;
+	long indices[MAXIMUM_SKY_REFERENCES];
+	unsigned long groups[MAXIMUM_SKY_REFERENCES];
+	/* (the sky it was set to, NONE: the map's) */
+	long applied;
+} sky_state = { NULL, -1, 0, { 0 }, { 0 }, NONE };
+
+/* a level's loading, each one counted; and the settings' changes */
+static long level_serial;
+static long settings_generation;
+
+/* the tags the settings name, found in the level's table (each call of the
+engine's hooks would look through all of it): for the level, the settings
+and the table's size they were found for */
+static struct
+{
+	long serial;
+	long generation;
+	long tag_count;
+	long tags[NUMBER_OF_FORGE_MAP_KINDS][NUMBER_OF_FORGE_MAP_SLOTS];
+} resolved = { -1, -1, -1 };
+
+/* ---------- private code */
+
+static void settings_clear(void)
+{
+	memset(&settings, 0, sizeof(settings));
+	settings.atmosphere = _forge_atmosphere_map_default;
+	settings.fog_color[0] = settings.fog_color[1] = settings.fog_color[2] = 0.7f;
+	settings.fog_density = 0.5f;
+	settings.fog_start = 5.0f;
+	settings.fog_opaque = 120.0f;
+	settings.sky_visibility = _forge_sky_auto;
+}
+
+static char *settings_path(int kind, int slot)
+{
+	if (kind == _forge_map_kind_sky)
+		return settings.sky;
+	if (slot < 0 || slot >= NUMBER_OF_FORGE_MAP_SLOTS)
+		return NULL;
+	return kind == _forge_map_kind_biped ? settings.biped[slot] : kind == _forge_map_kind_hands ? settings.hands[slot] :
+		NULL;
+}
+
+static unsigned long kind_group(int kind)
+{
+	return kind == _forge_map_kind_sky ? SKY_GROUP_TAG : kind == _forge_map_kind_biped ? BIPED_GROUP_TAG :
+		GBXMODEL_GROUP_TAG;
+}
+
+/* a name's characters as a map list shows them: printable, no '|' (the
+trailer's separator); its length */
+static int display_name_clean(char *name)
+{
+	int read, written = 0;
+
+	for (read = 0; name[read] && written < FORGE_MAP_DISPLAY_NAME_MAX; read++)
+	{
+		unsigned char character = (unsigned char)name[read];
+
+		if (character >= ' ' && character < 0x7F && character != '|' && !(character == ' ' && !written))
+			name[written++] = (char)character;
+	}
+	while (written > 0 && name[written - 1] == ' ')
+		written--;
+	name[written] = 0;
+	return written;
+}
+
+static struct settings_tag_instance const *instance_of(long tag_index)
+{
+	long count = 0;
+	struct settings_tag_instance const *instances =
+		(struct settings_tag_instance const *)cache_files_tag_instances(&count);
+	long absolute = tag_index == NONE ? NONE : DATUM_INDEX_TO_ABSOLUTE_INDEX(tag_index);
+
+	if (!instances || absolute < 0 || absolute >= count || instances[absolute].tag_index != tag_index ||
+		!instances[absolute].base_address)
+	{
+		return NULL;
+	}
+	return &instances[absolute];
+}
+
+static long tag_find(unsigned long group, char const *path)
+{
+	long count = 0;
+	struct settings_tag_instance const *instances;
+	long index;
+
+	if (!path || !path[0])
+		return NONE;
+	instances = (struct settings_tag_instance const *)cache_files_tag_instances(&count);
+	for (index = 0; instances && index < count; index++)
+	{
+		if ((unsigned long)instances[index].group_tag == group && instances[index].tag_index != NONE &&
+			instances[index].name && instances[index].base_address && !_stricmp(instances[index].name, path))
+		{
+			return instances[index].tag_index;
+		}
+	}
+	return NONE;
+}
+
+static struct game_globals_first_person_interface *first_person_interface(void)
+{
+	struct game_globals *globals = scenario_get_game_globals();
+
+	if (!globals || globals->first_person_interface.count <= 0)
+		return NULL;
+	return TAG_BLOCK_GET_ELEMENT(&globals->first_person_interface, 0, struct game_globals_first_person_interface);
+}
+
+/* the scenario's sky references, the chosen sky's in place of each (the
+map's own given back for none). The sky a cluster has is drawn and fogs by
+its reference (scenario_get_sky), so a level's clusters with a sky all get
+this one; those with none (indoors) stay so */
+static void sky_apply(void)
+{
+	struct scenario *scenario = global_scenario_try_and_get();
+	long wanted = forge_map_settings_tag(_forge_map_kind_sky, 0);
+	short index;
+
+	if (!scenario)
+		return;
+	if (sky_state.scenario != scenario || sky_state.serial != level_serial)
+	{
+		sky_state.scenario = scenario;
+		sky_state.serial = level_serial;
+		sky_state.count = (short)MIN(scenario->sky_references.count, MAXIMUM_SKY_REFERENCES);
+		sky_state.applied = NONE;
+		for (index = 0; index < sky_state.count; index++)
+		{
+			struct tag_reference *reference =
+				TAG_BLOCK_GET_ELEMENT(&scenario->sky_references, index, struct tag_reference);
+
+			sky_state.indices[index] = reference->index;
+			sky_state.groups[index] = reference->group_tag;
+		}
+	}
+	if (wanted == sky_state.applied)
+		return;
+	for (index = 0; index < sky_state.count; index++)
+	{
+		struct tag_reference *reference = TAG_BLOCK_GET_ELEMENT(&scenario->sky_references, index, struct tag_reference);
+
+		reference->index = wanted != NONE ? wanted : sky_state.indices[index];
+		reference->group_tag = wanted != NONE ? SKY_GROUP_TAG : sky_state.groups[index];
+	}
+	sky_state.applied = wanted;
+	if (wanted != NONE)
+		error(_error_silent, "forge map settings: sky %s over %d of the map's", settings.sky, (int)sky_state.count);
+}
+
+/* the player's slot: its team's in a team game, else free for all's */
+static int player_slot(long player_index)
+{
+	struct player_datum *player;
+
+	if (player_index == NONE || !game_engine_has_teams())
+		return _forge_map_slot_ffa;
+	player = player_get(player_index);
+	if (!player)
+		return _forge_map_slot_ffa;
+	return player->team_index == 1 ? _forge_map_slot_blue : _forge_map_slot_red;
+}
+
+/* the host's word to its clients (-1: all of them) of a setting */
+static void net_send_name(long machine_index)
+{
+	char text[64];
+
+	snprintf(text, sizeof(text), "!FGN:%s", settings.display_name);
+	forge_network_send_text(machine_index, text);
+}
+
+static void net_send_tag(long machine_index, int kind, int slot)
+{
+	char text[64];
+	long tag = forge_map_settings_tag(kind, slot);
+
+	snprintf(text, sizeof(text), "!FGT:%d:%d:%lX", kind, slot, (unsigned long)tag);
+	forge_network_send_text(machine_index, text);
+}
+
+static void net_send_atmosphere(long machine_index)
+{
+	char text[64];
+
+	snprintf(text, sizeof(text), "!FGA:%d:%02X%02X%02X:%d:%.1f:%.1f:%d:%d", settings.atmosphere,
+		(unsigned)(PIN(settings.fog_color[0], 0.0f, 1.0f) * 255.0f + 0.5f),
+		(unsigned)(PIN(settings.fog_color[1], 0.0f, 1.0f) * 255.0f + 0.5f),
+		(unsigned)(PIN(settings.fog_color[2], 0.0f, 1.0f) * 255.0f + 0.5f),
+		(int)(PIN(settings.fog_density, 0.0f, 1.0f) * 100.0f + 0.5f), settings.fog_start, settings.fog_opaque,
+		settings.fog_indoors, settings.sky_visibility);
+	forge_network_send_text(machine_index, text);
+}
+
+static int host_tells(void)
+{
+	return forge_is_multiplayer_session() && game_connection() == _game_connection_network_server;
+}
+
+/* ---------- public code */
+
+struct forge_map_settings const *forge_map_settings_get(void)
+{
+	return &settings;
+}
+
+int forge_map_settings_any(void)
+{
+	int slot;
+
+	if (settings.display_name[0] || settings.sky[0] || settings.atmosphere != _forge_atmosphere_map_default)
+		return 1;
+	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
+	{
+		if (settings.biped[slot][0] || settings.hands[slot][0])
+			return 1;
+	}
+	return 0;
+}
+
+void forge_map_settings_level_loading(char const *text)
+{
+	char const *line;
+
+	settings_clear();
+	level_serial++;
+	settings_generation++;
+	sky_state.scenario = NULL;
+	if (!text || !strstr(text, "MAP_SETTINGS|"))
+		return;
+	for (line = text; line && *line; line = strchr(line, '\n'), line = line ? line + 1 : NULL)
+	{
+		char value[FORGE_MAP_SETTINGS_PATH_MAX];
+		int slot = 0;
+
+		value[0] = 0;
+		if (!strncmp(line, "MAP_NAME|", 9) && sscanf(line + 9, "%40[^\r\n]", settings.display_name) == 1)
+		{
+			display_name_clean(settings.display_name);
+		}
+		else if (!strncmp(line, "MAP_SKY|", 8) && sscanf(line + 8, "%255[^\r\n]", value) == 1)
+		{
+			snprintf(settings.sky, sizeof(settings.sky), "%s", value);
+		}
+		else if ((!strncmp(line, "MAP_BIPED|", 10) || !strncmp(line, "MAP_HANDS|", 10)) &&
+			sscanf(line + 10, "%d|%255[^\r\n]", &slot, value) == 2 && slot >= 0 && slot < NUMBER_OF_FORGE_MAP_SLOTS)
+		{
+			snprintf(line[4] == 'B' ? settings.biped[slot] : settings.hands[slot], FORGE_MAP_SETTINGS_PATH_MAX, "%s",
+				value);
+		}
+		else if (!strncmp(line, "MAP_ATMOSPHERE|", 15))
+		{
+			struct forge_map_settings read = settings;
+
+			if (sscanf(line + 15, "%d|%f|%f|%f|%f|%f|%f|%d|%d", &read.atmosphere, &read.fog_color[0],
+				&read.fog_color[1], &read.fog_color[2], &read.fog_density, &read.fog_start, &read.fog_opaque,
+				&read.fog_indoors, &read.sky_visibility) == 9 &&
+				read.atmosphere >= 0 && read.atmosphere < NUMBER_OF_FORGE_ATMOSPHERES)
+			{
+				settings = read;
+				settings.sky_visibility = PIN(settings.sky_visibility, 0, NUMBER_OF_FORGE_SKY_VISIBILITIES - 1);
+			}
+		}
+	}
+	error(_error_silent, "forge map settings: name '%s', sky '%s', bipeds '%s' '%s' '%s', atmosphere %s",
+		settings.display_name, settings.sky, settings.biped[0], settings.biped[1], settings.biped[2],
+		atmosphere_presets[settings.atmosphere].name);
+}
+
+int forge_map_settings_save_lines(char *text, unsigned long size)
+{
+	int length = 0;
+	int slot;
+
+#define SETTINGS_LINE(...) \
+	do { \
+		int written = length < (int)size ? snprintf(text + length, size - (unsigned long)length, __VA_ARGS__) : 0; \
+		if (written > 0 && length + written < (int)size) length += written; \
+	} while (0)
+
+	if (!text || !size)
+		return 0;
+	text[0] = 0;
+	if (!forge_map_settings_any())
+		return 0;
+	SETTINGS_LINE("MAP_SETTINGS|1\r\n");
+	if (settings.display_name[0])
+		SETTINGS_LINE("MAP_NAME|%s\r\n", settings.display_name);
+	if (settings.sky[0])
+		SETTINGS_LINE("MAP_SKY|%s\r\n", settings.sky);
+	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
+	{
+		if (settings.biped[slot][0])
+			SETTINGS_LINE("MAP_BIPED|%d|%s\r\n", slot, settings.biped[slot]);
+		if (settings.hands[slot][0])
+			SETTINGS_LINE("MAP_HANDS|%d|%s\r\n", slot, settings.hands[slot]);
+	}
+	if (settings.atmosphere != _forge_atmosphere_map_default)
+	{
+		SETTINGS_LINE("MAP_ATMOSPHERE|%d|%.3f|%.3f|%.3f|%.3f|%.2f|%.2f|%d|%d\r\n", settings.atmosphere,
+			settings.fog_color[0], settings.fog_color[1], settings.fog_color[2], settings.fog_density,
+			settings.fog_start, settings.fog_opaque, settings.fog_indoors, settings.sky_visibility);
+	}
+#undef SETTINGS_LINE
+	return length;
+}
+
+int forge_map_settings_tags(uint32_t *groups, char const **paths, int capacity)
+{
+	int count = 0;
+	int slot;
+
+	if (settings.sky[0] && count < capacity)
+	{
+		groups[count] = SKY_GROUP_TAG;
+		paths[count++] = settings.sky;
+	}
+	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
+	{
+		if (settings.biped[slot][0] && count < capacity)
+		{
+			groups[count] = BIPED_GROUP_TAG;
+			paths[count++] = settings.biped[slot];
+		}
+		if (settings.hands[slot][0] && count < capacity)
+		{
+			groups[count] = GBXMODEL_GROUP_TAG;
+			paths[count++] = settings.hands[slot];
+		}
+	}
+	return count;
+}
+
+int forge_map_settings_can_edit(void)
+{
+	return game_connection() != _game_connection_network_client;
+}
+
+void forge_map_settings_set_display_name(char const *name)
+{
+	if (!forge_map_settings_can_edit())
+		return;
+	snprintf(settings.display_name, sizeof(settings.display_name), "%s", name ? name : "");
+	display_name_clean(settings.display_name);
+	if (host_tells())
+		net_send_name(-1);
+}
+
+/* (a biped of a profile chooses its map's hands with it: the Tag Injector
+takes a biped's hands out with it, from the same map) */
+static void hands_of_biped(int slot, long biped_tag)
+{
+	struct settings_tag_instance const *biped = instance_of(biped_tag);
+	long profiles[2];
+	int pass;
+
+	profiles[0] = tag_injector_level_baked_profile();
+	profiles[1] = tag_injector_level_profile();
+	for (pass = 0; biped && biped->name && pass < 2; pass++)
+	{
+		long profile = profiles[pass];
+		long entry = profile == NONE ? NONE : port_tag_profiles_tag_find(profile, BIPED_GROUP_TAG, biped->name);
+		char const *map = entry == NONE ? NULL : port_tag_profiles_tag_map(profile, entry);
+		long count = profile == NONE ? 0 : port_tag_profiles_tag_count(profile);
+		long tag;
+
+		for (tag = 0; map && map[0] && tag < count; tag++)
+		{
+			char const *name = port_tag_profiles_tag_name(profile, tag);
+
+			if (port_tag_profiles_tag_group(profile, tag) == GBXMODEL_GROUP_TAG &&
+				!_stricmp(port_tag_profiles_tag_map(profile, tag), map) && tag_find(GBXMODEL_GROUP_TAG, name) != NONE)
+			{
+				snprintf(settings.hands[slot], sizeof(settings.hands[slot]), "%s", name);
+				return;
+			}
+		}
+	}
+}
+
+void forge_map_settings_set_tag(int kind, int slot, long tag_index)
+{
+	char *path = settings_path(kind, slot);
+	struct settings_tag_instance const *instance = instance_of(tag_index);
+
+	if (!path || !forge_map_settings_can_edit())
+		return;
+	if (instance && (unsigned long)instance->group_tag == kind_group(kind) && instance->name)
+		snprintf(path, FORGE_MAP_SETTINGS_PATH_MAX, "%s", instance->name);
+	else
+		path[0] = 0;
+	if (kind == _forge_map_kind_biped && instance)
+		hands_of_biped(slot, tag_index);
+	settings_generation++;
+	if (kind == _forge_map_kind_sky)
+		sky_apply();
+	if (host_tells())
+	{
+		net_send_tag(-1, kind, slot);
+		if (kind == _forge_map_kind_biped)
+			net_send_tag(-1, _forge_map_kind_hands, slot);
+	}
+}
+
+void forge_map_settings_set_atmosphere(int atmosphere)
+{
+	struct atmosphere_preset const *preset;
+
+	if (!forge_map_settings_can_edit() || atmosphere < 0 || atmosphere >= NUMBER_OF_FORGE_ATMOSPHERES)
+		return;
+	settings.atmosphere = atmosphere;
+	preset = &atmosphere_presets[atmosphere];
+	if (atmosphere != _forge_atmosphere_map_default && atmosphere != _forge_atmosphere_custom)
+	{
+		settings.fog_color[0] = preset->color[0];
+		settings.fog_color[1] = preset->color[1];
+		settings.fog_color[2] = preset->color[2];
+		settings.fog_density = preset->density;
+		settings.fog_start = preset->start;
+		settings.fog_opaque = preset->opaque;
+		settings.fog_indoors = preset->indoors;
+	}
+	if (host_tells())
+		net_send_atmosphere(-1);
+}
+
+void forge_map_settings_set_fog(float const color[3], float density, float start, float opaque, int indoors,
+	int sky_visibility)
+{
+	if (!forge_map_settings_can_edit())
+		return;
+	settings.fog_color[0] = PIN(color[0], 0.0f, 1.0f);
+	settings.fog_color[1] = PIN(color[1], 0.0f, 1.0f);
+	settings.fog_color[2] = PIN(color[2], 0.0f, 1.0f);
+	settings.fog_density = PIN(density, 0.0f, 1.0f);
+	settings.fog_start = PIN(start, 0.0f, 2000.0f);
+	settings.fog_opaque = PIN(opaque, settings.fog_start + 1.0f, 4000.0f);
+	settings.fog_indoors = indoors != 0;
+	settings.sky_visibility = PIN(sky_visibility, 0, NUMBER_OF_FORGE_SKY_VISIBILITIES - 1);
+	/* (a preset's values changed are the player's own) */
+	if (settings.atmosphere != _forge_atmosphere_map_default)
+		settings.atmosphere = _forge_atmosphere_custom;
+	if (host_tells())
+		net_send_atmosphere(-1);
+}
+
+void forge_map_settings_reset(void)
+{
+	if (!forge_map_settings_can_edit())
+		return;
+	settings_clear();
+	settings_generation++;
+	sky_apply();
+	if (host_tells())
+		forge_map_settings_net_send_all(-1);
+}
+
+int forge_map_settings_candidates(int kind, long *tags, int capacity)
+{
+	long count = 0;
+	struct settings_tag_instance const *instances =
+		(struct settings_tag_instance const *)cache_files_tag_instances(&count);
+	unsigned long group = kind_group(kind);
+	int found = 0;
+	long index;
+
+	if (kind == _forge_map_kind_hands)
+	{
+		/* (the map's own hands, then each a profile of the level has) */
+		struct game_globals_first_person_interface *fp = first_person_interface();
+		long profiles[2];
+		int pass;
+
+		if (fp && fp->hands.index != NONE && found < capacity)
+			tags[found++] = fp->hands.index;
+		profiles[0] = tag_injector_level_baked_profile();
+		profiles[1] = tag_injector_level_profile();
+		for (pass = 0; pass < 2; pass++)
+		{
+			long profile_count = profiles[pass] == NONE ? 0 : port_tag_profiles_tag_count(profiles[pass]);
+			long tag;
+
+			for (tag = 0; tag < profile_count && found < capacity; tag++)
+			{
+				long level_tag;
+				int other;
+
+				if (port_tag_profiles_tag_group(profiles[pass], tag) != GBXMODEL_GROUP_TAG)
+					continue;
+				level_tag = tag_find(GBXMODEL_GROUP_TAG, port_tag_profiles_tag_name(profiles[pass], tag));
+				for (other = 0; other < found && tags[other] != level_tag; other++)
+				{
+				}
+				if (level_tag != NONE && other == found)
+					tags[found++] = level_tag;
+			}
+		}
+		return found;
+	}
+	for (index = 0; instances && index < count && found < capacity; index++)
+	{
+		if ((unsigned long)instances[index].group_tag == group && instances[index].tag_index != NONE &&
+			instances[index].name && instances[index].base_address)
+		{
+			tags[found++] = instances[index].tag_index;
+		}
+	}
+	return found;
+}
+
+void forge_map_settings_tag_label(long tag_index, char *text, unsigned long size)
+{
+	struct settings_tag_instance const *instance = instance_of(tag_index);
+	char const *name = instance && instance->name ? instance->name : "";
+	char const *leaf = strrchr(name, '\\');
+	char const *parent_end = leaf;
+	char const *parent = name;
+	int index;
+
+	if (!size)
+		return;
+	if (!instance)
+	{
+		snprintf(text, size, "MAP DEFAULT");
+		return;
+	}
+	leaf = leaf ? leaf + 1 : name;
+	/* (a leaf saying little, "fp" or "sky", with its folder's) */
+	if (parent_end && strlen(leaf) <= 3)
+	{
+		char const *cursor;
+
+		for (cursor = name; cursor < parent_end; cursor++)
+		{
+			if (*cursor == '\\')
+				parent = cursor + 1;
+		}
+		snprintf(text, size, "%.*s %s", (int)(parent_end - parent), parent, leaf);
+	}
+	else
+	{
+		snprintf(text, size, "%s", leaf);
+	}
+	for (index = 0; text[index]; index++)
+	{
+		if (text[index] == '_')
+			text[index] = ' ';
+		else if (text[index] >= 'a' && text[index] <= 'z')
+			text[index] = (char)(text[index] - 'a' + 'A');
+	}
+}
+
+long forge_map_settings_tag(int kind, int slot)
+{
+	long tag_count = 0;
+
+	if (kind < 0 || kind >= NUMBER_OF_FORGE_MAP_KINDS || slot < 0 || slot >= NUMBER_OF_FORGE_MAP_SLOTS)
+		return NONE;
+	cache_files_tag_instances(&tag_count);
+	if (resolved.serial != level_serial || resolved.generation != settings_generation ||
+		resolved.tag_count != tag_count)
+	{
+		int each_kind, each_slot;
+
+		resolved.serial = level_serial;
+		resolved.generation = settings_generation;
+		resolved.tag_count = tag_count;
+		for (each_kind = 0; each_kind < NUMBER_OF_FORGE_MAP_KINDS; each_kind++)
+		{
+			for (each_slot = 0; each_slot < NUMBER_OF_FORGE_MAP_SLOTS; each_slot++)
+			{
+				char const *path = settings_path(each_kind, each_slot);
+
+				resolved.tags[each_kind][each_slot] = path && path[0] ? tag_find(kind_group(each_kind), path) : NONE;
+			}
+		}
+	}
+	return resolved.tags[kind][kind == _forge_map_kind_sky ? 0 : slot];
+}
+
+char const *forge_map_settings_atmosphere_name(int atmosphere)
+{
+	return atmosphere >= 0 && atmosphere < NUMBER_OF_FORGE_ATMOSPHERES ? atmosphere_presets[atmosphere].name : "";
+}
+
+void forge_map_settings_net_send_all(long machine_index)
+{
+	int slot;
+
+	if (!forge_map_settings_any() && machine_index >= 0)
+		return;
+	net_send_name(machine_index);
+	net_send_tag(machine_index, _forge_map_kind_sky, 0);
+	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
+	{
+		net_send_tag(machine_index, _forge_map_kind_biped, slot);
+		net_send_tag(machine_index, _forge_map_kind_hands, slot);
+	}
+	net_send_atmosphere(machine_index);
+}
+
+int forge_map_settings_net_receive(char const *text, int from_client)
+{
+	if (strncmp(text, "!FG", 3))
+		return 0;
+	/* (the host's word alone) */
+	if (from_client || game_connection() != _game_connection_network_client)
+		return 1;
+	if (!strncmp(text, "!FGN:", 5))
+	{
+		snprintf(settings.display_name, sizeof(settings.display_name), "%s", text + 5);
+		display_name_clean(settings.display_name);
+	}
+	else if (!strncmp(text, "!FGT:", 5))
+	{
+		int kind = 0, slot = 0;
+		unsigned long tag = 0;
+		char *path;
+
+		if (sscanf(text + 5, "%d:%d:%lX", &kind, &slot, &tag) == 3 && (path = settings_path(kind, slot)) != NULL)
+		{
+			struct settings_tag_instance const *instance = instance_of((long)tag);
+
+			if (instance && (unsigned long)instance->group_tag == kind_group(kind) && instance->name)
+				snprintf(path, FORGE_MAP_SETTINGS_PATH_MAX, "%s", instance->name);
+			else
+				path[0] = 0;
+			settings_generation++;
+			if (kind == _forge_map_kind_sky)
+				sky_apply();
+		}
+	}
+	else if (!strncmp(text, "!FGA:", 5))
+	{
+		int atmosphere = 0, density = 0, indoors = 0, sky = 0;
+		unsigned int color = 0;
+		float start = 0.0f, opaque = 0.0f;
+
+		if (sscanf(text + 5, "%d:%6X:%d:%f:%f:%d:%d", &atmosphere, &color, &density, &start, &opaque, &indoors,
+			&sky) == 7 && atmosphere >= 0 && atmosphere < NUMBER_OF_FORGE_ATMOSPHERES)
+		{
+			settings.atmosphere = atmosphere;
+			settings.fog_color[0] = (float)((color >> 16) & 0xFF) / 255.0f;
+			settings.fog_color[1] = (float)((color >> 8) & 0xFF) / 255.0f;
+			settings.fog_color[2] = (float)(color & 0xFF) / 255.0f;
+			settings.fog_density = (float)PIN(density, 0, 100) / 100.0f;
+			settings.fog_start = start;
+			settings.fog_opaque = opaque;
+			settings.fog_indoors = indoors != 0;
+			settings.sky_visibility = PIN(sky, 0, NUMBER_OF_FORGE_SKY_VISIBILITIES - 1);
+		}
+	}
+	return 1;
+}
+
+long forge_map_settings_player_biped(long player_index, long unit_definition_index)
+{
+	long biped;
+
+	if (!game_engine_running() || firefight_active())
+		return unit_definition_index;
+	biped = forge_map_settings_tag(_forge_map_kind_biped, player_slot(player_index));
+	return biped != NONE ? biped : unit_definition_index;
+}
+
+long forge_map_settings_hands(long unit_index, long hands_index)
+{
+	struct unit_datum *unit;
+	long hands;
+
+	if (!game_engine_running() || unit_index == NONE)
+		return hands_index;
+	unit = (struct unit_datum *)object_try_and_get_and_verify_type(unit_index, _object_mask_unit);
+	if (!unit)
+		return hands_index;
+	hands = forge_map_settings_tag(_forge_map_kind_hands, player_slot(unit->unit.player_index));
+	return hands != NONE ? hands : hands_index;
+}
+
+int forge_map_settings_fog(short local_player_index, int indoors, struct render_fog *fog)
+{
+	float start, opaque;
+	int hidden;
+
+	(void)local_player_index;
+	/* (the sky's, each frame: what the level's scenario holds is set by the
+	first frame of each level) */
+	if (settings.sky[0] || sky_state.applied != NONE || sky_state.serial != level_serial)
+		sky_apply();
+	if (settings.atmosphere == _forge_atmosphere_map_default || (indoors && !settings.fog_indoors))
+		return 0;
+	if (settings.atmosphere == _forge_atmosphere_clear || settings.fog_density <= 0.0f)
+	{
+		fog->atmospheric_maximum_density = 0.0f;
+		fog->atmospheric_minimum_distance = 0.0f;
+		fog->atmospheric_maximum_distance = 0.0f;
+		return settings.sky_visibility == _forge_sky_hidden;
+	}
+	start = settings.fog_start;
+	opaque = settings.fog_opaque;
+	/* (closer in a cluster without a sky, as Floodfection's) */
+	if (indoors)
+	{
+		start *= 0.2f;
+		opaque *= 0.3f;
+	}
+	fog->atmospheric_color.red = settings.fog_color[0];
+	fog->atmospheric_color.green = settings.fog_color[1];
+	fog->atmospheric_color.blue = settings.fog_color[2];
+	fog->atmospheric_maximum_density = settings.fog_density;
+	fog->atmospheric_minimum_distance = start;
+	fog->atmospheric_maximum_distance = MAX(opaque, start + 0.0001f);
+	hidden = settings.sky_visibility == _forge_sky_hidden ||
+		(settings.sky_visibility == _forge_sky_auto && settings.fog_density >= 0.99f);
+	return hidden;
+}

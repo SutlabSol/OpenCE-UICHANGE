@@ -37,8 +37,9 @@ first leaves. Its first list has:
 - **MAPS**: the Custom Edition maps and the MCC maps.
 
 **TAG PROFILES**: A on a profile lists its tags' kinds, as a map's are
-(**WEAPONS**, **AI**, **EQUIPMENT**, **VEHICLES**, **BIPEDS** and
-**SCENERY**, each with how many of them it has), and A on one lists them,
+(**WEAPONS**, **AI**, **EQUIPMENT**, **VEHICLES**, **BIPEDS**,
+**SCENERY**, **DOORS & DEVICES**, **SKIES** and **FIRST PERSON HANDS**, each
+with how many of them it has), and A on one lists them,
 each with where it came from (the frame) and its size, ON or OFF, or
 MISSING when its bundle is not there. Left or right turns a tag on or off: one off stays in the profile and
 is left out where the profile is played, to try the profile without it. A on
@@ -914,6 +915,32 @@ menu opens it (TAG INJECTOR).
   moved by its rows. A stock tag has no page: **SNAP POINTS** in Object
   Properties, on an object of it, chooses none or a layout. That replaces any
   points the tag had.
+- **Skies, bipeds and hands.** A map's **SKIES** are its sky tags, and its
+  **FIRST PERSON HANDS** the model its globals draw a player's arms with
+  (`first_person_interface`). Adding a biped adds its map's hands too, a tag
+  of its own (unless the profile has one of that path). Forge's map settings
+  play them; nothing else does. Hands of a stock path (`characters\cyborg\fp\fp`
+  and the like) are the level's own unless REPLACE ORIGINAL is on, as any
+  tag of a path the level has.
+- **Map settings.** In Forge mode, holding the palette's button (instead of
+  pressing it) opens MAP SETTINGS: the map's display name (typed; the map
+  lists show it), its sky, the biped and first-person hands of the red team,
+  the blue team and free for all, and its atmosphere: MAP DEFAULT, CLEAR,
+  LIGHT FOG, HEAVY FOG, FLOOD FOG, or CUSTOM once a fog value is changed
+  (color, density, start, full-fog distance, fog indoors, the sky behind the
+  fog). A tag row lists the level's tags of its kind: every sky and biped the
+  level has, and the globals' hands with each profile's. Choosing a biped of a
+  profile chooses the hands taken from the same map with it. The host alone
+  changes them, and tells its clients (`!FG` packets: a tag by its index, the
+  tag tables being the host's). A save keeps them in the state
+  (`MAP_SETTINGS|1`, `MAP_NAME|`, `MAP_SKY|`, `MAP_BIPED|slot|path`,
+  `MAP_HANDS|slot|path`, `MAP_ATMOSPHERE|...`), bakes their tags with the
+  placed objects' (MCC's own as `LOCAL_TAG` lines), and writes the name in the
+  header (`FGDN` at 0x1A0). Every machine reads them as the level loads, in any
+  game of the map: the sky replaces the scenario's sky references, a player
+  spawns as the team's biped (not in Firefight), the hands are drawn for the
+  unit's team, and the fog is set over the map's (under Floodfection's).
+  Bipeds take effect at the next spawn.
 - **Spawns, teleporters and objectives** of a stock map are saved in the same
   state (`PLAYER_SPAWN|`, `NETGAME_FLAG|`, with `PLAYER_SPAWNS_SAVED` and
   `NETGAME_FLAGS_SAVED` to say they stand in place of the map's) and put in the

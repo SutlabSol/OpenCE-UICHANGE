@@ -228,6 +228,7 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries.h"
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
 #include "mcc_player.h" /* port: port/linux/game/mcc_player.h */
 #include "infection.h" /* port: port/linux/game/infection.c */
 #include "cseries/errors.h"
@@ -1534,6 +1535,15 @@ static void player_spawn(
 				}
 				if (firefight_active())
 					unit_definition_index = firefight_resolve_player_biped_tag(player_index, unit_definition_index);
+#if OPENCE_ENABLE_FORGE
+				/* port: a Forge map's biped for the player's team
+				(port/forge/src/forge_map_settings.c) */
+				{
+					extern long forge_map_settings_player_biped(long player_index, long unit_definition_index);
+
+					unit_definition_index = forge_map_settings_player_biped(player_index, unit_definition_index);
+				}
+#endif
 
 				object_placement_data_new(
 					&placement_data,

@@ -77,6 +77,7 @@ machine's, and a network game's machines must have the same tag table.
 #include "tag_files/tag_files.h"
 #include "tag_files/tag_groups.h"
 #include "game/game.h"
+#include "game/game_globals.h"
 #include "game/players.h"
 #include "memory/data.h"
 #include "cutscene/cinematics.h"
@@ -117,6 +118,7 @@ enum
 	LIGHT_FIXTURE_GROUP_TAG = 'lifi',
 	SHADER_MODEL_GROUP_TAG = 'soso',
 	SHADER_ENVIRONMENT_GROUP_TAG = 'senv',
+	SKY_GROUP_TAG = 'sky ',
 
 	/* the most maps listed (Custom Edition's, then MCC's), and tags of a
 	category */
@@ -127,6 +129,8 @@ enum
 	/* the weapons tag_injector_tag_objective remembers */
 	OBJECTIVE_KNOWN_TAGS = 256,
 	MAXIMUM_INJECTED_BUNDLES = 128,
+	/* the most first-person hands a map's globals name */
+	MAXIMUM_MENU_HANDS = 4,
 	/* the tags of a level, as datum indices count them */
 	MAXIMUM_TAG_COUNT = 0xFFFF,
 	MAXIMUM_WALK_DEPTH = 32,
@@ -479,6 +483,8 @@ static struct
 	{ "BIPEDS", 'bipd', TRUE },
 	{ "SCENERY", 'scen', TRUE },
 	{ "DOORS & DEVICES", 'mach', TRUE },
+	{ "SKIES", 'sky ', TRUE },
+	{ "FIRST PERSON HANDS", 'mod2', TRUE },
 };
 
 boolean tag_injector_group_in_category(
@@ -511,6 +517,9 @@ static struct
 	long *problems[NUMBER_OF_TAG_INJECTOR_CATEGORIES];
 	long tag_counts[NUMBER_OF_TAG_INJECTOR_CATEGORIES];
 	unsigned char *names_made;
+	/* the open map's first-person hands (its globals'), by absolute index */
+	long hands[MAXIMUM_MENU_HANDS];
+	short hand_count;
 } tag_injector_menu = { { { 0 } }, 0, NONE };
 
 /* the level's: the bundles read (of which profile, and their tags' bytes),
@@ -1807,6 +1816,62 @@ boolean tag_injector_map_campaign(
 	return map >= 0 && map < tag_injector_menu.map_count && tag_injector_menu.maps[map].campaign;
 }
 
+/* the open map's first-person hands: the model its globals draw a
+player's arms with (tag_injector_menu.hands) */
+static void menu_hands_find(
+	struct injector_map_header const *header)
+{
+	long absolute;
+
+	tag_injector_menu.hand_count = 0;
+	for (absolute = 0; absolute < header->tag_count; absolute++)
+	{
+		struct game_globals const *globals;
+		struct game_globals_first_person_interface const *interface;
+		long hands;
+		short other;
+
+		if ((unsigned long)header->instances[absolute].group_tag != 'matg' || !header->instances[absolute].base_address)
+			continue;
+		globals = (struct game_globals const *)header->instances[absolute].base_address;
+		if (!globals->first_person_interface.address || globals->first_person_interface.count <= 0)
+			continue;
+		interface = (struct game_globals_first_person_interface const *)globals->first_person_interface.address;
+		hands = interface->hands.index == NONE ? NONE : (long)(unsigned short)interface->hands.index;
+		if (hands == NONE || hands >= header->tag_count || header->instances[hands].tag_index != interface->hands.index ||
+			(unsigned long)header->instances[hands].group_tag != GBXMODEL_GROUP_TAG)
+		{
+			continue;
+		}
+		for (other = 0; other < tag_injector_menu.hand_count && tag_injector_menu.hands[other] != hands; other++)
+		{
+		}
+		if (other == tag_injector_menu.hand_count && tag_injector_menu.hand_count < MAXIMUM_MENU_HANDS)
+			tag_injector_menu.hands[tag_injector_menu.hand_count++] = hands;
+	}
+}
+
+/* whether the open map's tag is listed in a category: by its group, and a
+model only when it is the map's first-person hands */
+static boolean menu_tag_in_category(
+	struct injector_map_header const *header,
+	long absolute,
+	short category)
+{
+	short hand;
+
+	if (!tag_injector_group_in_category((unsigned long)header->instances[absolute].group_tag, category))
+		return FALSE;
+	if (category != _tag_injector_hands)
+		return TRUE;
+	for (hand = 0; hand < tag_injector_menu.hand_count; hand++)
+	{
+		if (tag_injector_menu.hands[hand] == absolute)
+			return TRUE;
+	}
+	return FALSE;
+}
+
 boolean tag_injector_map_open(
 	short map)
 {
@@ -1834,12 +1899,13 @@ boolean tag_injector_map_open(
 		custom_edition_maps_level_name(tag_injector_menu.maps[map].display_index);
 	snprintf(tag_injector_menu.map_name, sizeof(tag_injector_menu.map_name), "%s", tag_name_strip_path(level_name));
 	menu_names_restore(header);
+	menu_hands_find(header);
 	for (category = 0; category < NUMBER_OF_TAG_INJECTOR_CATEGORIES; category++)
 	{
 		long count = 0;
 
 		for (absolute = 0; absolute < header->tag_count; absolute++)
-			count += tag_injector_group_in_category((unsigned long)header->instances[absolute].group_tag, category);
+			count += menu_tag_in_category(header, absolute, category);
 		tag_injector_menu.tags[category] = malloc((unsigned long)(count + 1) * sizeof(long));
 		tag_injector_menu.sizes[category] = malloc((unsigned long)(count + 1) * sizeof(long));
 		tag_injector_menu.problems[category] = malloc((unsigned long)(count + 1) * sizeof(long));
@@ -1851,7 +1917,7 @@ boolean tag_injector_map_open(
 		}
 		for (absolute = 0; absolute < header->tag_count; absolute++)
 		{
-			if (tag_injector_group_in_category((unsigned long)header->instances[absolute].group_tag, category))
+			if (menu_tag_in_category(header, absolute, category))
 			{
 				long index = tag_injector_menu.tag_counts[category]++;
 
@@ -1887,6 +1953,7 @@ void tag_injector_map_close(
 	tag_injector_menu.names_made = NULL;
 	tag_injector_menu.opened = NONE;
 	tag_injector_menu.header = NULL;
+	tag_injector_menu.hand_count = 0;
 	tag_injector_menu.path[0] = 0;
 	tag_injector_menu.map_name[0] = 0;
 }
@@ -2094,6 +2161,25 @@ boolean tag_injector_tag_add(
 			(unsigned long)tag_injector_menu.header->instances[indices[tag]].group_tag == SOUND_DEFINITION_TAG)
 			sounds[indices[tag]] = TRUE;
 	}
+	/* (a biped's hands, taken out with it below: an MCC map's pixels of
+	theirs too) */
+	for (tag = 0; tag_injector_menu.mcc_open && category == _tag_injector_bipeds && tag < tag_injector_menu.hand_count;
+		tag++)
+	{
+		long *hands_indices = NULL;
+		long hands_count = 0;
+		long hands_problem = NONE;
+		long hands_tag;
+
+		if (tag_bundle_tags(&source, tag_injector_menu.hands[tag], &hands_indices, &hands_count, &hands_problem) ==
+			_tag_bundle_status_ok)
+		{
+			for (hands_tag = 0; hands_tag < hands_count; hands_tag++)
+				sounds[hands_indices[hands_tag]] = TRUE;
+		}
+		if (hands_indices)
+			free(hands_indices);
+	}
 	header = menu_bundle_open(sounds, tag_count);
 	free(sounds);
 	tag_injector_menu.header = header;
@@ -2182,6 +2268,49 @@ boolean tag_injector_tag_add(
 		}
 		if (carried_buffer.bytes)
 			free(carried_buffer.bytes);
+	}
+	/* a biped's first-person hands, its map's (its globals'): a tag of the
+	profile of its own, as a player's arms (Forge's map settings choose them
+	with the biped), unless the profile has one of that path */
+	for (tag = 0; added && category == _tag_injector_bipeds && tag < tag_injector_menu.hand_count; tag++)
+	{
+		long hands = tag_injector_menu.hands[tag];
+		struct bundle_buffer hands_buffer = { NULL, 0, 0 };
+		long *hands_indices = NULL;
+		long hands_count = 0;
+		long hands_problem = NONE;
+		char hands_name[256];
+
+		snprintf(hands_name, sizeof(hands_name), "%s", menu_tag_name(hands));
+		if (port_tag_profiles_tag_find(profile, GBXMODEL_GROUP_TAG, hands_name) != NONE)
+			continue;
+		menu_bundle_source(&source);
+		if (tag_bundle_tags(&source, hands, &hands_indices, &hands_count, &hands_problem) != _tag_bundle_status_ok)
+		{
+			if (hands_indices)
+				free(hands_indices);
+			error(_error_silent, "tag injector: %s's hands %s cannot be taken out", name, hands_name);
+			continue;
+		}
+		menu_bundle_source_for(&source, hands_indices, hands_count);
+		free(hands_indices);
+		tag_bundle_write(&source, hands, bundle_buffer_write, &hands_buffer, &report);
+		if (report.status == _tag_bundle_status_ok && profile_bundle_add(profile, tag_injector_menu.map_name,
+			GBXMODEL_GROUP_TAG, hands_name, hands_buffer.bytes, hands_buffer.size))
+		{
+			error(_error_silent, "tag injector: took %s's hands %s out of %s: %ld tags, %lu bytes", name, hands_name,
+				tag_injector_menu.map_name, report.tag_count, report.size);
+			if (carried)
+				(*carried)++;
+		}
+		else
+		{
+			error(_error_silent, "tag injector: %s's hands %s cannot be taken out: %s", name, hands_name,
+				report.status == _tag_bundle_status_ok ? "the profile cannot be written" :
+				tag_bundle_status_describe(report.status));
+		}
+		if (hands_buffer.bytes)
+			free(hands_buffer.bytes);
 	}
 	free(indices);
 
@@ -2656,17 +2785,27 @@ static boolean preview_mesh_build(
 
 	memset(&build, 0, sizeof(build));
 	build.source = source;
-	preview_change_colors(source, root, group_tag, &build);
+	/* (an object's or an actor variant's: no sky's or model's) */
+	if (group_tag != GBXMODEL_GROUP_TAG && group_tag != SKY_GROUP_TAG)
+		preview_change_colors(source, root, group_tag, &build);
 	if (root && group_tag == ACTOR_VARIANT_GROUP_TAG)
 		root = preview_tag(source, ((struct actor_variant_definition const *)root)->unit_reference.index, &group_tag);
-	if (!root || (group_tag != WEAPON_DEFINITION_TAG && group_tag != EQUIPMENT_GROUP_TAG && group_tag != VEHICLE_GROUP_TAG &&
+	/* (a sky's model, its first field; first-person hands are a model) */
+	if (root && group_tag == SKY_GROUP_TAG)
+		root = preview_tag(source, ((struct tag_reference const *)root)->index, &group_tag);
+	if (root && group_tag == GBXMODEL_GROUP_TAG)
+		build.model = (struct model const *)root;
+	else if (!root || (group_tag != WEAPON_DEFINITION_TAG && group_tag != EQUIPMENT_GROUP_TAG && group_tag != VEHICLE_GROUP_TAG &&
 		group_tag != BIPED_GROUP_TAG && group_tag != SCENERY_GROUP_TAG &&
 		group_tag != MACHINE_GROUP_TAG && group_tag != CONTROL_GROUP_TAG && group_tag != LIGHT_FIXTURE_GROUP_TAG))
 	{
 		return FALSE;
 	}
-	object = (struct object_definition const *)root;
-	build.model = (struct model const *)preview_tag(source, object->object.model.index, &group_tag);
+	if (!build.model)
+	{
+		object = (struct object_definition const *)root;
+		build.model = (struct model const *)preview_tag(source, object->object.model.index, &group_tag);
+	}
 	if (!build.model || group_tag != GBXMODEL_GROUP_TAG || build.model->regions.count <= 0 ||
 		build.model->geometries.count <= 0)
 	{

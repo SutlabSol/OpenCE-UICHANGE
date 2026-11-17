@@ -10540,7 +10540,10 @@ static boolean tags_choose(struct widget_instance *widget)
 			else if (tag_injector_tag_add(tags_screen.profile, tags_screen.category, place, &carried, reason,
 				sizeof(reason)))
 			{
-				if (carried)
+				if (carried && tags_screen.category == _tag_injector_bipeds)
+					snprintf(text, sizeof(text), "Added to %s, with its map's first-person hands.",
+						port_tag_profiles_name(tags_screen.profile));
+				else if (carried)
 					snprintf(text, sizeof(text), "Added to %s, with %ld weapon%s and equipment it carries.",
 						port_tag_profiles_name(tags_screen.profile), carried, carried == 1 ? "" : "s");
 				else

@@ -23,6 +23,11 @@ enum tag_injector_category
 	_tag_injector_bipeds,
 	_tag_injector_scenery,
 	_tag_injector_devices,
+	/* (a map's skies, and its first-person hands: those of its globals; a
+	biped added takes its map's hands with it. Forge's map settings play
+	them, port/forge/src/forge_map_settings.c) */
+	_tag_injector_skies,
+	_tag_injector_hands,
 
 	NUMBER_OF_TAG_INJECTOR_CATEGORIES
 };

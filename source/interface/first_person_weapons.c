@@ -100,6 +100,7 @@ symbols in this file:
 #define REAL_MATH_EXTERNAL_REAL_LOCAL_RANDOM
 #define REAL_MATH_EXTERNAL_REAL_LOCAL_RANDOM_RANGE
 #include "interface/first_person_weapons.h"
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
 
 #include "cache/predicted_resources.h"
 #include "camera/director.h"
@@ -475,6 +476,32 @@ long first_person_weapon_get_local_index(
 	return (local_player_index==MAXIMUM_NUMBER_OF_LOCAL_PLAYERS) ? NONE : local_player_index;
 }
 
+/* port: the hands a unit's arms are drawn with, the globals' or a Forge
+map's for the player's team (port/forge/src/forge_map_settings.c); and those
+each local player's arms were last set up for (their node remapping table
+is of those: first_person_weapon_switch_weapons), set up again when they
+are not the ones wanted (first_person_weapons_update) */
+static long first_person_hands_built[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS] = { NONE, NONE, NONE, NONE };
+
+static long first_person_hands_wanted(
+	long unit_index)
+{
+	struct game_globals_first_person_interface *first_person_interface= TAG_BLOCK_GET_ELEMENT(
+		&scenario_get_game_globals()->first_person_interface,
+		0,
+		struct game_globals_first_person_interface);
+	long hands_index= first_person_interface->hands.index;
+
+#if OPENCE_ENABLE_FORGE
+	{
+		extern long forge_map_settings_hands(long unit_index, long hands_index);
+
+		hands_index= forge_map_settings_hands(unit_index, hands_index);
+	}
+#endif
+	return hands_index;
+}
+
 void first_person_weapon_draw(
 	void)
 {
@@ -518,6 +545,7 @@ void first_person_weapon_draw(
 					real const *weapon_functions = weapon->object.outgoing_function_values;
 					real const *unit_functions = unit->object.outgoing_function_values;
 					real *kept;
+					long hands_index;
 
 					/* port: the tick's functions, moved into this frame, so the
 					charge clicks with the picture instead of once a tick; kept
@@ -569,20 +597,25 @@ void first_person_weapon_draw(
 							FLAG(_render_model_first_person_bit));
 					}
 
+					hands_index= first_person_hands_built[render.local_player_index];
+
+					/* (port: a game state of before, its arms set up for the globals') */
+					if (hands_index==NONE)
+						hands_index= first_person_interface->hands.index;
 					if (first_person_weapon->hands_node_remapping_table_valid &&
-						first_person_interface->hands.index!=NONE)
+						hands_index!=NONE)
 					{
 						model_remap_node_matrices_to_match_animation_graph(
-							first_person_interface->hands.index,
+							hands_index,
 							model_node_matrices,
 							weapon_definition->weapon.interface_definition.first_person_animations.index,
 							first_person_weapon->node_matrices,
 							first_person_weapon->hands_node_remapping_table);
 						/* port: only the posed hands receive the shield modifier (viewmodel_shield.c). */
 						viewmodel_shield_apply(render.local_player_index, unit_index,
-							first_person_interface->hands.index, model_node_matrices, unit_functions, &model_effect);
+							hands_index, model_node_matrices, unit_functions, &model_effect);
 						render_model(
-							first_person_interface->hands.index,
+							hands_index,
 							0.0f,
 							model_node_matrices,
 							NULL,
@@ -855,6 +888,13 @@ void first_person_weapons_update(
 			if (first_person_weapon->unit_index!=unit_index)
 			{
 				first_person_weapon_new_unit(local_player_index, unit_index);
+			}
+			/* port: arms set up for other hands than those wanted (a Forge
+			map's changed: first_person_hands_wanted), set up again */
+			if (first_person_weapon->weapon_index!=NONE && unit_index!=NONE &&
+				first_person_hands_built[local_player_index]!=first_person_hands_wanted(unit_index))
+			{
+				first_person_weapon_switch_weapons(local_player_index);
 			}
 			if (first_person_weapon->weapon_index==NONE)
 			{
@@ -1757,11 +1797,14 @@ static void first_person_weapon_switch_weapons(
 							&scenario_get_game_globals()->first_person_interface,
 							0,
 							struct game_globals_first_person_interface);
-						if (first_person_interface->hands.index!=NONE)
+						/* port: the hands wanted (first_person_hands_wanted) */
+						first_person_hands_built[local_player_index]= first_person_hands_wanted(first_person_weapon->unit_index);
+						(void)first_person_interface;
+						if (first_person_hands_built[local_player_index]!=NONE)
 						{
 							first_person_weapon->hands_node_remapping_table_valid=
 								model_build_remapping_table_for_animation_graph(
-									first_person_interface->hands.index,
+									first_person_hands_built[local_player_index],
 									weapon_definition->weapon.interface_definition.first_person_animations.index,
 									first_person_weapon->hands_node_remapping_table);
 						}

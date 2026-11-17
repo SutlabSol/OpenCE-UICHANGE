@@ -60,6 +60,7 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries.h"
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
 #include "cseries/errors.h"
 #include "render.h"
 #include "render_cameras_internal.h"
@@ -540,6 +541,16 @@ static void render_player_frame(
 	structure_get_planar_fog((short)render.cluster_index, &render.fog);
 	/* port: Floodfection's fog over every map, which hides the sky
 	(port/linux/game/infection.c), closer in a cluster with none */
+#if OPENCE_ENABLE_FORGE
+	/* port: a Forge map's atmosphere, over the map's own fog and under
+	Floodfection's (port/forge/src/forge_map_settings.c) */
+	{
+		extern int forge_map_settings_fog(short local_player_index, int indoors, struct render_fog *fog);
+
+		if (forge_map_settings_fog(window->local_player_index, render.visible_sky_index == NONE, &render.fog))
+			render.visible_sky_model = FALSE;
+	}
+#endif
 	if (infection_fog(window->local_player_index, render.visible_sky_index == NONE, &render.fog))
 		render.visible_sky_model = FALSE;
 

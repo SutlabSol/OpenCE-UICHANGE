@@ -2839,6 +2839,15 @@ boolean randomizer_firefight_weapon_power(
 
 void randomizer_tags_unloaded(void)
 {
+#if OPENCE_ENABLE_FORGE
+	/* (a saved Forge map's general settings are its level's alone: read
+	again as one loads, forge_level_baked_open) */
+	{
+		extern void forge_map_settings_level_loading(char const *saved_state_text);
+
+		forge_map_settings_level_loading(NULL);
+	}
+#endif
 	if (pods_swapped || pods_left_out || pods_kept)
 	{
 		error(_error_silent, "randomizer: infection forms: %ld swapped, %ld left out, %ld placed as they were",

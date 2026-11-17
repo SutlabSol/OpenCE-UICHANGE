@@ -184,6 +184,13 @@ map's, or another; NONE if it is no Custom Edition cache (nor an Xbox
 multiplayer map: custom_xbox_map_level); *xbox_map (NULL: not asked) whether it
 is an Xbox map. `path` is the file a folder's listing found
 (custom_edition_maps.c), opened once. */
+/* port: the display name a map Forge saved has in its header (Forge's
+map settings, port/forge/src/forge_map_settings.c), into `name` (`size`
+bytes); FALSE for a map with none */
+boolean custom_edition_cache_file_forge_name(
+	char const *path,
+	char *name,
+	long size);
 short custom_edition_cache_file_scenario_type(
 	char const *path,
 	boolean *xbox_map);
