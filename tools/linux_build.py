@@ -29,9 +29,10 @@ def xdk_headers() -> List[Path]:
     return sorted(XDK_INCLUDE.glob("*.h"))
 
 
-# The dynamic lighting's modules (docs/dynamic_lighting_port.md): the Vulkan and
-# deko3d images link them. An OpenGL image links dynamic_lighting_disabled.c in
-# their place, so that it has none of their lights, rays, textures or shaders.
+# The dynamic lighting's modules (docs/dynamic_lighting_port.md): the Vulkan,
+# deko3d and Linux, Windows and web OpenGL builds link them. Android's OpenGL
+# ES image links dynamic_lighting_disabled.c in their place, so that it has
+# none of their lights, rays, textures or shaders.
 DYNAMIC_LIGHTING_GAME_SOURCES = {
     "ambient_emitter_lighting.c", "ammo_counter_falloff.c", "ammo_counter_lighting.c",
     "authored_emitter_lighting.c", "covenant_emitter_lighting.c", "covenant_lighting.c", "lighting_config.c",
@@ -40,10 +41,13 @@ DYNAMIC_LIGHTING_GAME_SOURCES = {
     "plasma_collision.c", "plasma_collision_models.c", "plasma_collision_scene.c", "plasma_occlusion.c",
     "rocket_lighting.c", "shield_glow.c",
 }
-DYNAMIC_LIGHTING_PLATFORM_SOURCES = {"plasma_model_shader.c"}
-# (the OpenGL-only builds, Linux, Windows and the web, as Android's OpenGL
-# image: the modules left out, their hooks answered stock)
+DYNAMIC_LIGHTING_PLATFORM_SOURCES = {"plasma_model_shader.c", "plasma_occlusion_gl.c"}
+# (Android's OpenGL ES image: the modules left out, their hooks answered stock)
 DYNAMIC_LIGHTING_DISABLED = Path("port/android/guest/dynamic_lighting_disabled.c")
+# the OpenGL builds of their own (Linux, Windows and the web) link the modules,
+# and their renderer's model variant and fields are compiled in by this
+# (port/linux/src/plasma_occlusion_gl.c, as GulchCE's)
+GL_DYNAMIC_LIGHTING_DEFINE = "-DHALO_GL_DYNAMIC_LIGHTING=1"
 
 
 def game_sources(config: Dict[str, Any]) -> List[Path]:
@@ -653,11 +657,9 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
             add_object(source, f"{flags} {forge_source_flags(source)}")
         # Port-specific units that must see the game exactly as its own
         # sources do (port/linux/game).
+        # (the dynamic lighting's modules among them: GL_DYNAMIC_LIGHTING_DEFINE)
         for source in sorted(Path(config["game_sources"]).glob("*.c")):
-            if source.name in DYNAMIC_LIGHTING_GAME_SOURCES:
-                continue
             add_object(source, f"{game_cflags} {forge_source_flags(source)}")
-        add_object(DYNAMIC_LIGHTING_DISABLED, game_cflags)
         # (Content Extended's Forge: tools/forge_build.py)
         for source in forge_sources():
             add_object(source, forge_cflags(game_cflags, ZLIB_DIR))
@@ -678,6 +680,7 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
             f"-I{ZLIB_DIR}",
             "-Isource -Isource/cseries",
             sdk_flags,
+            GL_DYNAMIC_LIGHTING_DEFINE,
         ])
         posix_cflags = " ".join(POSIX_FLAGS + target + [f"-I{platform_dir}"])
         # (with Mbed TLS's own locks, as built from its unchanged config by
@@ -695,8 +698,6 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
                 add_object(source, posix_cflags, posix=True)
             elif source.name in ("updater.c", "server_mode.c"):
                 add_object(source, f"{platform_cflags} {updater_defines(getattr(sln, 'port_release', False))}")
-            elif source.name in DYNAMIC_LIGHTING_PLATFORM_SOURCES:
-                continue
             else:
                 add_object(source, f"{platform_cflags} {forge_source_flags(source)}")
         for source in embedded_assets:

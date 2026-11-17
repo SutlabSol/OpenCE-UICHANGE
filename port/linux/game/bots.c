@@ -1437,10 +1437,12 @@ short bots_kind(void)
 		_bots_kind_proving_grounds;
 }
 
+/* (Firefight too: only Birchwood fights the AI - bots_ai_unit_is_enemy - and
+the Proving Grounds kind sees players alone, so its bots never shot a wave) */
 boolean bots_birchwood_plays(long game_engine_index)
 {
 	return game_engine_index == game_engine_slayer || game_engine_index == game_engine_ctf ||
-		game_engine_index == game_engine_king;
+		game_engine_index == game_engine_king || game_engine_index == game_engine_firefight;
 }
 
 short bots_bot_kind(long bot_index)

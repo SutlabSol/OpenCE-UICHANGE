@@ -129,6 +129,22 @@ lights the diffuse color for each pixel (nv2a_pixel_shader_key
 per_pixel_lighting). Returns a malloc'd string. */
 char *nv2a_vertex_shader_to_glsl(const DWORD *instructions, unsigned long instruction_count,
 	unsigned long packed_attribute_mask, const struct nv2a_vertex_lighting *lighting);
+/* the same with the dynamic lighting's model variant (XGPU_PLASMA_MODEL_*;
+0: the stock text). Only the desktop OpenGL renderer has it
+(HALO_GL_DYNAMIC_LIGHTING); elsewhere plasma is ignored. */
+char *nv2a_vertex_shader_to_glsl_variant(const DWORD *instructions, unsigned long instruction_count,
+	unsigned long packed_attribute_mask, const struct nv2a_vertex_lighting *lighting, unsigned int plasma);
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+/* the model variant's uniforms and samplers, for both stages
+(plasma_occlusion_gl.c: the samplers are on units XGPU_PLASMA_TEXTURE_UNIT
+and the next) */
+extern const char xgpu_plasma_model_declarations[];
+#define XGPU_PLASMA_TEXTURE_UNIT 6
+/* textures bound to consecutive units past the stages' (d3d8_gl.c): in one
+call on desktop GL; under ES each unit selected in turn, and the active unit
+left at 0, so that no upload binds over them */
+void xgpu_gl_bind_extra_textures(GLuint first_unit, GLenum target, const GLuint *textures, int count);
+#endif
 /* the fixed-function pipeline's vertex shader (the loading screen's draws):
 positions already in clip space. Returns a malloc'd string. */
 char *nv2a_fixed_function_glsl(void);

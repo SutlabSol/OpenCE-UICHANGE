@@ -6337,7 +6337,7 @@ static void dynamic_lighting_rows_show(struct widget_instance *list)
 			child->visible = shown;
 }
 
-/* "op_dynamic_lighting": not in an image without the feature (the GL ones) */
+/* "op_dynamic_lighting": not in an image without the feature (Android's OpenGL one) */
 static void dynamic_lighting_row_show(struct widget_instance *list)
 {
 	struct widget_instance *row = named(list, "op_dynamic_lighting", 0);

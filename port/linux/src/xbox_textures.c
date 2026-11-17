@@ -20,6 +20,10 @@ memory_watch.c detects that by write-protecting the pages.
 #include "text_hires.h"
 #include "port_config.h"
 #include "mcc_texture_bridge.h"
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+#include "plasma_occlusion.h"
+#include "plasma_occlusion_gl.h"
+#endif
 #include "../game/cache_file_formats.h"
 
 #include <SDL3/SDL.h>
@@ -1210,6 +1214,11 @@ struct texture_entry
 	memory watch serial read before it was found: the same while no watched
 	page has been written since (0: never found) */
 	unsigned long watched_serial, watched_generation;
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	/* the dynamic lighting's: only halo_field_texture_write gives it texels,
+	never its memory, and it goes only when the field does */
+	BOOL field;
+#endif
 #if defined(HALO_ANDROID)
 	/* its menu art's texture and levels (0: none), as of menu_art_serial */
 	unsigned long menu_serial;
@@ -1579,6 +1588,14 @@ GLuint xgpu_texture_get(const DWORD *resource, const D3DCOLOR *palette, GLenum *
 		*bucket = entry;
 	}
 
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	/* (a field's texels are in its GL texture alone) */
+	if (entry->field)
+	{
+		entry->last_used_frame = texture_frame;
+		return texture_entry_result(entry, target, description);
+	}
+#endif
 	if (no_cache < 0)
 		no_cache = config_boolean("debug.texture_no_cache");
 	/* (its pages' newest generation, found again only once a watched page
@@ -1668,6 +1685,134 @@ GLuint xgpu_texture_get(const DWORD *resource, const D3DCOLOR *palette, GLenum *
 	return texture_entry_result(entry, target, description);
 }
 
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+/* ---------- the dynamic lighting's fields (plasma_occlusion.c)
+
+A field is rewritten as often as every frame, from a CPU copy of what it
+holds. Through a lock it would be swizzled into the game's memory, which the
+memory watch notices (every texture's recent lookup forgotten, its pages
+protected again), then unswizzled again here. So its linear texels come
+straight to its GL texture, and its memory is never read (as
+xbox_textures_vk.c). */
+
+static struct texture_entry *field_entry(const DWORD *resource)
+{
+	DWORD data = resource[1], format_word = resource[3], size_word = resource[4];
+	struct texture_entry **bucket = &texture_buckets[bucket_index(data, format_word, size_word)];
+	struct texture_entry *entry;
+
+	for (entry = *bucket; entry; entry = entry->next)
+	{
+		if (entry->data == data && entry->format_word == format_word && entry->size_word == size_word &&
+			!entry->palette_hash)
+		{
+			/* (a lookup before its first write made it an ordinary texture: a field from now on) */
+			entry->generation = 1;
+			return entry;
+		}
+	}
+	entry = calloc(1, sizeof(*entry));
+	if (!entry)
+		return NULL;
+	entry->data = data;
+	entry->format_word = format_word;
+	entry->size_word = size_word;
+	xgpu_texture_describe(format_word, size_word, &entry->description);
+	entry->target = GL_TEXTURE_3D;
+	entry->address = (unsigned long)PLATFORM_PHYSICAL_TO_VIRTUAL(data);
+	entry->size = xgpu_texture_face_size(&entry->description);
+	entry->generation = 1;
+	entry->override = -1;
+	glGenTextures(1, &entry->texture);
+	entry->next = *bucket;
+	*bucket = entry;
+	return entry;
+}
+
+int halo_field_texture_write(const void *texture, const unsigned long *pixels, float reach)
+{
+	struct texture_entry *entry = field_entry((const DWORD *)texture);
+	const struct xgpu_texture_description *description;
+
+	(void)reach;
+	if (!entry || !entry->texture || !pixels)
+		return 0;
+	description = &entry->description;
+	/* (both callers' are 32-bit A8R8G8B8 volumes, of one level) */
+	if (description->depth <= 1 || description->cube_map || description->compressed)
+		return 0;
+	glBindTexture(GL_TEXTURE_3D, entry->texture);
+	xgpu_gl_state_invalidate();
+	if (!entry->field)
+	{
+		/* (described once: its texels are only ever replaced) */
+#ifndef HALO_GLES
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_SWIZZLE_R, GL_RED);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_SWIZZLE_G, GL_GREEN);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_SWIZZLE_B, GL_BLUE);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_SWIZZLE_A, GL_ALPHA);
+#endif
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_BASE_LEVEL, 0);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAX_LEVEL, 0);
+	}
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	/* (a field's texels are grey, the one value in all four channels
+	(plasma_occlusion.c, ammo_counter_falloff.c), so their order does not
+	matter: RGBA, which WebGL takes, and no swizzle, which it lacks) */
+	glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, (GLsizei)description->width, (GLsizei)description->height,
+		(GLsizei)description->depth, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+	entry->field = TRUE;
+	entry->hud_upscale_checked = TRUE;
+	entry->last_used_frame = texture_frame;
+	xgpu_statistics_texture_upload(description->width * description->height * description->depth * 4);
+	return 1;
+}
+
+/* a written field's GL texture, 0 for none: no GL call is made, so a draw's
+bindings stand (plasma_occlusion_gl.c) */
+GLuint xgpu_field_texture(const DWORD *resource)
+{
+	struct texture_entry *entry = texture_buckets[bucket_index(resource[1], resource[3], resource[4])];
+
+	for (; entry; entry = entry->next)
+	{
+		if (entry->field && entry->data == resource[1] && entry->format_word == resource[3] &&
+			entry->size_word == resource[4])
+		{
+			entry->last_used_frame = texture_frame;
+			return entry->texture;
+		}
+	}
+	return 0;
+}
+
+/* before the texture is released: its GL texture goes too, and another
+texture may come to live at its address */
+void halo_field_texture_forget(const void *texture)
+{
+	const DWORD *resource = (const DWORD *)texture;
+	struct texture_entry **link = &texture_buckets[bucket_index(resource[1], resource[3], resource[4])];
+
+	for (; *link; link = &(*link)->next)
+	{
+		struct texture_entry *entry = *link;
+
+		if (entry->data == resource[1] && entry->format_word == resource[3] && entry->size_word == resource[4])
+		{
+			*link = entry->next;
+			plasma_gl_texture_deleted(entry->texture);
+			glDeleteTextures(1, &entry->texture);
+			if (entry->hud_upscale)
+				glDeleteTextures(1, &entry->hud_upscale);
+			xgpu_gl_state_invalidate();
+			texture_drop_serial++;
+			free(entry);
+			return;
+		}
+	}
+}
+#endif
+
 void xgpu_texture_cache_begin_frame(void)
 {
 	unsigned long index, idle_since;
@@ -1713,7 +1858,11 @@ void xgpu_texture_cache_begin_frame(void)
 		{
 			struct texture_entry *entry = *link;
 
-			if (texture_frame - entry->last_used_frame > texture_frame - idle_since)
+			if (texture_frame - entry->last_used_frame > texture_frame - idle_since
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+				&& !entry->field
+#endif
+				)
 			{
 				*link = entry->next;
 				glDeleteTextures(1, &entry->texture);

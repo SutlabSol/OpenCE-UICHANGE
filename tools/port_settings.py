@@ -677,7 +677,7 @@ _video["categories"] = [
      "The field of view and the first-person\nweapon. Their defaults keep the stock view."),
     ("PERFORMANCE:", "video_settings/performance",
      "How fast the console runs the game: a steadier\nframe rate, or a cooler console.", "switch"),
-    # (hidden in an image without the feature, the GL ones:
+    # (hidden in an image without the feature, Android's OpenGL one:
     # menu_functions.c's dynamic_lighting_row_show)
     ("DYNAMIC LIGHTING:", "video_settings/dynamic_lighting",
      "Added light from projectiles, weapons and\nenergy shields. Added lights default to off."),

@@ -24,6 +24,7 @@ Conventions carried over from the Xbox:
 #include "xgpu.h"
 #include "halo_port_window.h"
 #include "mcc_environment_shader.h"
+#include "plasma_occlusion_gl.h"
 #include "sdl_platform.h"
 #include "halo_ui_pointer.h"
 #include "port_config.h"
@@ -570,9 +571,16 @@ struct vertex_shader_object
 	unsigned long vertex_array_streams;
 #endif
 	/* which of shader[] and lit_shader[] have been compiled (bits 0 and 1,
-	and 2 and 3): one that failed stays 0 and is not compiled again at each
-	draw */
+	and 2 and 3; plasma_shader[]'s 4 and 5): one that failed stays 0 and is
+	not compiled again at each draw */
 	unsigned char shaders_tried;
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	/* the dynamic lighting's model variant lit for each vertex, as shader[]
+	(plasma_occlusion_gl.c); a variant of its, for either stage, failed to
+	compile or link: stock from then on */
+	GLuint plasma_shader[2];
+	BOOL plasma_failed;
+#endif
 };
 
 /* ---------- programs */
@@ -629,6 +637,10 @@ struct program_entry
 	GLint screen_offset;
 	GLint height_fade;
 	GLint depth_bias;
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	/* the dynamic lighting's model variant's uniforms (-1: a stock program) */
+	struct plasma_gl_uniforms plasma;
+#endif
 	/* nv2a_pixel_shader_key's source_blend's color, and what it last had */
 	GLint blend_constant;
 	float blend_constant_value[4];
@@ -1509,6 +1521,26 @@ static void state_texture(int unit, GLenum target, GLuint texture)
 	}
 	gl_state.textures[unit][slot] = texture;
 	glBindTexture(target, texture);
+}
+#endif
+
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+void xgpu_gl_bind_extra_textures(GLuint first_unit, GLenum target, const GLuint *textures, int count)
+{
+#ifndef HALO_GLES
+	(void)target;
+	glBindTextures(first_unit, (GLsizei)count, textures);
+#else
+	int index;
+
+	for (index = 0; index < count; index++)
+	{
+		glActiveTexture(GL_TEXTURE0 + first_unit + (GLenum)index);
+		glBindTexture(target, textures[index]);
+	}
+	gl_state.active_texture = GL_TEXTURE0;
+	glActiveTexture(GL_TEXTURE0);
+#endif
 }
 #endif
 
@@ -3941,17 +3973,29 @@ static unsigned long hash_words(const void *data, unsigned long size)
 }
 
 /* lit: the shader that hands the lighting's normal and position on
-(vertex_shader_object lit_shader) */
-static GLuint vertex_shader_get(struct vertex_shader_object *program, BOOL immediate, BOOL lit)
+(vertex_shader_object lit_shader); plasma: the dynamic lighting's model
+variant lit for each vertex (XGPU_PLASMA_MODEL_*; 0: stock), never lit */
+static GLuint vertex_shader_get(struct vertex_shader_object *program, BOOL immediate, BOOL lit, unsigned int plasma)
 {
 	int variant = immediate ? 1 : 0;
 	GLuint *shader = lit ? &program->lit_shader[variant] : &program->shader[variant];
 	unsigned char tried = (unsigned char)(1 << (variant + (lit ? 2 : 0)));
 
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	if (plasma && !lit)
+	{
+		shader = &program->plasma_shader[variant];
+		tried = (unsigned char)(1 << (variant + 4));
+	}
+	else
+		plasma = 0;
+#else
+	plasma = 0;
+#endif
 	if (!*shader && !(program->shaders_tried & tried))
 	{
-		char *source = nv2a_vertex_shader_to_glsl(program->instructions, program->instruction_count,
-			immediate ? 0 : device.vertex_shader->packed_mask, lit ? &program->lighting : NULL);
+		char *source = nv2a_vertex_shader_to_glsl_variant(program->instructions, program->instruction_count,
+			immediate ? 0 : device.vertex_shader->packed_mask, lit ? &program->lighting : NULL, plasma);
 
 		program->shaders_tried |= tried;
 		*shader = xgpu_compile_shader(GL_VERTEX_SHADER, source, "vertex");
@@ -3961,8 +4005,8 @@ static GLuint vertex_shader_get(struct vertex_shader_object *program, BOOL immed
 			char path[512];
 			FILE *file;
 
-			snprintf(path, sizeof(path), "%s/vs%03lu_%d%s.glsl", debug_settings.dump_shaders, program->id, variant,
-				lit ? "_lit" : "");
+			snprintf(path, sizeof(path), "%s/vs%03lu_%d%s%s.glsl", debug_settings.dump_shaders, program->id, variant,
+				lit ? "_lit" : "", plasma ? "_plasma" : "");
 			if ((file = fopen(path, "w")) != NULL)
 			{
 				fputs(source, file);
@@ -4227,6 +4271,9 @@ static struct program_entry *program_finish(struct program_entry *entry)
 	entry->depth_bias = glGetUniformLocation(entry->program, "depth_bias");
 	entry->blend_constant = glGetUniformLocation(entry->program, "blend_constant");
 	entry->model_lights = glGetUniformLocation(entry->program, "model_lights");
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	plasma_gl_program_initialize(entry->program, &entry->plasma);
+#endif
 	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
 	{
 		char name[8];
@@ -5149,6 +5196,34 @@ static unsigned long model_light_register(int light)
 	return (unsigned long)(XGPU_VERTEX_CONSTANT_BIAS + (light ? -80 + light : -82));
 }
 
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+/* a program's model variant would not compile or link: its draws are stock
+from then on (0, the draw's variant now) */
+static unsigned int plasma_variant_failed(struct vertex_shader_object *program)
+{
+	platform_log("GPU: vertex shader %lu's dynamic lighting variant failed to compile or link (refer to the shader log "
+		"above): stock from now on", program->id);
+	program->plasma_failed = TRUE;
+	plasma_gl_draw_cancel();
+	return 0;
+}
+
+/* a variant's program not had: on the web, one still linking in parallel
+(the draw stock until it is done, asked again at the next); else failed */
+static unsigned int plasma_variant_missing(struct vertex_shader_object *program)
+{
+#ifdef HALO_WEB
+	if (program_pending)
+	{
+		program_pending = FALSE;
+		plasma_gl_draw_cancel();
+		return 0;
+	}
+#endif
+	return plasma_variant_failed(program);
+}
+#endif
+
 static struct program_entry *prepare_draw(BOOL immediate)
 {
 	/* (the fixed-function program compiled only with OpenGL there: not by
@@ -5160,6 +5235,9 @@ static struct program_entry *prepare_draw(BOOL immediate)
 	struct draw_uniforms uniforms;
 	BOOL has_depth = FALSE;
 	int stage;
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	unsigned int plasma = 0;
+#endif
 
 	/* (the fixed-function pipeline's draws: immediate mode's only) */
 	if (!device.gl_ready || !program || !(device.vertex_shader || device.fixed_function) || !program->instructions ||
@@ -5223,10 +5301,26 @@ static struct program_entry *prepare_draw(BOOL immediate)
 #endif
 
 	entry = NULL;
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	/* the dynamic lighting's model variant, where the draw has a light of
+	the feature's (plasma_occlusion_gl.c): stock for good if it fails */
+	plasma = plasma_gl_draw_prepare(immediate, program->lighting.lights, program->plasma_failed);
+#endif
 	if (program->lighting.lights && !program->lighting_failed && per_pixel_lighting())
 	{
 		key.per_pixel_lighting = (unsigned char)program->lighting.lights;
-		entry = program_get(vertex_shader_get(program, immediate, TRUE), fragment_shader_get(&key));
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+		if (plasma)
+		{
+			key.plasma_model = (unsigned char)plasma;
+			entry = program_get(vertex_shader_get(program, immediate, TRUE, 0), fragment_shader_get(&key));
+			key.plasma_model = 0;
+			if (!entry)
+				plasma = plasma_variant_missing(program);
+		}
+		if (!entry)
+#endif
+		entry = program_get(vertex_shader_get(program, immediate, TRUE, 0), fragment_shader_get(&key));
 #ifdef HALO_WEB
 		/* (still compiling: the draw waits for it, not lit for each vertex) */
 		if (!entry && program_pending)
@@ -5245,8 +5339,16 @@ static struct program_entry *prepare_draw(BOOL immediate)
 			key.per_pixel_lighting = 0;
 		}
 	}
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	if (!entry && plasma)
+	{
+		entry = program_get(vertex_shader_get(program, immediate, FALSE, plasma), fragment_shader_get(&key));
+		if (!entry)
+			plasma = plasma_variant_missing(program);
+	}
+#endif
 	if (!entry)
-		entry = program_get(vertex_shader_get(program, immediate, FALSE), fragment_shader_get(&key));
+		entry = program_get(vertex_shader_get(program, immediate, FALSE, 0), fragment_shader_get(&key));
 	if (!entry)
 	{
 		stats.skipped_link++;
@@ -5263,6 +5365,10 @@ static struct program_entry *prepare_draw(BOOL immediate)
 #endif
 	draw_flush();
 	state_program(entry->program);
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	if (plasma)
+		plasma_gl_draw_bind(&entry->plasma);
+#endif
 	if (key.source_blend && entry->blend_constant >= 0)
 	{
 		float blend_constant[4];
