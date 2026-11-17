@@ -673,7 +673,13 @@ void map_share_lock(
 			pthread_mutexattr_t attributes;
 
 			pthread_mutexattr_init(&attributes);
+			/* (glibc names the type without _NP only under UNIX98/XOPEN2K8,
+			which this gnu89 + __STRICT_ANSI__ build does not ask for) */
+#ifdef __GLIBC__
+			pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_RECURSIVE_NP);
+#else
 			pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_RECURSIVE);
+#endif
 			pthread_mutex_init(&map_share_mutex, &attributes);
 			pthread_mutexattr_destroy(&attributes);
 			__sync_synchronize();
