@@ -6626,6 +6626,8 @@ void forge_3d_update(float dt)
 	/* Only run Forge editor controls when inside a Forge session */
 	if (!g_forge_session_enabled)
 		return;
+	/* (a test spawn of MAP SETTINGS' going on: forge_map_settings.c) */
+	forge_map_settings_test_tick(g_forge.mode == _forge_mode_3d_monitor);
 	if (s_origins_note_frames < FORGE_ORIGINS_NOTE_FRAMES)
 		s_origins_note_frames++;
 	else
@@ -6908,8 +6910,12 @@ void forge_3d_update(float dt)
 						 !(g_forge.bind_vk[FORGE_BIND_QUICK_SAVE] > 0 &&
 						   (GetAsyncKeyState(g_forge.bind_vk[FORGE_BIND_QUICK_SAVE]) & 0x8000)));
 
+		/* (MAP SETTINGS' TEST SPAWN leaves Forge mode as the button would:
+		forge_map_settings_test_tick does the rest) */
+		int test_leaves = forge_map_settings_menu_test_requested() && g_forge.mode == _forge_mode_3d_monitor;
+
 		/* Mode & Modal Hotkeys (Point 2: Seamless location continuity between Spartan and Forge Mode; Point 11: Overhead viewer removed) */
-		if (cur_f1 && !prev_f1 && allow_f1)
+		if ((cur_f1 && !prev_f1 && allow_f1) || test_leaves)
 		{
 			int local_p_abs = forge_get_local_player_abs_index();
 			long unit_idx = player_control_get_unit_index(0);

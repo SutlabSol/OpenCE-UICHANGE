@@ -130,7 +130,7 @@ enum
 	OBJECTIVE_KNOWN_TAGS = 256,
 	MAXIMUM_INJECTED_BUNDLES = 128,
 	/* the most first-person hands a map's globals name */
-	MAXIMUM_MENU_HANDS = 4,
+	MAXIMUM_MENU_HANDS = 16,
 	/* the tags of a level, as datum indices count them */
 	MAXIMUM_TAG_COUNT = 0xFFFF,
 	MAXIMUM_WALK_DEPTH = 32,
@@ -517,7 +517,8 @@ static struct
 	long *problems[NUMBER_OF_TAG_INJECTOR_CATEGORIES];
 	long tag_counts[NUMBER_OF_TAG_INJECTOR_CATEGORIES];
 	unsigned char *names_made;
-	/* the open map's first-person hands (its globals'), by absolute index */
+	/* the open map's first-person hands (its globals', then the models that
+	can be arms as they are: menu_hands_find), by absolute index */
 	long hands[MAXIMUM_MENU_HANDS];
 	short hand_count;
 } tag_injector_menu = { { { 0 } }, 0, NONE };
@@ -1816,11 +1817,72 @@ boolean tag_injector_map_campaign(
 	return map >= 0 && map < tag_injector_menu.map_count && tag_injector_menu.maps[map].campaign;
 }
 
-/* the open map's first-person hands: the model its globals draw a
-player's arms with (tag_injector_menu.hands) */
+/* the open map's model at a tag index (NULL: none, or no model) */
+static struct model const *menu_model(
+	struct injector_map_header const *header,
+	long tag_index)
+{
+	long absolute = tag_index == NONE ? NONE : (long)(unsigned short)tag_index;
+
+	if (absolute == NONE || absolute >= header->tag_count || header->instances[absolute].tag_index != tag_index ||
+		(unsigned long)header->instances[absolute].group_tag != GBXMODEL_GROUP_TAG ||
+		!header->instances[absolute].base_address)
+	{
+		return NULL;
+	}
+	return (struct model const *)header->instances[absolute].base_address;
+}
+
+/* how many of a model's nodes another has, by name */
+static long menu_model_nodes_shared(
+	struct model const *model,
+	struct model const *other)
+{
+	long shared = 0;
+	short node;
+
+	if (!model->nodes.address || !other->nodes.address)
+		return 0;
+	for (node = 0; node < model->nodes.count; node++)
+	{
+		struct model_node const *named = TAG_BLOCK_GET_ELEMENT(&model->nodes, node, struct model_node);
+		short other_node;
+
+		for (other_node = 0; other_node < other->nodes.count; other_node++)
+		{
+			if (!_strnicmp(named->name, TAG_BLOCK_GET_ELEMENT(&other->nodes, other_node, struct model_node)->name,
+				TAG_STRING_LENGTH))
+			{
+				shared++;
+				break;
+			}
+		}
+	}
+	return shared;
+}
+
+static void menu_hands_add(
+	long absolute)
+{
+	short other;
+
+	for (other = 0; other < tag_injector_menu.hand_count && tag_injector_menu.hands[other] != absolute; other++)
+	{
+	}
+	if (other == tag_injector_menu.hand_count && tag_injector_menu.hand_count < MAXIMUM_MENU_HANDS)
+		tag_injector_menu.hands[tag_injector_menu.hand_count++] = absolute;
+}
+
+/* the open map's first-person hands (tag_injector_menu.hands): the model its
+globals draw a player's arms with, first, then every other model that can be
+arms as they are: one no object is drawn with (nor a weapon in first person)
+whose nodes are mostly the globals' hands' (a map with an elite's or an
+ODST's arms beside the cyborg's: its players' bipeds' hands) */
 static void menu_hands_find(
 	struct injector_map_header const *header)
 {
+	struct model const *globals_hands = NULL;
+	unsigned char *used;
 	long absolute;
 
 	tag_injector_menu.hand_count = 0;
@@ -1828,8 +1890,6 @@ static void menu_hands_find(
 	{
 		struct game_globals const *globals;
 		struct game_globals_first_person_interface const *interface;
-		long hands;
-		short other;
 
 		if ((unsigned long)header->instances[absolute].group_tag != 'matg' || !header->instances[absolute].base_address)
 			continue;
@@ -1837,18 +1897,96 @@ static void menu_hands_find(
 		if (!globals->first_person_interface.address || globals->first_person_interface.count <= 0)
 			continue;
 		interface = (struct game_globals_first_person_interface const *)globals->first_person_interface.address;
-		hands = interface->hands.index == NONE ? NONE : (long)(unsigned short)interface->hands.index;
-		if (hands == NONE || hands >= header->tag_count || header->instances[hands].tag_index != interface->hands.index ||
-			(unsigned long)header->instances[hands].group_tag != GBXMODEL_GROUP_TAG)
+		if (menu_model(header, interface->hands.index))
 		{
-			continue;
+			globals_hands = menu_model(header, interface->hands.index);
+			menu_hands_add((long)(unsigned short)interface->hands.index);
 		}
-		for (other = 0; other < tag_injector_menu.hand_count && tag_injector_menu.hands[other] != hands; other++)
-		{
-		}
-		if (other == tag_injector_menu.hand_count && tag_injector_menu.hand_count < MAXIMUM_MENU_HANDS)
-			tag_injector_menu.hands[tag_injector_menu.hand_count++] = hands;
 	}
+	if (!globals_hands || globals_hands->nodes.count < 3)
+		return;
+	/* (the models objects are drawn with, and weapons in first person) */
+	used = malloc((unsigned long)header->tag_count);
+	if (!used)
+		return;
+	memset(used, 0, (unsigned long)header->tag_count);
+	for (absolute = 0; absolute < header->tag_count; absolute++)
+	{
+		struct injector_tag_instance const *instance = &header->instances[absolute];
+		boolean object = (unsigned long)instance->group_tag == 'obje' ||
+			(unsigned long)instance->parent_group_tags[0] == 'obje' ||
+			(unsigned long)instance->parent_group_tags[1] == 'obje';
+		long model_tag;
+
+		if (!object || !instance->base_address)
+			continue;
+		model_tag = ((struct object_definition const *)instance->base_address)->object.model.index;
+		if (menu_model(header, model_tag))
+			used[(unsigned short)model_tag] = TRUE;
+		if ((unsigned long)instance->group_tag == WEAPON_DEFINITION_TAG)
+		{
+			model_tag = ((struct weapon_definition const *)instance->base_address)->weapon.interface_definition.
+				first_person_model.index;
+			if (menu_model(header, model_tag))
+				used[(unsigned short)model_tag] = TRUE;
+		}
+	}
+	for (absolute = 0; absolute < header->tag_count && tag_injector_menu.hand_count < MAXIMUM_MENU_HANDS; absolute++)
+	{
+		struct model const *model = menu_model(header, header->instances[absolute].tag_index);
+
+		if (!model || used[absolute] || model == globals_hands || model->nodes.count < 3)
+			continue;
+		if (menu_model_nodes_shared(model, globals_hands) * 2 >= model->nodes.count)
+			menu_hands_add(absolute);
+	}
+	free(used);
+}
+
+/* how many of the first parts of two paths (to each '\\') are the same */
+static short path_folders_shared(
+	char const *path,
+	char const *other)
+{
+	short shared = 0;
+	long index;
+
+	for (index = 0; path[index] && other[index]; index++)
+	{
+		char a = path[index] >= 'A' && path[index] <= 'Z' ? (char)(path[index] - 'A' + 'a') : path[index];
+		char b = other[index] >= 'A' && other[index] <= 'Z' ? (char)(other[index] - 'A' + 'a') : other[index];
+
+		if (a != b)
+			break;
+		if (a == '\\')
+			shared++;
+	}
+	return shared;
+}
+
+/* the open map's hands a biped of it is drawn with: the hands whose path
+is most its own (characters\\elite\\fp\\fp_arms for characters\\elite\\elite_mp),
+else the globals' */
+static long menu_biped_hands(
+	long biped)
+{
+	short best = 0;
+	short best_shared = 1;
+	short hand;
+
+	if (!tag_injector_menu.hand_count)
+		return NONE;
+	for (hand = 1; hand < tag_injector_menu.hand_count; hand++)
+	{
+		short shared = path_folders_shared(menu_tag_name(biped), menu_tag_name(tag_injector_menu.hands[hand]));
+
+		if (shared > best_shared)
+		{
+			best = hand;
+			best_shared = shared;
+		}
+	}
+	return tag_injector_menu.hands[best];
 }
 
 /* whether the open map's tag is listed in a category: by its group, and a
@@ -2163,15 +2301,15 @@ boolean tag_injector_tag_add(
 	}
 	/* (a biped's hands, taken out with it below: an MCC map's pixels of
 	theirs too) */
-	for (tag = 0; tag_injector_menu.mcc_open && category == _tag_injector_bipeds && tag < tag_injector_menu.hand_count;
-		tag++)
+	for (tag = 0; tag_injector_menu.mcc_open && category == _tag_injector_bipeds && tag < 1 &&
+		menu_biped_hands(absolute) != NONE; tag++)
 	{
 		long *hands_indices = NULL;
 		long hands_count = 0;
 		long hands_problem = NONE;
 		long hands_tag;
 
-		if (tag_bundle_tags(&source, tag_injector_menu.hands[tag], &hands_indices, &hands_count, &hands_problem) ==
+		if (tag_bundle_tags(&source, menu_biped_hands(absolute), &hands_indices, &hands_count, &hands_problem) ==
 			_tag_bundle_status_ok)
 		{
 			for (hands_tag = 0; hands_tag < hands_count; hands_tag++)
@@ -2272,15 +2410,17 @@ boolean tag_injector_tag_add(
 	/* a biped's first-person hands, its map's (its globals'): a tag of the
 	profile of its own, as a player's arms (Forge's map settings choose them
 	with the biped), unless the profile has one of that path */
-	for (tag = 0; added && category == _tag_injector_bipeds && tag < tag_injector_menu.hand_count; tag++)
+	for (tag = 0; added && category == _tag_injector_bipeds && tag < 1; tag++)
 	{
-		long hands = tag_injector_menu.hands[tag];
+		long hands = menu_biped_hands(absolute);
 		struct bundle_buffer hands_buffer = { NULL, 0, 0 };
 		long *hands_indices = NULL;
 		long hands_count = 0;
 		long hands_problem = NONE;
 		char hands_name[256];
 
+		if (hands == NONE)
+			continue;
 		snprintf(hands_name, sizeof(hands_name), "%s", menu_tag_name(hands));
 		if (port_tag_profiles_tag_find(profile, GBXMODEL_GROUP_TAG, hands_name) != NONE)
 			continue;

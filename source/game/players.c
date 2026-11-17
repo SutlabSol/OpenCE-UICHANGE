@@ -5228,6 +5228,15 @@ void players_update_before_game(
 
 						firing_range_player_control(player->unit_index, &control_data);
 					}
+#if OPENCE_ENABLE_FORGE
+					/* port: a Forge test spawn's mirrored copy (port/forge/src/forge_map_settings.c) */
+					{
+						extern void forge_map_settings_player_control(long unit_index,
+							struct unit_control_data const *control);
+
+						forge_map_settings_player_control(player->unit_index, &control_data);
+					}
+#endif
 				}
 				else if (unit->unit.swarm_actor_index == NONE &&
 					unit->unit.actor_index == NONE)

@@ -102,6 +102,7 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries.h"
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
 #include "damage.h"
 #include "game_modes.h" /* port: port/linux/game/game_modes.c */
 #include "infection.h" /* port: port/linux/game/infection.c */
@@ -1630,6 +1631,16 @@ void object_cause_damage(
 	(port/linux/game/firing_range.c) */
 	if (firing_range_damage_ignored(damage->owner_object_index, object_index))
 		return;
+#if OPENCE_ENABLE_FORGE
+	/* port: a Forge test spawn's mirrored copy hurts no one
+	(port/forge/src/forge_map_settings.c) */
+	{
+		extern int forge_map_settings_damage_ignored(long owner_object_index, long object_index);
+
+		if (forge_map_settings_damage_ignored(damage->owner_object_index, object_index))
+			return;
+	}
+#endif
 	/* the distributed netcode (port/linux/NETCODE.md): the host deals
 	damage; a client reports its own players' hits instead, and the host
 	deals those (port/linux/game/network_damage.c) */

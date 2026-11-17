@@ -3,35 +3,46 @@ FORGE_MAP_SETTINGS_MENU.INL
 
 The MAP SETTINGS menu (forge_map_settings.c holds what it sets), included
 into forge_3d_mode.c for its menus' drawing and input: the palette's button
-held opens it (forge_3d_update). Its pages: the settings, a list of the tags
-one of them can be (a sky, a biped, hands), and the display name typed on an
-on-screen keyboard (or the keyboard's own keys).
+held opens it (forge_3d_update). Its pages:
+
+- MAP SETTINGS: DISPLAY NAME, SKYBOX, FOG SETTINGS, PLAYER BIPEDS;
+- FOG SETTINGS: the atmosphere and its fog's values;
+- PLAYER BIPEDS: RED TEAM, BLUE TEAM, FREE FOR ALL, each a page of its own
+  (its BIPED, its HANDS, which follow the biped chosen, and TEST SPAWN);
+- a list of the tags a setting can be (a sky, a biped, hands);
+- the display name, typed on an on-screen keyboard (or the keyboard's own
+  keys).
+
+B goes back a page, and from the first closes it.
 */
 
 /* ---------- constants */
 
 #define FORGE_MAP_SETTINGS_HOLD_MS 450u
-#define FORGE_MAP_SETTINGS_VISIBLE_ROWS 11
+#define FORGE_MAP_SETTINGS_VISIBLE_ROWS 10
 #define FORGE_MAP_SETTINGS_PICK_ROWS 10
 #define FORGE_MAP_SETTINGS_MAX_CANDIDATES 1024
+#define FORGE_MAP_SETTINGS_MAX_PAGE_ROWS 16
 
 enum
 {
 	_map_settings_page_main = 0,
+	_map_settings_page_fog,
+	_map_settings_page_bipeds,
+	_map_settings_page_team,
 	_map_settings_page_pick,
-	_map_settings_page_name
+	_map_settings_page_name,
+	NUMBER_OF_MAP_SETTINGS_PAGES
 };
 
+/* the rows the pages of rows have */
 enum
 {
 	_map_settings_row_name = 0,
 	_map_settings_row_sky,
-	_map_settings_row_biped_red,
-	_map_settings_row_biped_blue,
-	_map_settings_row_biped_ffa,
-	_map_settings_row_hands_red,
-	_map_settings_row_hands_blue,
-	_map_settings_row_hands_ffa,
+	_map_settings_row_fog_menu,
+	_map_settings_row_bipeds_menu,
+
 	_map_settings_row_atmosphere,
 	_map_settings_row_fog_red,
 	_map_settings_row_fog_green,
@@ -41,8 +52,14 @@ enum
 	_map_settings_row_fog_end,
 	_map_settings_row_fog_indoors,
 	_map_settings_row_fog_sky,
-	_map_settings_row_reset,
-	_map_settings_row_done,
+
+	_map_settings_row_team_red,
+	_map_settings_row_team_blue,
+	_map_settings_row_team_ffa,
+
+	_map_settings_row_team_biped,
+	_map_settings_row_team_hands,
+	_map_settings_row_test_spawn,
 	NUMBER_OF_MAP_SETTINGS_ROWS
 };
 
@@ -57,11 +74,16 @@ static char const *const s_map_name_keys[4] = { "1234567890", "QWERTYUIOP", "ASD
 static struct
 {
 	int page;
-	int cursor;
-	int scroll;
-	/* the list (pick page): of what, its tags (NONE first: the map's own) */
+	/* each page of rows' row picked, and its first shown */
+	int cursors[NUMBER_OF_MAP_SETTINGS_PAGES];
+	int scrolls[NUMBER_OF_MAP_SETTINGS_PAGES];
+	/* the team page's slot */
+	int team_slot;
+	/* the list (pick page): of what, the page it goes back to, its tags
+	(NONE first: the map's own) */
 	int pick_kind;
 	int pick_slot;
+	int pick_return;
 	long pick_tags[FORGE_MAP_SETTINGS_MAX_CANDIDATES + 1];
 	int pick_count;
 	int pick_cursor;
@@ -73,11 +95,79 @@ static struct
 	int lower;
 	int keys_down[256];
 	int keys_read;
-	/* RESET pressed once: pressed again resets */
-	int reset_armed;
+	/* a TEST SPAWN wanted: forge_3d_update leaves Forge mode for it */
+	int test_requested;
 } s_map_settings_menu;
 
 /* ---------- private code */
+
+/* a page of rows' rows: how many */
+static int map_settings_page_rows(int page, int *rows)
+{
+	int count = 0;
+	int row;
+
+	switch (page)
+	{
+	case _map_settings_page_main:
+		for (row = _map_settings_row_name; row <= _map_settings_row_bipeds_menu; row++)
+			rows[count++] = row;
+		break;
+	case _map_settings_page_fog:
+		for (row = _map_settings_row_atmosphere; row <= _map_settings_row_fog_sky; row++)
+			rows[count++] = row;
+		break;
+	case _map_settings_page_bipeds:
+		for (row = _map_settings_row_team_red; row <= _map_settings_row_team_ffa; row++)
+			rows[count++] = row;
+		break;
+	case _map_settings_page_team:
+		for (row = _map_settings_row_team_biped; row <= _map_settings_row_test_spawn; row++)
+			rows[count++] = row;
+		break;
+	}
+	return count;
+}
+
+static int map_settings_row_at(int page, int place)
+{
+	int rows[FORGE_MAP_SETTINGS_MAX_PAGE_ROWS];
+	int count = map_settings_page_rows(page, rows);
+
+	return place >= 0 && place < count ? rows[place] : NONE;
+}
+
+static void map_settings_page_open(int page)
+{
+	s_map_settings_menu.page = page;
+	s_map_settings_menu.cursors[page] = 0;
+	s_map_settings_menu.scrolls[page] = 0;
+}
+
+/* back a page: a team's to the teams', the fog's and the teams' to the
+first, the first's closes the menu */
+static void map_settings_page_back(void)
+{
+	switch (s_map_settings_menu.page)
+	{
+	case _map_settings_page_team:
+		s_map_settings_menu.page = _map_settings_page_bipeds;
+		break;
+	case _map_settings_page_fog:
+	case _map_settings_page_bipeds:
+		s_map_settings_menu.page = _map_settings_page_main;
+		break;
+	case _map_settings_page_pick:
+		s_map_settings_menu.page = s_map_settings_menu.pick_return;
+		break;
+	case _map_settings_page_name:
+		s_map_settings_menu.page = _map_settings_page_main;
+		break;
+	default:
+		g_forge.active_modal = _forge_modal_none;
+		break;
+	}
+}
 
 /* a row's kind of tag and slot (FALSE for a row of no tag) */
 static int map_settings_row_tag(int row, int *kind, int *slot)
@@ -88,16 +178,16 @@ static int map_settings_row_tag(int row, int *kind, int *slot)
 		*slot = 0;
 		return 1;
 	}
-	if (row >= _map_settings_row_biped_red && row <= _map_settings_row_biped_ffa)
+	if (row >= _map_settings_row_team_red && row <= _map_settings_row_team_ffa)
 	{
 		*kind = _forge_map_kind_biped;
-		*slot = row - _map_settings_row_biped_red;
+		*slot = row - _map_settings_row_team_red;
 		return 1;
 	}
-	if (row >= _map_settings_row_hands_red && row <= _map_settings_row_hands_ffa)
+	if (row == _map_settings_row_team_biped || row == _map_settings_row_team_hands)
 	{
-		*kind = _forge_map_kind_hands;
-		*slot = row - _map_settings_row_hands_red;
+		*kind = row == _map_settings_row_team_biped ? _forge_map_kind_biped : _forge_map_kind_hands;
+		*slot = s_map_settings_menu.team_slot;
 		return 1;
 	}
 	return 0;
@@ -137,6 +227,25 @@ static int map_settings_refuse(void)
 static char const *map_settings_slot_name(int slot)
 {
 	return slot == _forge_map_slot_red ? "RED TEAM" : slot == _forge_map_slot_blue ? "BLUE TEAM" : "FREE FOR ALL";
+}
+
+/* a tag chosen: what the status bar says (a biped's hands chosen with it) */
+static void map_settings_tag_set(int kind, int slot, long tag)
+{
+	char label[64];
+	char hands[64];
+
+	forge_map_settings_set_tag(kind, slot, tag);
+	forge_map_settings_tag_label(tag, label, sizeof(label));
+	if (kind == _forge_map_kind_biped)
+	{
+		forge_map_settings_tag_label(forge_map_settings_tag(_forge_map_kind_hands, slot), hands, sizeof(hands));
+		forge_set_status("%s: %s, hands %s", map_settings_slot_name(slot), label, hands);
+	}
+	else
+	{
+		forge_set_status("%s", label);
+	}
 }
 
 /* a fog row's step: its value moved `dir` steps */
@@ -297,12 +406,91 @@ static int map_settings_name_keys_typed(void)
 	return typed;
 }
 
-/* ---------- public code (forge_3d_mode.c's) */
-
-static int forge_map_settings_menu_open(void)
+/* a row of a page of rows pressed (A: `enter`) or stepped (`dir`) */
+static void map_settings_row_act(int row, int dir, int enter)
 {
-	return g_forge.active_modal == _forge_modal_map_settings;
+	int kind, slot;
+
+	/* (the pages it opens, any player's to see) */
+	if (row == _map_settings_row_fog_menu || row == _map_settings_row_bipeds_menu)
+	{
+		if (enter)
+			map_settings_page_open(row == _map_settings_row_fog_menu ? _map_settings_page_fog : _map_settings_page_bipeds);
+		return;
+	}
+	if (enter && row >= _map_settings_row_team_red && row <= _map_settings_row_team_ffa)
+	{
+		s_map_settings_menu.team_slot = row - _map_settings_row_team_red;
+		map_settings_page_open(_map_settings_page_team);
+		return;
+	}
+	if (row == _map_settings_row_test_spawn)
+	{
+		if (!enter)
+			return;
+		if (!forge_map_settings_can_edit())
+		{
+			forge_set_status("Only the host can test spawn");
+			return;
+		}
+		if (forge_map_settings_test_start(s_map_settings_menu.team_slot))
+		{
+			s_map_settings_menu.test_requested = 1;
+			g_forge.active_modal = _forge_modal_none;
+			forge_set_status("Test spawn: %s. %s FORGE ends it", map_settings_slot_name(s_map_settings_menu.team_slot),
+				forge_action_prompt(FORGE_BIND_TOGGLE_MODE));
+		}
+		return;
+	}
+	if (map_settings_refuse())
+		return;
+	if (row == _map_settings_row_name)
+	{
+		if (enter)
+		{
+			snprintf(s_map_settings_menu.name, sizeof(s_map_settings_menu.name), "%s",
+				forge_map_settings_get()->display_name);
+			s_map_settings_menu.key_row = 1;
+			s_map_settings_menu.key_column = 0;
+			s_map_settings_menu.keys_read = 0;
+			s_map_settings_menu.page = _map_settings_page_name;
+			/* (the press that opened it is not a key typed) */
+			map_settings_name_keys_typed();
+		}
+	}
+	else if (map_settings_row_tag(row, &kind, &slot))
+	{
+		map_settings_candidates_take(kind, slot);
+		if (enter)
+		{
+			s_map_settings_menu.pick_cursor = map_settings_candidate_place();
+			s_map_settings_menu.pick_scroll = 0;
+			s_map_settings_menu.pick_return = s_map_settings_menu.page;
+			s_map_settings_menu.page = _map_settings_page_pick;
+		}
+		else
+		{
+			int place = (map_settings_candidate_place() + s_map_settings_menu.pick_count + dir) %
+				s_map_settings_menu.pick_count;
+
+			map_settings_tag_set(kind, slot, s_map_settings_menu.pick_tags[place]);
+		}
+	}
+	else if (row == _map_settings_row_atmosphere)
+	{
+		int atmosphere = forge_map_settings_get()->atmosphere;
+
+		atmosphere = (atmosphere + NUMBER_OF_FORGE_ATMOSPHERES + dir) % NUMBER_OF_FORGE_ATMOSPHERES;
+		forge_map_settings_set_atmosphere(atmosphere);
+		forge_set_status("Atmosphere: %s", forge_map_settings_atmosphere_name(atmosphere));
+	}
+	else if (row >= _map_settings_row_fog_red && row <= _map_settings_row_fog_sky)
+	{
+		map_settings_fog_step(row, dir);
+	}
 }
+
+/* ---------- public code (forge_3d_mode.c's) */
 
 static void forge_map_settings_menu_show(void)
 {
@@ -315,12 +503,24 @@ static void forge_map_settings_menu_show(void)
 		forge_set_status("Map settings: only the host changes them");
 }
 
-/* whether a row of the settings has a value a click on its left steps
+/* a TEST SPAWN wanted this frame (forge_3d_update leaves Forge mode) */
+static int forge_map_settings_menu_test_requested(void)
+{
+	int requested = s_map_settings_menu.test_requested;
+
+	s_map_settings_menu.test_requested = 0;
+	return requested;
+}
+
+/* whether a row of a page of rows has a value a click on its left steps
 back; and whether the page shown scrolls with the wheel */
 static int forge_map_settings_menu_row_has_value(int index)
 {
-	return s_map_settings_menu.page == _map_settings_page_main && index != _map_settings_row_name &&
-		index != _map_settings_row_reset && index != _map_settings_row_done;
+	int row = map_settings_row_at(s_map_settings_menu.page, index);
+	int kind, slot;
+
+	return row != NONE && (map_settings_row_tag(row, &kind, &slot) ||
+		(row >= _map_settings_row_atmosphere && row <= _map_settings_row_fog_sky));
 }
 
 static int forge_map_settings_menu_paging(void)
@@ -331,21 +531,30 @@ static int forge_map_settings_menu_paging(void)
 /* the pointer over a row (or a key, or a list's row) */
 static void forge_map_settings_menu_hover(int index)
 {
-	if (s_map_settings_menu.page == _map_settings_page_main)
-		s_map_settings_menu.cursor = PIN(index, 0, NUMBER_OF_MAP_SETTINGS_ROWS - 1);
-	else if (s_map_settings_menu.page == _map_settings_page_pick)
+	int page = s_map_settings_menu.page;
+
+	if (page == _map_settings_page_pick)
 		s_map_settings_menu.pick_cursor = PIN(index, 0, s_map_settings_menu.pick_count - 1);
-	else
+	else if (page == _map_settings_page_name)
 	{
 		s_map_settings_menu.key_row = PIN(index / FORGE_MAP_NAME_KEY_COLUMNS, 0, FORGE_MAP_NAME_KEY_ROWS - 1);
 		s_map_settings_menu.key_column = PIN(index % FORGE_MAP_NAME_KEY_COLUMNS, 0, FORGE_MAP_NAME_KEY_COLUMNS - 1);
+	}
+	else
+	{
+		int rows[FORGE_MAP_SETTINGS_MAX_PAGE_ROWS];
+		int count = map_settings_page_rows(page, rows);
+
+		s_map_settings_menu.cursors[page] = PIN(index, 0, count - 1);
 	}
 }
 
 /* a frame's presses (each TRUE on the frame it was pressed) */
 static void forge_map_settings_menu_input(int up, int down, int left, int right, int enter, int back)
 {
-	if (s_map_settings_menu.page == _map_settings_page_name)
+	int page = s_map_settings_menu.page;
+
+	if (page == _map_settings_page_name)
 	{
 		int typed = map_settings_name_keys_typed();
 
@@ -355,7 +564,7 @@ static void forge_map_settings_menu_input(int up, int down, int left, int right,
 			return;
 		if (back)
 		{
-			s_map_settings_menu.page = _map_settings_page_main;
+			map_settings_page_back();
 			return;
 		}
 		if (up)
@@ -379,13 +588,13 @@ static void forge_map_settings_menu_input(int up, int down, int left, int right,
 			map_settings_name_key_press();
 		return;
 	}
-	if (s_map_settings_menu.page == _map_settings_page_pick)
+	if (page == _map_settings_page_pick)
 	{
 		int count = s_map_settings_menu.pick_count;
 
 		if (back)
 		{
-			s_map_settings_menu.page = _map_settings_page_main;
+			map_settings_page_back();
 			return;
 		}
 		if (up)
@@ -398,108 +607,39 @@ static void forge_map_settings_menu_input(int up, int down, int left, int right,
 			s_map_settings_menu.pick_cursor = MIN(count - 1, s_map_settings_menu.pick_cursor + FORGE_MAP_SETTINGS_PICK_ROWS);
 		if (enter && !map_settings_refuse())
 		{
-			char label[64];
-
-			forge_map_settings_set_tag(s_map_settings_menu.pick_kind, s_map_settings_menu.pick_slot,
+			map_settings_tag_set(s_map_settings_menu.pick_kind, s_map_settings_menu.pick_slot,
 				s_map_settings_menu.pick_tags[s_map_settings_menu.pick_cursor]);
-			forge_map_settings_tag_label(s_map_settings_menu.pick_tags[s_map_settings_menu.pick_cursor], label,
-				sizeof(label));
-			forge_set_status("%s", label);
-			s_map_settings_menu.page = _map_settings_page_main;
+			map_settings_page_back();
 		}
 		return;
 	}
 
-	/* (the settings) */
-	if (back)
+	/* (a page of rows) */
 	{
-		g_forge.active_modal = _forge_modal_none;
-		return;
-	}
-	if (up)
-	{
-		s_map_settings_menu.cursor = (s_map_settings_menu.cursor + NUMBER_OF_MAP_SETTINGS_ROWS - 1) %
-			NUMBER_OF_MAP_SETTINGS_ROWS;
-		s_map_settings_menu.reset_armed = 0;
-	}
-	if (down)
-	{
-		s_map_settings_menu.cursor = (s_map_settings_menu.cursor + 1) % NUMBER_OF_MAP_SETTINGS_ROWS;
-		s_map_settings_menu.reset_armed = 0;
-	}
-	if (left || right || enter)
-	{
-		int row = s_map_settings_menu.cursor;
-		int dir = left ? -1 : 1;
-		int kind, slot;
+		int rows[FORGE_MAP_SETTINGS_MAX_PAGE_ROWS];
+		int count = map_settings_page_rows(page, rows);
+		int *cursor = &s_map_settings_menu.cursors[page];
 
-		if (row == _map_settings_row_done)
+		if (back)
 		{
-			if (enter)
-				g_forge.active_modal = _forge_modal_none;
+			map_settings_page_back();
 			return;
 		}
-		if (map_settings_refuse())
-			return;
-		if (row == _map_settings_row_name)
-		{
-			if (enter)
-			{
-				snprintf(s_map_settings_menu.name, sizeof(s_map_settings_menu.name), "%s",
-					forge_map_settings_get()->display_name);
-				s_map_settings_menu.key_row = 1;
-				s_map_settings_menu.key_column = 0;
-				s_map_settings_menu.keys_read = 0;
-				s_map_settings_menu.page = _map_settings_page_name;
-				/* (the press that opened it is not a key typed) */
-				map_settings_name_keys_typed();
-			}
-		}
-		else if (map_settings_row_tag(row, &kind, &slot))
-		{
-			map_settings_candidates_take(kind, slot);
-			if (enter)
-			{
-				s_map_settings_menu.pick_cursor = map_settings_candidate_place();
-				s_map_settings_menu.page = _map_settings_page_pick;
-			}
-			else
-			{
-				int place = (map_settings_candidate_place() + s_map_settings_menu.pick_count + dir) %
-					s_map_settings_menu.pick_count;
-
-				forge_map_settings_set_tag(kind, slot, s_map_settings_menu.pick_tags[place]);
-			}
-		}
-		else if (row == _map_settings_row_atmosphere)
-		{
-			int atmosphere = forge_map_settings_get()->atmosphere;
-
-			atmosphere = (atmosphere + NUMBER_OF_FORGE_ATMOSPHERES + dir) % NUMBER_OF_FORGE_ATMOSPHERES;
-			forge_map_settings_set_atmosphere(atmosphere);
-			forge_set_status("Atmosphere: %s", forge_map_settings_atmosphere_name(atmosphere));
-		}
-		else if (row >= _map_settings_row_fog_red && row <= _map_settings_row_fog_sky)
-		{
-			map_settings_fog_step(row, dir);
-		}
-		else if (row == _map_settings_row_reset && enter)
-		{
-			if (s_map_settings_menu.reset_armed)
-			{
-				forge_map_settings_reset();
-				s_map_settings_menu.reset_armed = 0;
-				forge_set_status("Map settings: the map's own");
-			}
-			else
-			{
-				s_map_settings_menu.reset_armed = 1;
-			}
-		}
+		if (up)
+			*cursor = (*cursor + count - 1) % count;
+		if (down)
+			*cursor = (*cursor + 1) % count;
+		if ((left || right || enter) && *cursor >= 0 && *cursor < count)
+			map_settings_row_act(rows[*cursor], left ? -1 : 1, enter);
 	}
 }
 
-/* a setting's label and value */
+static char const *map_settings_fog_summary(void)
+{
+	return forge_map_settings_atmosphere_name(forge_map_settings_get()->atmosphere);
+}
+
+/* a row's label and value */
 static void map_settings_row_text(int row, char *label, size_t label_size, char *value, size_t value_size)
 {
 	struct forge_map_settings const *now = forge_map_settings_get();
@@ -509,11 +649,14 @@ static void map_settings_row_text(int row, char *label, size_t label_size, char 
 	value[0] = 0;
 	if (map_settings_row_tag(row, &kind, &slot))
 	{
-		if (kind == _forge_map_kind_sky)
-			snprintf(label, label_size, "SKY:");
+		if (row == _map_settings_row_sky)
+			snprintf(label, label_size, "SKYBOX:");
+		else if (row == _map_settings_row_team_biped)
+			snprintf(label, label_size, "BIPED:");
+		else if (row == _map_settings_row_team_hands)
+			snprintf(label, label_size, "HANDS:");
 		else
-			snprintf(label, label_size, "%s %s:", slot == _forge_map_slot_red ? "RED" : slot == _forge_map_slot_blue ?
-				"BLUE" : "FFA", kind == _forge_map_kind_biped ? "BIPED" : "HANDS");
+			snprintf(label, label_size, "%s:", map_settings_slot_name(slot));
 		forge_map_settings_tag_label(forge_map_settings_tag(kind, slot), value, value_size);
 		/* (named, but not in this level: a profile not played) */
 		if (forge_map_settings_tag(kind, slot) == NONE &&
@@ -528,8 +671,15 @@ static void map_settings_row_text(int row, char *label, size_t label_size, char 
 	switch (row)
 	{
 	case _map_settings_row_name:
-		snprintf(label, label_size, "MAP NAME:");
+		snprintf(label, label_size, "DISPLAY NAME:");
 		snprintf(value, value_size, "%s", now->display_name[0] ? now->display_name : "THE FILE'S");
+		break;
+	case _map_settings_row_fog_menu:
+		snprintf(label, label_size, "FOG SETTINGS");
+		snprintf(value, value_size, "%s", map_settings_fog_summary());
+		break;
+	case _map_settings_row_bipeds_menu:
+		snprintf(label, label_size, "PLAYER BIPEDS");
 		break;
 	case _map_settings_row_atmosphere:
 		snprintf(label, label_size, "ATMOSPHERE:");
@@ -575,12 +725,11 @@ static void map_settings_row_text(int row, char *label, size_t label_size, char 
 		snprintf(value, value_size, "%s", now->sky_visibility == _forge_sky_shown ? "SHOWN" :
 			now->sky_visibility == _forge_sky_hidden ? "HIDDEN" : "AUTO");
 		break;
-	case _map_settings_row_reset:
-		snprintf(label, label_size, "%s", s_map_settings_menu.reset_armed ? "PRESS AGAIN TO RESET ALL" :
-			"RESET TO THE MAP'S OWN");
+	case _map_settings_row_test_spawn:
+		snprintf(label, label_size, "TEST SPAWN");
 		break;
 	default:
-		snprintf(label, label_size, "DONE");
+		label[0] = 0;
 		break;
 	}
 }
@@ -592,18 +741,31 @@ static char const *map_settings_row_help(int row)
 	{
 	case _map_settings_row_name: return "The name map lists show. A types it.";
 	case _map_settings_row_sky: return "A lists the skies: the map's, and a profile's.";
-	case _map_settings_row_biped_red:
-	case _map_settings_row_biped_blue:
-	case _map_settings_row_biped_ffa: return "Players spawn as it (next spawn). Its hands come with it.";
-	case _map_settings_row_hands_red:
-	case _map_settings_row_hands_blue:
-	case _map_settings_row_hands_ffa: return "First-person arms. Add hands in the Tag Injector.";
+	case _map_settings_row_fog_menu: return "The map's fog: presets, or your own.";
+	case _map_settings_row_bipeds_menu: return "What players spawn as, team by team.";
 	case _map_settings_row_atmosphere: return "Fog presets; any value changed is CUSTOM.";
 	case _map_settings_row_fog_indoors: return "Fog in rooms without a sky too (closer in).";
 	case _map_settings_row_fog_sky: return "AUTO hides the sky behind full fog.";
-	case _map_settings_row_reset: return "Every setting back to the map's own.";
-	case _map_settings_row_done: return "Saved with the map.";
+	case _map_settings_row_team_red:
+	case _map_settings_row_team_blue:
+	case _map_settings_row_team_ffa: return "Left/right: its biped. A: its biped, hands, test.";
+	case _map_settings_row_team_biped: return "Players spawn as it. Its hands are chosen with it.";
+	case _map_settings_row_team_hands: return "First-person arms: the biped's, or any other.";
+	case _map_settings_row_test_spawn: return "Respawn as it, with a copy to see it move.";
 	default: return "Left/right changes it.";
+	}
+}
+
+static char const *map_settings_page_title(int page, char *text, size_t size)
+{
+	switch (page)
+	{
+	case _map_settings_page_fog: return "FOG SETTINGS";
+	case _map_settings_page_bipeds: return "PLAYER BIPEDS";
+	case _map_settings_page_team:
+		snprintf(text, size, "%s", map_settings_slot_name(s_map_settings_menu.team_slot));
+		return text;
+	default: return "MAP SETTINGS";
 	}
 }
 
@@ -629,7 +791,7 @@ static void forge_map_settings_menu_draw(short window_x0, short window_y0, long 
 		int row, column;
 
 		draw_ce_pause_box(px0, py0, box_w, box_h, 1);
-		draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 4), "MAP NAME", 0xFFFFFFFFu);
+		draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 4), "DISPLAY NAME", 0xFFFFFFFFu);
 		draw_ce_rounded_row_bar(1, (short)(px0 + 14), (short)(py0 + 38), (short)(px1 - 14), (short)(py0 + 64));
 		snprintf(shown, sizeof(shown), "%s_", s_map_settings_menu.name);
 		forge_text_fit(1, font_index, shown, (short)(box_w - 52));
@@ -687,7 +849,7 @@ static void forge_map_settings_menu_draw(short window_x0, short window_y0, long 
 		if (s_map_settings_menu.pick_cursor >= s_map_settings_menu.pick_scroll + FORGE_MAP_SETTINGS_PICK_ROWS)
 			s_map_settings_menu.pick_scroll = s_map_settings_menu.pick_cursor - FORGE_MAP_SETTINGS_PICK_ROWS + 1;
 		if (s_map_settings_menu.pick_kind == _forge_map_kind_sky)
-			snprintf(title, sizeof(title), "SKY");
+			snprintf(title, sizeof(title), "SKYBOX");
 		else
 			snprintf(title, sizeof(title), "%s %s", map_settings_slot_name(s_map_settings_menu.pick_slot),
 				s_map_settings_menu.pick_kind == _forge_map_kind_biped ? "BIPED" : "HANDS");
@@ -728,55 +890,66 @@ static void forge_map_settings_menu_draw(short window_x0, short window_y0, long 
 		return;
 	}
 
+	/* (a page of rows) */
 	{
-		short box_h = (short)(34 + FORGE_MAP_SETTINGS_VISIBLE_ROWS * 28 + 34);
+		int page = s_map_settings_menu.page;
+		int rows[FORGE_MAP_SETTINGS_MAX_PAGE_ROWS];
+		int count = map_settings_page_rows(page, rows);
+		int visible = MIN(count, FORGE_MAP_SETTINGS_VISIBLE_ROWS);
+		short box_h = (short)(34 + visible * 28 + 34);
+		int *cursor = &s_map_settings_menu.cursors[page];
+		int *scroll = &s_map_settings_menu.scrolls[page];
+		char title[64];
 
-		if (s_map_settings_menu.cursor < s_map_settings_menu.scroll)
-			s_map_settings_menu.scroll = s_map_settings_menu.cursor;
-		if (s_map_settings_menu.cursor >= s_map_settings_menu.scroll + FORGE_MAP_SETTINGS_VISIBLE_ROWS)
-			s_map_settings_menu.scroll = s_map_settings_menu.cursor - FORGE_MAP_SETTINGS_VISIBLE_ROWS + 1;
+		if (*cursor < *scroll)
+			*scroll = *cursor;
+		if (*cursor >= *scroll + FORGE_MAP_SETTINGS_VISIBLE_ROWS)
+			*scroll = *cursor - FORGE_MAP_SETTINGS_VISIBLE_ROWS + 1;
 		draw_ce_pause_box(px0, py0, box_w, box_h, 1);
-		draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 4), "MAP SETTINGS", 0xFFFFFFFFu);
+		draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 4), map_settings_page_title(page, title,
+			sizeof(title)), 0xFFFFFFFFu);
 		if (!forge_map_settings_can_edit())
 		{
 			draw_ce_menu_str_box(0, font_index, (short)(px1 - 160), (short)(py0 + 6), (short)(px1 - 14), (short)(py0 + 28), 1,
 				"HOST'S", 0xFF2896FFu);
 		}
-		for (r = 0; r < FORGE_MAP_SETTINGS_VISIBLE_ROWS; r++)
+		for (r = 0; r < visible; r++)
 		{
-			int row = s_map_settings_menu.scroll + r;
+			int place = *scroll + r;
+			int row;
 			short rx0 = (short)(px0 + 14);
 			short ry0 = (short)(py0 + 34 + r * 28);
 			short rx1 = (short)(px1 - 14);
 			short ry1 = (short)(ry0 + 25);
-			int sel = row == s_map_settings_menu.cursor;
+			int sel = place == *cursor;
 			uint32_t col = sel ? 0xFFFFFFFFu : 0xFF2896FFu;
 
-			if (row >= NUMBER_OF_MAP_SETTINGS_ROWS)
+			if (place >= count)
 				break;
+			row = rows[place];
 			map_settings_row_text(row, label, sizeof(label), value, sizeof(value));
 			draw_ce_rounded_row_bar((short)(sel ? 1 : 0), rx0, ry0, rx1, ry1);
-			forge_hit_add(_forge_hit_settings_row, row, rx0, ry0, rx1, ry1);
+			forge_hit_add(_forge_hit_settings_row, place, rx0, ry0, rx1, ry1);
 			draw_ce_menu_str_box(1, font_index, (short)(rx0 + 10), (short)(ry0 + 2), (short)(rx1 - 10), ry1, 0, label, col);
 			if (value[0])
 			{
 				short vx0 = (short)(rx0 + 150);
 				short vx1 = (short)(rx1 - 8);
+				int steps = forge_map_settings_menu_row_has_value(place);
 
-				draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_left", 0, vx0, (short)(ry0 + 6), (short)(vx0 + 6),
-					(short)(ry0 + 18), 6, 12, 0xFFFFFFFFu);
-				draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_right", 0, (short)(vx1 - 6), (short)(ry0 + 6), vx1,
-					(short)(ry0 + 18), 6, 12, 0xFFFFFFFFu);
+				if (steps)
+				{
+					draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_left", 0, vx0, (short)(ry0 + 6), (short)(vx0 + 6),
+						(short)(ry0 + 18), 6, 12, 0xFFFFFFFFu);
+					draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_right", 0, (short)(vx1 - 6), (short)(ry0 + 6), vx1,
+						(short)(ry0 + 18), 6, 12, 0xFFFFFFFFu);
+				}
 				forge_text_fit(0, font_index, value, (short)(vx1 - 10 - (vx0 + 10)));
 				draw_ce_menu_str_box(0, font_index, (short)(vx0 + 10), (short)(ry0 + 3), (short)(vx1 - 10), ry1, 2, value,
 					col);
 			}
 		}
-		/* (more above or below) */
-		if (s_map_settings_menu.scroll > 0)
-			draw_ce_menu_str_box(0, font_index, (short)(px1 - 40), (short)(py0 + 8), (short)(px1 - 14), (short)(py0 + 28),
-				1, "^", 0xFF2896FFu);
-		snprintf(value, sizeof(value), "%s", map_settings_row_help(s_map_settings_menu.cursor));
+		snprintf(value, sizeof(value), "%s", map_settings_row_help(map_settings_row_at(page, *cursor)));
 		forge_text_fit(0, font_index, value, (short)(box_w - 28));
 		draw_ce_menu_str_box(0, font_index, (short)(px0 + 14), (short)(py0 + box_h - 30), (short)(px1 - 14),
 			(short)(py0 + box_h - 8), 0, value, 0xFF2896FFu);

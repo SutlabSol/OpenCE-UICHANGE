@@ -125,7 +125,24 @@ char const *forge_map_settings_atmosphere_name(int atmosphere);
 void forge_map_settings_net_send_all(long machine_index);
 int forge_map_settings_net_receive(char const *text, int from_client);
 
-/* ---------- the engine's (players.c, first_person_weapons.c, render.c) */
+/* the test spawn (a slot's page's TEST SPAWN): the local player, out of
+Forge mode (forge_3d_mode.c leaves it), killed, spawns again as the slot's
+biped, with a copy of it standing before it that moves as in a mirror, to
+see it from outside; over once Forge mode is back. FALSE when it cannot
+start (a client's) */
+int forge_map_settings_test_start(int slot);
+int forge_map_settings_test_active(void);
+/* each frame of a Forge session (forge_3d_update), in Forge mode or not */
+void forge_map_settings_test_tick(int forge_mode);
+
+/* ---------- the engine's (players.c, first_person_weapons.c, render.c,
+damage.c) */
+
+/* the local player's controls each tick, which the test's copy mirrors */
+struct unit_control_data;
+void forge_map_settings_player_control(long unit_index, struct unit_control_data const *control);
+/* damage the test's copy deals, which hurts no one */
+int forge_map_settings_damage_ignored(long owner_object_index, long object_index);
 
 /* the biped a player spawns as */
 long forge_map_settings_player_biped(long player_index, long unit_definition_index);

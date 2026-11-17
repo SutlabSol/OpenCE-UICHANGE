@@ -26,6 +26,8 @@ the settings are read anew as each level loads.
 #include "tag_files/tag_files.h"
 #include "objects/objects.h"
 #include "units/units.h"
+#include "units/unit_control_data.h"
+#include "items/weapons.h"
 #include "render/render_cameras.h"
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
@@ -46,6 +48,8 @@ extern const char *port_tag_profiles_tag_name(long profile, long tag);
 extern const char *port_tag_profiles_tag_map(long profile, long tag);
 extern long port_tag_profiles_tag_find(long profile, unsigned long group, const char *name);
 extern void forge_network_send_text(long machine_index, char const *text);
+extern void unit_network_add_weapon(long unit_index, long weapon_index, short slot);
+extern void unit_network_forget_weapon(long unit_index, short slot);
 
 /* ---------- constants */
 
@@ -103,6 +107,29 @@ static struct
 	/* (the sky it was set to, NONE: the map's) */
 	long applied;
 } sky_state = { NULL, -1, 0, { 0 }, { 0 }, NONE };
+
+/* the test spawn (forge_map_settings_test_start): the slot the local player
+spawns as (NONE: no test), what it waits for, the unit killed, and the copy
+of the player standing before it that moves as in a mirror, the mirror's
+plane (a point on it and its normal, level) */
+enum
+{
+	_test_none = 0,
+	_test_kill,
+	_test_respawn,
+	_test_mirroring
+};
+
+static struct
+{
+	int slot;
+	int phase;
+	long killed_unit;
+	long mirror_unit;
+	long mirrored_unit;
+	real_point3d plane_point;
+	real_vector3d plane_normal;
+} test = { NONE, _test_none, NONE, NONE, NONE };
 
 /* a level's loading, each one counted; and the settings' changes */
 static long level_serial;
@@ -252,11 +279,14 @@ static void sky_apply(void)
 		error(_error_silent, "forge map settings: sky %s over %d of the map's", settings.sky, (int)sky_state.count);
 }
 
-/* the player's slot: its team's in a team game, else free for all's */
+/* the player's slot: its team's in a team game, else free for all's (a
+local player's test spawn's, during it) */
 static int player_slot(long player_index)
 {
 	struct player_datum *player;
 
+	if (test.slot != NONE && player_index != NONE && player_index == local_player_get_player_index(0))
+		return test.slot;
 	if (player_index == NONE || !game_engine_has_teams())
 		return _forge_map_slot_ffa;
 	player = player_get(player_index);
@@ -329,6 +359,10 @@ void forge_map_settings_level_loading(char const *text)
 	settings_clear();
 	level_serial++;
 	settings_generation++;
+	/* (the level's objects go with it) */
+	test.slot = NONE;
+	test.phase = _test_none;
+	test.mirror_unit = test.mirrored_unit = test.killed_unit = NONE;
 	sky_state.scenario = NULL;
 	if (!text || !strstr(text, "MAP_SETTINGS|"))
 		return;
@@ -450,14 +484,36 @@ void forge_map_settings_set_display_name(char const *name)
 		net_send_name(-1);
 }
 
-/* (a biped of a profile chooses its map's hands with it: the Tag Injector
-takes a biped's hands out with it, from the same map) */
+/* how many of the first parts of two paths (to each '\\') are the same */
+static int path_folders_shared(char const *path, char const *other)
+{
+	int shared = 0;
+	int index;
+
+	for (index = 0; path[index] && other[index]; index++)
+	{
+		char a = path[index] >= 'A' && path[index] <= 'Z' ? (char)(path[index] - 'A' + 'a') : path[index];
+		char b = other[index] >= 'A' && other[index] <= 'Z' ? (char)(other[index] - 'A' + 'a') : other[index];
+
+		if (a != b)
+			break;
+		if (a == '\\')
+			shared++;
+	}
+	return shared;
+}
+
+/* a biped's hands, chosen with it: of a profile's biped, the hands the
+Tag Injector took out of the same map, the one whose path is most the
+biped's (characters\\elite\\fp\\fp_arms for characters\\elite\\elite_mp); of
+another, or a biped with none, the map's own */
 static void hands_of_biped(int slot, long biped_tag)
 {
 	struct settings_tag_instance const *biped = instance_of(biped_tag);
 	long profiles[2];
 	int pass;
 
+	settings.hands[slot][0] = 0;
 	profiles[0] = tag_injector_level_baked_profile();
 	profiles[1] = tag_injector_level_profile();
 	for (pass = 0; biped && biped->name && pass < 2; pass++)
@@ -466,18 +522,31 @@ static void hands_of_biped(int slot, long biped_tag)
 		long entry = profile == NONE ? NONE : port_tag_profiles_tag_find(profile, BIPED_GROUP_TAG, biped->name);
 		char const *map = entry == NONE ? NULL : port_tag_profiles_tag_map(profile, entry);
 		long count = profile == NONE ? 0 : port_tag_profiles_tag_count(profile);
+		char const *best = NULL;
+		int best_shared = -1;
 		long tag;
 
 		for (tag = 0; map && map[0] && tag < count; tag++)
 		{
 			char const *name = port_tag_profiles_tag_name(profile, tag);
+			int shared;
 
-			if (port_tag_profiles_tag_group(profile, tag) == GBXMODEL_GROUP_TAG &&
-				!_stricmp(port_tag_profiles_tag_map(profile, tag), map) && tag_find(GBXMODEL_GROUP_TAG, name) != NONE)
+			if (port_tag_profiles_tag_group(profile, tag) != GBXMODEL_GROUP_TAG ||
+				_stricmp(port_tag_profiles_tag_map(profile, tag), map) || tag_find(GBXMODEL_GROUP_TAG, name) == NONE)
 			{
-				snprintf(settings.hands[slot], sizeof(settings.hands[slot]), "%s", name);
-				return;
+				continue;
 			}
+			shared = path_folders_shared(biped->name, name);
+			if (shared > best_shared)
+			{
+				best = name;
+				best_shared = shared;
+			}
+		}
+		if (best)
+		{
+			snprintf(settings.hands[slot], sizeof(settings.hands[slot]), "%s", best);
+			return;
 		}
 	}
 }
@@ -493,7 +562,7 @@ void forge_map_settings_set_tag(int kind, int slot, long tag_index)
 		snprintf(path, FORGE_MAP_SETTINGS_PATH_MAX, "%s", instance->name);
 	else
 		path[0] = 0;
-	if (kind == _forge_map_kind_biped && instance)
+	if (kind == _forge_map_kind_biped)
 		hands_of_biped(slot, tag_index);
 	settings_generation++;
 	if (kind == _forge_map_kind_sky)
@@ -757,11 +826,13 @@ int forge_map_settings_net_receive(char const *text, int from_client)
 	return 1;
 }
 
+/* (any game of the map: solo Forge is a single player game, its player
+the globals' player unit, with no game engine) */
 long forge_map_settings_player_biped(long player_index, long unit_definition_index)
 {
 	long biped;
 
-	if (!game_engine_running() || firefight_active())
+	if (firefight_active())
 		return unit_definition_index;
 	biped = forge_map_settings_tag(_forge_map_kind_biped, player_slot(player_index));
 	return biped != NONE ? biped : unit_definition_index;
@@ -772,7 +843,7 @@ long forge_map_settings_hands(long unit_index, long hands_index)
 	struct unit_datum *unit;
 	long hands;
 
-	if (!game_engine_running() || unit_index == NONE)
+	if (unit_index == NONE)
 		return hands_index;
 	unit = (struct unit_datum *)object_try_and_get_and_verify_type(unit_index, _object_mask_unit);
 	if (!unit)
@@ -817,4 +888,273 @@ int forge_map_settings_fog(short local_player_index, int indoors, struct render_
 	hidden = settings.sky_visibility == _forge_sky_hidden ||
 		(settings.sky_visibility == _forge_sky_auto && settings.fog_density >= 0.99f);
 	return hidden;
+}
+
+/* ---------- the test spawn */
+
+static void test_reflect_point(real_point3d const *point, real_point3d *result)
+{
+	real distance = (point->x - test.plane_point.x) * test.plane_normal.i +
+		(point->y - test.plane_point.y) * test.plane_normal.j + (point->z - test.plane_point.z) * test.plane_normal.k;
+
+	result->x = point->x - 2.0f * distance * test.plane_normal.i;
+	result->y = point->y - 2.0f * distance * test.plane_normal.j;
+	result->z = point->z - 2.0f * distance * test.plane_normal.k;
+}
+
+static void test_reflect_vector(real_vector3d const *vector, real_vector3d *result)
+{
+	real along = vector->i * test.plane_normal.i + vector->j * test.plane_normal.j + vector->k * test.plane_normal.k;
+
+	result->i = vector->i - 2.0f * along * test.plane_normal.i;
+	result->j = vector->j - 2.0f * along * test.plane_normal.j;
+	result->k = vector->k - 2.0f * along * test.plane_normal.k;
+}
+
+static struct unit_datum *test_unit(long unit_index)
+{
+	return unit_index == NONE ? NULL :
+		(struct unit_datum *)object_try_and_get_and_verify_type(unit_index, _object_mask_unit);
+}
+
+static void test_mirror_delete(void)
+{
+	if (test_unit(test.mirror_unit))
+	{
+		unit_delete_all_weapons(test.mirror_unit);
+		object_delete(test.mirror_unit);
+	}
+	test.mirror_unit = NONE;
+	test.mirrored_unit = NONE;
+}
+
+/* the copy: of the player's unit's biped and colors, a few steps before it,
+facing it */
+static void test_mirror_create(long unit_index)
+{
+	struct unit_datum *unit = test_unit(unit_index);
+	struct object_placement_data placement;
+	real length;
+	long mirror;
+	short color;
+
+	if (!unit)
+		return;
+	test.plane_normal.i = unit->object.forward.i;
+	test.plane_normal.j = unit->object.forward.j;
+	test.plane_normal.k = 0.0f;
+	length = (real)sqrt(test.plane_normal.i * test.plane_normal.i + test.plane_normal.j * test.plane_normal.j);
+	if (length < 0.001f)
+	{
+		test.plane_normal.i = 1.0f;
+		test.plane_normal.j = 0.0f;
+		length = 1.0f;
+	}
+	test.plane_normal.i /= length;
+	test.plane_normal.j /= length;
+	test.plane_point.x = unit->object.position.x + test.plane_normal.i * 1.75f;
+	test.plane_point.y = unit->object.position.y + test.plane_normal.j * 1.75f;
+	test.plane_point.z = unit->object.position.z;
+	object_placement_data_new(&placement, unit->definition_index, NONE);
+	test_reflect_point(&unit->object.position, &placement.position);
+	test_reflect_vector(&unit->object.forward, &placement.forward);
+	placement.up.i = 0.0f;
+	placement.up.j = 0.0f;
+	placement.up.k = 1.0f;
+	for (color = 0; color < NUMBER_OF_OBJECT_CHANGE_COLORS; color++)
+		placement.change_colors[color] = unit->object.base_change_colors[color];
+	mirror = object_new(&placement);
+	if (mirror == NONE || !test_unit(mirror))
+	{
+		error(_error_silent, "forge test spawn: the copy of %s could not be made",
+			tag_get_name(unit->definition_index));
+		if (mirror != NONE)
+			object_delete(mirror);
+		return;
+	}
+	unit_set_actively_controlled(mirror, TRUE);
+	SET_FLAG(unit_get(mirror)->unit.flags, _unit_ignored_by_actors_bit, TRUE);
+	test.mirror_unit = mirror;
+	test.mirrored_unit = unit_index;
+}
+
+/* the copy's weapons the player's, slot for slot, the one in hand the
+player's, their rounds, and its grenades (as the firing range's mirror) */
+static void test_mirror_equip(long unit_index)
+{
+	struct unit_datum *unit = test_unit(unit_index);
+	struct unit_datum *mirror = test_unit(test.mirror_unit);
+	short slot;
+
+	if (!unit || !mirror)
+		return;
+	for (slot = 0; slot < MAXIMUM_WEAPONS_PER_UNIT; slot++)
+	{
+		long held = unit->unit.weapon_object_indices[slot];
+		long copied = mirror->unit.weapon_object_indices[slot];
+		long wanted = held == NONE ? NONE : weapon_get(held)->definition_index;
+		struct object_placement_data placement;
+		long copy;
+
+		if (wanted == (copied == NONE ? NONE : weapon_get(copied)->definition_index))
+			continue;
+		if (copied != NONE)
+		{
+			unit_network_forget_weapon(test.mirror_unit, slot);
+			object_delete(copied);
+		}
+		if (wanted == NONE)
+			continue;
+		object_placement_data_new(&placement, wanted, NONE);
+		placement.position = mirror->object.position;
+		copy = object_new(&placement);
+		if (copy != NONE)
+			unit_network_add_weapon(test.mirror_unit, copy, slot);
+	}
+	if (unit->unit.current_weapon_index >= 0 && unit->unit.current_weapon_index < MAXIMUM_WEAPONS_PER_UNIT &&
+		(mirror->unit.current_weapon_index == NONE ||
+		mirror->unit.weapon_object_indices[mirror->unit.current_weapon_index] == NONE))
+	{
+		mirror->unit.desired_weapon_index = unit->unit.current_weapon_index;
+	}
+	for (slot = 0; slot < MAXIMUM_WEAPONS_PER_UNIT; slot++)
+	{
+		long held = unit->unit.weapon_object_indices[slot];
+		long copied = mirror->unit.weapon_object_indices[slot];
+
+		if (held != NONE && copied != NONE)
+		{
+			struct weapon_datum *from = weapon_get(held);
+			struct weapon_datum *to = weapon_get(copied);
+
+			memcpy(to->weapon.magazines, from->weapon.magazines, sizeof(to->weapon.magazines));
+			to->weapon.heat = from->weapon.heat;
+		}
+	}
+	memcpy(mirror->unit.grenade_counts, unit->unit.grenade_counts, sizeof(mirror->unit.grenade_counts));
+}
+
+static void test_end(void)
+{
+	test_mirror_delete();
+	test.slot = NONE;
+	test.phase = _test_none;
+	test.killed_unit = NONE;
+}
+
+int forge_map_settings_test_start(int slot)
+{
+	if (slot < 0 || slot >= NUMBER_OF_FORGE_MAP_SLOTS || game_connection() == _game_connection_network_client ||
+		local_player_get_player_index(0) == NONE)
+	{
+		return 0;
+	}
+	test_end();
+	test.slot = slot;
+	test.phase = _test_kill;
+	error(_error_silent, "forge test spawn: %s biped %s", slot == _forge_map_slot_red ? "red" :
+		slot == _forge_map_slot_blue ? "blue" : "ffa", settings.biped[slot][0] ? settings.biped[slot] : "(the map's)");
+	return 1;
+}
+
+int forge_map_settings_test_active(void)
+{
+	return test.slot != NONE;
+}
+
+void forge_map_settings_test_tick(int forge_mode)
+{
+	long player_index;
+	long unit_index;
+
+	if (test.slot == NONE)
+		return;
+	player_index = local_player_get_player_index(0);
+	unit_index = player_index == NONE ? NONE : player_get(player_index)->unit_index;
+	/* (back in Forge mode: the test is over) */
+	if (forge_mode && test.phase != _test_kill)
+	{
+		test_end();
+		return;
+	}
+	switch (test.phase)
+	{
+	case _test_kill:
+		/* (once out of Forge mode, on foot: killed, to spawn again) */
+		if (!forge_mode && test_unit(unit_index) && test_unit(unit_index)->object.parent_object_index == NONE)
+		{
+			test.killed_unit = unit_index;
+			test.phase = _test_respawn;
+			unit_kill(unit_index);
+		}
+		break;
+	case _test_respawn:
+		if (unit_index != NONE && unit_index != test.killed_unit && test_unit(unit_index) &&
+			!TEST_FLAG(test_unit(unit_index)->object.damage_flags, _object_dead_bit))
+		{
+			test_mirror_create(unit_index);
+			test.phase = _test_mirroring;
+		}
+		break;
+	case _test_mirroring:
+		/* (the player dead again, or the copy: a new copy as the player
+		spawns again) */
+		if (unit_index == NONE || unit_index != test.mirrored_unit || !test_unit(test.mirror_unit) ||
+			TEST_FLAG(test_unit(test.mirror_unit)->object.damage_flags, _object_dead_bit))
+		{
+			if (unit_index != test.mirrored_unit || !test_unit(test.mirror_unit))
+			{
+				test_mirror_delete();
+				test.killed_unit = unit_index != NONE && test_unit(unit_index) &&
+					TEST_FLAG(test_unit(unit_index)->object.damage_flags, _object_dead_bit) ? unit_index : NONE;
+				test.phase = _test_respawn;
+			}
+			break;
+		}
+		test_mirror_equip(unit_index);
+		break;
+	}
+}
+
+void forge_map_settings_player_control(long unit_index, struct unit_control_data const *control)
+{
+	struct unit_control_data mirrored;
+	struct unit_datum *unit;
+	struct unit_datum *mirror;
+	real_point3d place;
+	real dx, dy;
+
+	if (test.phase != _test_mirroring || unit_index != test.mirrored_unit || !(unit = test_unit(unit_index)) ||
+		!(mirror = test_unit(test.mirror_unit)) || TEST_FLAG(mirror->object.damage_flags, _object_dead_bit))
+	{
+		return;
+	}
+	/* (the player's controls turned about the mirror's plane: the way it
+	faces and aims reflected, its sideways throttle the other way; it picks
+	up nothing) */
+	mirrored = *control;
+	mirrored.control_flags &= (word)~FLAG(_unit_control_action_bit);
+	test_reflect_vector(&control->facing_vector, &mirrored.facing_vector);
+	test_reflect_vector(&control->aiming_vector, &mirrored.aiming_vector);
+	test_reflect_vector(&control->looking_vector, &mirrored.looking_vector);
+	mirrored.throttle.j = -control->throttle.j;
+	unit_control(test.mirror_unit, &mirrored);
+	/* (put back where it should be when it drifts, or the floor differs) */
+	test_reflect_point(&unit->object.position, &place);
+	dx = mirror->object.position.x - place.x;
+	dy = mirror->object.position.y - place.y;
+	if (dx * dx + dy * dy > 0.75f * 0.75f)
+	{
+		real_vector3d forward;
+
+		test_reflect_vector(&unit->object.forward, &forward);
+		object_set_position(test.mirror_unit, &place, &forward, &unit->object.up);
+	}
+}
+
+int forge_map_settings_damage_ignored(long owner_object_index, long object_index)
+{
+	(void)object_index;
+	/* (the copy's shots hurt no one: it fires back as the player fires) */
+	return test.mirror_unit != NONE && owner_object_index == test.mirror_unit;
 }

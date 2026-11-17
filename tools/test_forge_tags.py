@@ -313,7 +313,7 @@ def test_the_palette_offers_ranks_not_weapons():
 
 def test_leaving_forge_mode_places_what_is_held_and_entering_resets_origins():
     forge = (ROOT / "port/forge/src/forge_3d_mode.c").read_text()
-    toggle = forge[forge.index("if (cur_f1 && !prev_f1 && allow_f1)"):]
+    toggle = forge[forge.index("if ((cur_f1 && !prev_f1 && allow_f1) || test_leaves)"):]
     assert "forge_place_held_item();" in toggle[:400] and "forge_cancel_or_release_held_item" not in toggle[:400]
     assert "forge_ai_forge_mode_changed(1);\n\t\t\t\t\tforge_origins_reset();" in forge
 
