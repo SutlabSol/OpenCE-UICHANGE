@@ -65,6 +65,9 @@ struct forge_placed_object_entry
 	uint16_t gametype_flags; /* 0 = All Modes, bit0=CTF, bit1=Slayer, bit2=Oddball, bit3=KOTH, bit4=Race */
 	uint8_t source_cache_id;
 	uint8_t active;
+	/* (a vehicle's ALWAYS SPAWN: forge_live_instance's, saved as the
+	OBJECT_ALWAYS_SPAWN line before its OBJECT line) */
+	uint8_t always_spawn;
 };
 
 struct forge_default_object_edit

@@ -3186,7 +3186,8 @@ static long forge_create_configured_engine_object(
 	long def_idx,
 	uint32_t group_tag,
 	float x, float y, float z,
-	float yaw, float pitch, float roll)
+	float yaw, float pitch, float roll,
+	int always_spawn)
 {
 	struct object_placement_data placement;
 	long obj_idx;
@@ -3202,7 +3203,11 @@ static long forge_create_configured_engine_object(
 	placement.position.z = z;
 	euler_to_forward_up(yaw, pitch, roll, &placement.forward, &placement.up);
 
+	/* (a vehicle set to ALWAYS SPAWN is made whatever the gametype's
+	vehicles, which object_new otherwise asks: game_engine_remap_vehicle) */
+	game_engine_vehicle_always_spawn = always_spawn && group_tag == 'vehi';
 	obj_idx = object_new(&placement);
+	game_engine_vehicle_always_spawn = FALSE;
 	obj = forge_valid_object_get(obj_idx);
 	if (!obj)
 		return NONE;
@@ -3243,6 +3248,11 @@ static long forge_create_configured_engine_object(
 	return obj_idx;
 }
 
+/* the next object spawned is a vehicle set to ALWAYS SPAWN: a saved map's,
+its OBJECT_ALWAYS_SPAWN line read just before its OBJECT line
+(forge_runtime_tags.c), or a network peer's !FV: */
+int g_forge_next_spawn_always = 0;
+
 int32_t forge_3d_spawn_object_at_slot(
 	int32_t forced_live_idx,
 	uint32_t group_tag,
@@ -3255,7 +3265,9 @@ int32_t forge_3d_spawn_object_at_slot(
 {
 	int32_t live_idx = -1;
 	struct forge_live_instance *inst;
+	int always_spawn = g_forge_next_spawn_always && group_tag == 'vehi';
 
+	g_forge_next_spawn_always = 0;
 	if (!tag_path || !tag_path[0])
 		return -1;
 
@@ -3311,6 +3323,7 @@ int32_t forge_3d_spawn_object_at_slot(
 	inst->gametype_flags = 0; /* 0 = All Modes */
 	inst->netgame_flag_type = -1;
 	inst->team_designator = team_designator;
+	inst->always_spawn = (uint8_t)always_spawn;
 	inst->x = x;
 	inst->y = y;
 	inst->z = z;
@@ -3454,7 +3467,7 @@ int32_t forge_3d_spawn_object_at_slot(
 		if (def_idx != NONE && !skip_local_obj_new_on_client)
 		{
 			inst->object_index = forge_create_configured_engine_object(
-				def_idx, group_tag, x, y, z, yaw, pitch, roll);
+				def_idx, group_tag, x, y, z, yaw, pitch, roll, inst->always_spawn);
 		}
 
 		if (g_forge.edit_state.placed_object_count < FORGE_MAX_PLACED_OBJECTS)
@@ -3466,6 +3479,7 @@ int32_t forge_3d_spawn_object_at_slot(
 			po->source_cache_id = source_cache_id;
 			po->group_tag = group_tag;
 			po->gametype_flags = inst->gametype_flags;
+			po->always_spawn = inst->always_spawn;
 			po->category = (group_tag == 'vehi') ? _forge_object_vehicle :
 				(group_tag == 'weap') ? _forge_object_weapon :
 				(group_tag == 'bipd') ? _forge_object_biped :
@@ -3709,6 +3723,7 @@ void forge_3d_move_instance_ext(
 		po->pitch = pitch;
 		po->roll = roll;
 		po->gametype_flags = inst->gametype_flags;
+		po->always_spawn = inst->always_spawn;
 	}
 
 	if (broadcast_net && forge_is_multiplayer_session())
@@ -5048,6 +5063,31 @@ static int forge_props_snap_row(struct forge_live_instance const *inst)
 		forge_snap_points_stock_tag(inst->group_tag, inst->tag_path, NULL, 0);
 }
 
+/* Object Settings' ALWAYS SPAWN row: a placed vehicle's (the map's own are
+the gametype's, as its placements say), after DELETE OBJECT; else -1 */
+static int forge_props_always_spawn_row(struct forge_live_instance const *inst, int snap_row, int test_drop_row)
+{
+	return inst->group_tag == 'vehi' && !inst->is_default_scenario_object && !inst->is_ai_unit &&
+		!snap_row && test_drop_row < 0 && !forge_tele_is(inst) && !forge_ff_is_dropship_zone(inst) &&
+		!forge_ff_is_route_point(inst) ? 5 : -1;
+}
+
+/* a placed vehicle's ALWAYS SPAWN set (the Object Settings row, a peer's
+!FV:): kept in the map's record for the save */
+void forge_3d_always_spawn_apply(int32_t live_idx, int on)
+{
+	struct forge_live_instance *inst;
+
+	if (live_idx < 0 || live_idx >= g_forge.live_instance_count)
+		return;
+	inst = &g_forge.live_instances[live_idx];
+	if (!inst->active || inst->group_tag != 'vehi' || inst->is_default_scenario_object)
+		return;
+	inst->always_spawn = (uint8_t)(on != 0);
+	if (inst->edit_entry_index >= 0 && inst->edit_entry_index < (int)g_forge.edit_state.placed_object_count)
+		g_forge.edit_state.placed_objects[inst->edit_entry_index].always_spawn = inst->always_spawn;
+}
+
 static char const *gametype_flags_label(uint16_t flags)
 {
 	if (flags == 0x0001u) return "CTF Only";
@@ -5312,7 +5352,7 @@ static void forge_origins_reset(void)
 			if (inst->object_index == NONE)
 			{
 				inst->object_index = forge_create_configured_engine_object(definition_index, inst->group_tag,
-					inst->x, inst->y, inst->z, inst->yaw, inst->pitch, inst->roll);
+					inst->x, inst->y, inst->z, inst->yaw, inst->pitch, inst->roll, inst->always_spawn);
 			}
 			if (inst->object_index == NONE)
 				continue;
@@ -6095,7 +6135,8 @@ static void forge_reconcile_live_instances(void)
 					def_idx,
 					inst->group_tag,
 					inst->x, inst->y, inst->z,
-					inst->yaw, inst->pitch, inst->roll);
+					inst->yaw, inst->pitch, inst->roll,
+					inst->always_spawn);
 				obj = forge_valid_object_get(inst->object_index);
 				if (obj && i == g_forge.grabbed_live_index)
 					g_forge.grabbed_object_index = inst->object_index;
@@ -6389,6 +6430,11 @@ static void forge_props_undo(void)
 	{
 		inst->team_designator = was->team_designator;
 		inst->gametype_flags = was->gametype_flags;
+		if (inst->always_spawn != was->always_spawn)
+		{
+			forge_3d_always_spawn_apply(live_idx, was->always_spawn);
+			forge_network_send_always_spawn(live_idx, was->always_spawn);
+		}
 		if (inst->group_tag == 'spwn')
 		{
 			sync_live_player_spawns_to_scenario();
@@ -7323,9 +7369,12 @@ void forge_3d_update(float dt)
 		int is_tele = forge_tele_is(inst);
 		/* (a drop area's TEST DROP, after its other rows) */
 		int test_drop_row = forge_is_drop_area(inst) ? (snap_row ? 6 : 5) : -1;
+		/* (a placed vehicle's ALWAYS SPAWN, after DELETE OBJECT) */
+		int always_row = forge_props_always_spawn_row(inst, snap_row, test_drop_row);
 		int max_props_row = is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS - 1 : is_tele ? (snap_row ? 6 : 5) :
 			(is_zone ? (FF_ROUTE_ID(inst->team_designator) != 0 ? 9 : 7) :
-				(is_route_point ? 6 : (test_drop_row >= 0 ? test_drop_row : ((is_ff_spawn || snap_row) ? 5 : 4))));
+				(is_route_point ? 6 : (always_row >= 0 ? always_row :
+					(test_drop_row >= 0 ? test_drop_row : ((is_ff_spawn || snap_row) ? 5 : 4)))));
 		/* (DONE and UNDO, side by side under the rows) */
 		int props_done = max_props_row + 1;
 		int props_undo = max_props_row + 2;
@@ -7605,6 +7654,14 @@ void forge_3d_update(float dt)
 			else if (g_forge.props_cursor == test_drop_row && cur_enter && !prev_enter)
 			{
 				forge_drop_area_test_drop(g_forge.grabbed_live_index);
+			}
+			else if (g_forge.props_cursor == always_row)
+			{
+				forge_3d_always_spawn_apply(g_forge.grabbed_live_index, !inst->always_spawn);
+				forge_network_send_always_spawn(g_forge.grabbed_live_index, inst->always_spawn);
+				forge_set_status("Always spawn %s: %s", inst->always_spawn ? "on" : "off",
+					inst->always_spawn ? "made in every game, whatever its gametype's vehicles" :
+					"made as the gametype's vehicles allow");
 			}
 		}
 		if (cur_z && g_forge.grabbed_for_settings)
@@ -8312,6 +8369,7 @@ void forge_3d_update(float dt)
 
 				if (dup_allowed)
 				{
+					g_forge_next_spawn_always = src_copy.always_spawn;
 					dup_idx = forge_3d_spawn_object_at(
 						src_copy.group_tag,
 						src_copy.tag_path,
@@ -8320,6 +8378,8 @@ void forge_3d_update(float dt)
 						src_copy.yaw, src_copy.pitch, src_copy.roll,
 						dup_usage,
 						1);
+					if (dup_idx >= 0 && g_forge.live_instances[dup_idx].always_spawn)
+						forge_network_send_always_spawn(dup_idx, 1);
 				}
 				if (dup_idx >= 0)
 				{
@@ -9480,9 +9540,11 @@ void forge_3d_draw_hud(
 			int is_ai_spawn = (inst->group_tag == FORGE_GROUP_AI_SPAWN);
 			int is_tele = forge_tele_is(inst);
 			int test_drop_row = forge_is_drop_area(inst) ? (snap_row ? 6 : 5) : -1;
+			int always_row = forge_props_always_spawn_row(inst, snap_row, test_drop_row);
 			int row_count = is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS : is_tele ? (snap_row ? 7 : 6) :
 				(is_zone ? (FF_ROUTE_ID(inst->team_designator) != 0 ? 10 : 8) :
-					(is_route_point ? 7 : (test_drop_row >= 0 ? test_drop_row + 1 : ((is_ff_spawn || snap_row) ? 6 : 5))));
+					(is_route_point ? 7 : (always_row >= 0 ? always_row + 1 :
+						(test_drop_row >= 0 ? test_drop_row + 1 : ((is_ff_spawn || snap_row) ? 6 : 5)))));
 			short box_w = (short)(is_ai_spawn ? 372 : 312);
 			short box_h = (short)(is_ai_spawn ? 34 + NUMBER_OF_FORGE_AI_ROWS * 28 + 50 :
 				(row_count == 10 ? 364 : (row_count == 8 ? 308 : (row_count == 7 ? 280 : (row_count == 6 ? 252 : 224)))));
@@ -9654,6 +9716,11 @@ void forge_3d_draw_hud(
 				{
 					snprintf(labels[test_drop_row], sizeof(labels[0]), "%s", s_test_dropping ? "STOP TEST DROP" : "TEST DROP");
 					values[test_drop_row][0] = 0;
+				}
+				if (always_row >= 0)
+				{
+					snprintf(labels[always_row], sizeof(labels[0]), "ALWAYS SPAWN:");
+					snprintf(values[always_row], sizeof(values[0]), "%s", inst->always_spawn ? "ON" : "OFF");
 				}
 			}
 

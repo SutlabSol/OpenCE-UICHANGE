@@ -832,6 +832,10 @@ void game_engine_intialize_queued_sounds(
 long game_engine_remap_object_definition(long definition_index);
 
 long game_engine_remap_vehicle(long vehicle_definition_index);
+/* port: TRUE while the vehicle being made is kept whatever the gametype's
+vehicles (game_engine_remap_vehicle): a Forge map's vehicle set to ALWAYS
+SPAWN (port/forge/src/forge_3d_mode.c) */
+extern boolean game_engine_vehicle_always_spawn;
 long game_engine_remap_equipment(long equipment_definition_index);
 void game_show_score_team(
 	long team_index,

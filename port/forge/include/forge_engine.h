@@ -256,6 +256,9 @@ struct forge_live_instance
 	uint8_t is_ai_unit;
 	uint8_t is_default_scenario_object; /* 1 if adopted from the base map's default scenario objects */
 	uint8_t pad_inst;
+	/* a placed vehicle made in every game, whatever the gametype's vehicles
+	(Object Settings' ALWAYS SPAWN: game_engine_vehicle_always_spawn) */
+	uint8_t always_spawn;
 	uint16_t gametype_flags;   /* 0 = All Modes, bit0=CTF, bit1=Slayer, bit2=Oddball, bit3=KOTH, bit4=Race */
 	int16_t netgame_flag_type; /* Scenario netgame_flag type (6=tele_from, 7=tele_to, 8=hill, 2=oddball, 0=ctf) or -1 */
 	int16_t team_designator;   /* Reference/Channel ID or Team Index */
@@ -684,6 +687,13 @@ void forge_network_send_transform_ext(
 	int immediate);
 void forge_network_send_delete_ext(int32_t live_idx, long obj_idx);
 void forge_network_send_marker_usage(int32_t live_idx, int16_t usage);
+/* a placed vehicle's ALWAYS SPAWN (!FV:), and its setting here
+(forge_3d_mode.c's Object Settings row) */
+void forge_network_send_always_spawn(int32_t live_idx, int on);
+void forge_3d_always_spawn_apply(int32_t live_idx, int on);
+/* the next object spawned is a vehicle set to ALWAYS SPAWN (read and cleared
+by forge_3d_spawn_object_at_slot) */
+extern int g_forge_next_spawn_always;
 void forge_network_send_ai_spawn(int32_t live_idx);
 int forge_network_intercept_chat_packet(long machine_index, char const *text, int is_from_client_to_host);
 void forge_network_pre_handle_object_changes(void const *entries, short count);

@@ -5399,6 +5399,15 @@ static int append_forge_map_metadata_and_preview_trailer(
 					}
 				}
 			}
+			/* (a vehicle's ALWAYS SPAWN, before its OBJECT line: the level
+			reads it as it makes the object from that line. A build of before
+			reads none of it) */
+			if (po->always_spawn && state_buf.data)
+			{
+				static char const always_line[] = "OBJECT_ALWAYS_SPAWN\r\n";
+				uint32_t o = buf_alloc(&state_buf, (uint32_t)(sizeof(always_line) - 1u), 1);
+				if (state_buf.data) memcpy(state_buf.data + o, always_line, sizeof(always_line) - 1u);
+			}
 			line_len = snprintf(line, sizeof(line),
 				"OBJECT|%u|%d|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%d|%s\r\n",
 				(unsigned)po->group_tag,

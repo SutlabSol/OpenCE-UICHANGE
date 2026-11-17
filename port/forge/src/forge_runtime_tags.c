@@ -5599,6 +5599,8 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 	char const *cur = text_buf;
 	char line[512];
 	int in_forge_state = 0;
+	/* (the next OBJECT line's vehicle is set to ALWAYS SPAWN) */
+	int always_spawn = 0;
 
 	if (!cur)
 		return;
@@ -5627,12 +5629,19 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 		{
 			in_forge_state = 1;
 		}
+		else if (in_forge_state && strcmp(line, "OBJECT_ALWAYS_SPAWN") == 0)
+		{
+			always_spawn = 1;
+		}
 		else if (in_forge_state && strncmp(line, "OBJECT|", 7) == 0)
 		{
 			unsigned int grp = 0;
 			int src_cache = 0, baked = 0, team = 0;
 			float x = 0, y = 0, z = 0, yaw = 0, pitch = 0, roll = 0;
 			char tpath[256];
+			int object_always_spawn = always_spawn;
+
+			always_spawn = 0;
 			tpath[0] = 0;
 			if (sscanf(line + 7, "%u|%d|%d|%f|%f|%f|%f|%f|%f|%d|%255[^\r\n]",
 					&grp, &src_cache, &baked, &x, &y, &z, &yaw, &pitch, &roll, &team, tpath) == 11 && tpath[0])
@@ -5640,6 +5649,7 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 				if (!baked)
 				{
 					/* Cached tag object not baked into base_map: spawn live now! */
+					g_forge_next_spawn_always = object_always_spawn;
 					forge_3d_spawn_object_at((uint32_t)grp, tpath, (uint8_t)src_cache, x, y, z, yaw, pitch, roll, (int16_t)team, 0);
 				}
 				else
@@ -5698,6 +5708,7 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 					if (found_oidx == NONE)
 					{
 						/* Not yet spawned by scenario: spawn live and record in placed_objects */
+						g_forge_next_spawn_always = object_always_spawn;
 						forge_3d_spawn_object_at((uint32_t)grp, tpath, (uint8_t)src_cache, x, y, z, yaw, pitch, roll, (int16_t)team, 0);
 					}
 					else if (g_forge.edit_state.placed_object_count < FORGE_MAX_PLACED_OBJECTS)
@@ -5719,6 +5730,7 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 						po->x = x; po->y = y; po->z = z;
 						po->yaw = yaw; po->pitch = pitch; po->roll = roll;
 						po->team_index = (int16_t)team;
+						po->always_spawn = (uint8_t)(object_always_spawn && (uint32_t)grp == 'vehi');
 
 						if (fobj && fobj->definition_index != NONE)
 						{
@@ -5741,6 +5753,7 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 							inst->source_cache_id = (uint8_t)src_cache;
 							inst->is_default_scenario_object = 0;
 							inst->team_designator = (int16_t)team;
+							inst->always_spawn = po->always_spawn;
 							inst->x = x; inst->y = y; inst->z = z;
 							inst->yaw = yaw; inst->pitch = pitch; inst->roll = roll;
 							snprintf(inst->tag_path, sizeof(inst->tag_path), "%s", tpath);
@@ -6964,10 +6977,12 @@ void forge_load_saved_map_state_if_present(char const *map_name)
 	snprintf(leaf, sizeof(leaf), "%s", slash ? (slash + 1) : map_name);
 
 	/* 1. Read embedded [OpenCE Forge Map] / [ForgeState] directly from .map header (0x1E4 / 0x1E8)
-	(an MCC map's level, Forge's own in mcc_maps\forge: its file, and nothing beside) */
-	if (mcc_level_name(map_name))
-		f = forge_saved_map_open(map_name);
-	else
+	(the map's file as the game finds it, as forge_saved_map and the bake do:
+	in a Map Manager folder of custom_maps too, whose maps were played with
+	none of their objects. An MCC map's level, Forge's own in mcc_maps\forge:
+	its file, and nothing beside) */
+	f = forge_saved_map_open(map_name);
+	if (!f && !mcc_level_name(map_name))
 	{
 		snprintf(map_path, sizeof(map_path), "custom_maps/%s.map", leaf);
 		f = fopen(map_path, "rb");

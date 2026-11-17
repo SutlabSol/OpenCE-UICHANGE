@@ -8647,11 +8647,16 @@ real game_engine_get_damage_multiplier(
 	return result;
 }
 
+boolean game_engine_vehicle_always_spawn = FALSE;
+
 long game_engine_remap_vehicle(
 	long vehicle_definition_index)
 {
 	long result = vehicle_definition_index;
 
+	/* port: (game_engine.h) */
+	if (game_engine_vehicle_always_spawn)
+		return result;
 	if (mcc_vehicle_placement_rules())
 		return result;
 
