@@ -118,7 +118,7 @@ boolean mcc_ui_trusted_action(struct widget_instance *widget, word function)
 {
     struct mcc_ui_widget_prefix const *prefix = (void const *)widget;
     return widget && mcc_cache_tags_loaded() &&
-        function >= MCC_PAUSE_ACTION_RESUME && function <= MCC_PAUSE_ACTION_FRIENDLY_FIRE &&
+        function >= MCC_PAUSE_ACTION_RESUME && function <= MCC_PAUSE_ACTION_FORGE_SAVE &&
         mcc_pause_owns(prefix->definition);
 }
 
@@ -248,7 +248,7 @@ boolean mcc_ui_event_function(struct widget_instance *widget,
     if (!mcc_ui_owns_widget(widget)) return FALSE;
     controller = mcc_ui_controller(widget, event);
     *result = TRUE;
-    if (function >= MCC_PAUSE_ACTION_RESUME && function <= MCC_PAUSE_ACTION_FRIENDLY_FIRE) {
+    if (function >= MCC_PAUSE_ACTION_RESUME && function <= MCC_PAUSE_ACTION_FORGE_SAVE) {
         if (!mcc_ui_trusted_action(widget, function)) {
             *result = FALSE;
             return TRUE;
@@ -284,6 +284,14 @@ boolean mcc_ui_event_function(struct widget_instance *widget,
             if (*result) mcc_ui_close_for_controller(controller, deleted);
             return TRUE;
         case MCC_PAUSE_ACTION_SETTINGS: function = 137; break;
+        case MCC_PAUSE_ACTION_FORGE_SAVE: {
+            /* (as Forge's own pause button: the menus closed, then its
+             * name prompt, or an update of the map saved before) */
+            extern void forge_trigger_save_map_action(void);
+            mcc_ui_close_for_controller(controller, deleted);
+            forge_trigger_save_map_action();
+            return TRUE;
+        }
         case MCC_PAUSE_ACTION_FRIENDLY_FIRE:
             if (!network_coop_active()) { *result = FALSE; return TRUE; }
             *result = config_write("network.coop_own_friendly_fire",

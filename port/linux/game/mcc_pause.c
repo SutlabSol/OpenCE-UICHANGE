@@ -56,11 +56,13 @@ typedef char mcc_pause_child_size[sizeof(struct mcc_pause_child) == 0x50 ? 1 : -
 typedef char mcc_pause_child_offset[offsetof(struct mcc_pause_widget, children) == 0x3E0 ? 1 : -1];
 
 enum { MCC_PAUSE_MAX_TAGS = 512, MCC_PAUSE_ARENA_BYTES = 2 * 1024 * 1024 };
-enum { SOLO, COOP_HOST, COOP_CLIENT, MP_LOCAL, MP_HOST, MP_CLIENT, MODE_COUNT };
+/* (MP_FORGE_*: a Forge session's, with SAVE MAP..: Forge's own pause button is
+ * the PC menus', which an MCC level has not) */
+enum { SOLO, COOP_HOST, COOP_CLIENT, MP_LOCAL, MP_HOST, MP_CLIENT, MP_FORGE_LOCAL, MP_FORGE_HOST, MODE_COUNT };
 enum { LABEL_RESUME, LABEL_REVERT, LABEL_SAVE_QUIT, LABEL_LEAVE, LABEL_SETTINGS,
     LABEL_END, LABEL_OBJECTIVES, LABEL_CONFIRM_REVERT, LABEL_CONFIRM_RESTART,
     LABEL_CONFIRM_SAVE_QUIT, LABEL_ATTENTION, LABEL_RESTART_LEVEL, LABEL_FOOTER,
-    LABEL_SELECT, LABEL_ACCEPT, LABEL_SAVING, LABEL_FRIENDLY_ON, LABEL_FRIENDLY_OFF, LABEL_COUNT };
+    LABEL_SELECT, LABEL_ACCEPT, LABEL_SAVING, LABEL_FRIENDLY_ON, LABEL_FRIENDLY_OFF, LABEL_SAVE_MAP, LABEL_COUNT };
 
 enum { CONFIRM_REVERT, CONFIRM_RESTART, CONFIRM_SAVE_QUIT, CONFIRM_COUNT };
 static char const *const mcc_pause_labels[LABEL_COUNT] = {
@@ -70,7 +72,7 @@ static char const *const mcc_pause_labels[LABEL_COUNT] = {
     "All progress on this \r\nlevel will be lost.",
     "Saving last checkpoint...\r\nplease don't turn off\r\nyour Xbox console.",
     "ATTENTION", "RESTART LEVEL", "=CANCEL", "=SELECT", "=OK", "SAVING...",
-    "FRIENDLY FIRE ON", "FRIENDLY FIRE OFF"
+    "FRIENDLY FIRE ON", "FRIENDLY FIRE OFF", "SAVE MAP.."
 };
 
 static struct {
@@ -84,6 +86,9 @@ static struct {
     long roots[MODE_COUNT][MCC_PAUSE_LAYOUT_COUNT];
     long confirm[MCC_PAUSE_LAYOUT_COUNT][2][CONFIRM_COUNT];
 } mcc_pause;
+/* (kept across builds: the level's Forge session, told before its pause menus
+ * are chosen) */
+static boolean mcc_pause_forge_session;
 
 static void *mcc_pause_allocate(unsigned long size)
 {
@@ -345,7 +350,8 @@ static long mcc_pause_dialog(short layout, boolean pauses, short kind)
 static long mcc_pause_screen(short mode, short layout)
 {
     boolean campaign = mode <= COOP_CLIENT, pauses = mode == SOLO;
-    boolean host = mode == COOP_HOST || mode == MP_HOST;
+    boolean host = mode == COOP_HOST || mode == MP_HOST || mode == MP_FORGE_HOST;
+    boolean forge = mode == MP_FORGE_LOCAL || mode == MP_FORGE_HOST;
     long root, list, children[6], buttons[6];
     short width = layout == MCC_PAUSE_QUARTER ? 320 : 640, height = layout == MCC_PAUSE_FULL ? 480 : 240;
     short count = 0, child_count = 0, xs[6] = {0}, ys[6] = {0}, bx[6] = {0}, by[6] = {0};
@@ -364,6 +370,8 @@ static long mcc_pause_screen(short mode, short layout)
      * flags would also dismiss other split-screen players' menus. */
     mcc_pause_events(root, MCC_PAUSE_ACTION_RESUME, NONE, 128, TRUE);
     buttons[count++] = mcc_pause_button(layout, button_width, button_height, LABEL_RESUME, MCC_PAUSE_ACTION_RESUME, NONE, 128);
+    if (forge)
+        buttons[count++] = mcc_pause_button(layout, button_width, button_height, LABEL_SAVE_MAP, MCC_PAUSE_ACTION_FORGE_SAVE, NONE, 128);
     if (campaign_growth)
         buttons[count++] = mcc_pause_button(layout, button_width, button_height, LABEL_SETTINGS, MCC_PAUSE_ACTION_SETTINGS, NONE, 128);
     if (campaign_growth && mode != SOLO)
@@ -448,6 +456,11 @@ void mcc_pause_friendly_fire(boolean enabled)
     }
 }
 
+void mcc_pause_forge(boolean session)
+{
+    mcc_pause_forge_session = session;
+}
+
 void mcc_pause_dispose(void)
 {
     if (mcc_pause.arena) free(mcc_pause.arena);
@@ -507,6 +520,7 @@ long mcc_pause_select(boolean campaign, boolean network, boolean host, boolean t
     if (!mcc_pause.arena || mcc_pause.failed || local_count < 1 || local_count > 4) return NONE;
     layout = local_count == 1 ? MCC_PAUSE_FULL : local_count == 2 || (local_count == 3 && first_player) ? MCC_PAUSE_HALF : MCC_PAUSE_QUARTER;
     mode = campaign ? (!network ? SOLO : host ? COOP_HOST : COOP_CLIENT) :
-        !network ? MP_LOCAL : host ? MP_HOST : MP_CLIENT;
+        !network ? (mcc_pause_forge_session ? MP_FORGE_LOCAL : MP_LOCAL) :
+        host ? (mcc_pause_forge_session ? MP_FORGE_HOST : MP_HOST) : MP_CLIENT;
     return mcc_pause.roots[mode][layout];
 }

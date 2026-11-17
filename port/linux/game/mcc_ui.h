@@ -15,7 +15,9 @@ enum {
     MCC_PAUSE_ACTION_RED_TEAM,
     MCC_PAUSE_ACTION_BLUE_TEAM,
     MCC_PAUSE_ACTION_SETTINGS,
-    MCC_PAUSE_ACTION_FRIENDLY_FIRE
+    MCC_PAUSE_ACTION_FRIENDLY_FIRE,
+    /* Forge's SAVE MAP.. (forge_trigger_save_map_action) */
+    MCC_PAUSE_ACTION_FORGE_SAVE
 };
 
 boolean mcc_ui_trusted_action(struct widget_instance *widget, word function);

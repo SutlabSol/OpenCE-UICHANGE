@@ -57,5 +57,8 @@ short mcc_pause_key_button(long parent, long child);
 short mcc_pause_key_offset(long parent, long child, short accept_width, short back_width);
 void mcc_pause_dispose(void);
 void mcc_pause_friendly_fire(boolean enabled);
+/* whether the level is a Forge session's (forge_hooks.c's menu_tags_loaded):
+ * its local and hosted pause menus then have SAVE MAP.. */
+void mcc_pause_forge(boolean session);
 
 #endif

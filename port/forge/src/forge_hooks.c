@@ -2691,6 +2691,13 @@ void menu_tags_loaded(char const *map_name)
 		}
 	}
 
+	/* (an MCC level's pause menus are MCC's own, port/linux/game/mcc_pause.c,
+	   which have their SAVE MAP.. in a Forge session) */
+	{
+		extern void mcc_pause_forge(boolean session);
+		mcc_pause_forge(g_forge_session_enabled && map_name && strcmp(map_name, "ui") != 0);
+	}
+
 	/* Patch "SAVE FORGE MAP" button into the in-game Escape Pause Menu when in a Forge session */
 	if (g_forge_session_enabled && map_name && strcmp(map_name, "ui") != 0)
 	{
