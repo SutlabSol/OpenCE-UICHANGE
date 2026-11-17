@@ -23,11 +23,14 @@ first back to the map list):
 
 Opened from Mods > CUSTOM EDITION MAPS (map_manager_open_library), the
 lists start a level higher, at the whole of custom_maps:
-	LIBRARY       SHARED FILES (bitmaps.map, sounds.map and loc.map: found or
-	              missing), IMPORT MAPS and OPEN MAPS FOLDER (where the
-	              platform has them), NEW FOLDER, then custom_maps' folders
-	              and the maps at its top
+	LIBRARY       REQUIRED FILES (bitmaps.map, sounds.map and loc.map: found
+	              or missing), IMPORT CE MAP (where the platform has it),
+	              MANAGE MAPS
+	MANAGE        NEW FOLDER, then custom_maps' folders and the maps at its
+	              top
 	FOLDER        a folder's maps, DELETE FOLDER
+(OPEN FOLDER, the desktop's button at the screen's top right, is the
+menu's: menu_functions.c's "port ce maps folder".)
 A map chosen in either opens its MAP list, whose B comes back to it, as a
 map deleted does.
 
@@ -52,10 +55,9 @@ enum
 	_map_manager_leaving,
 	/* the map is gone (deleted): the screen goes back to the map list */
 	_map_manager_closes,
-	/* (the library's) IMPORT MAPS and OPEN MAPS FOLDER: the menu's to do
-	(menu_functions.c's map_import_start, and the folder shown) */
+	/* (the library's) IMPORT CE MAP: the menu's to do (menu_functions.c's
+	map_import_start) */
 	_map_manager_import,
-	_map_manager_open_folder,
 };
 
 /* ---------- structures */
@@ -74,11 +76,10 @@ void map_manager_open_at(
 	boolean choosing);
 
 /* the screen opens next at the library (the whole of custom_maps), with
-IMPORT MAPS and OPEN MAPS FOLDER where the platform has them; set before
-the screen is opened, instead of map_manager_open_at */
+IMPORT CE MAP where the platform has it; set before the screen is opened,
+instead of map_manager_open_at */
 void map_manager_open_library(
-	boolean can_import,
-	boolean can_open_folder);
+	boolean can_import);
 
 /* text said over the row chosen's details for a while (what an import
 did), as the last thing done is */
@@ -133,7 +134,7 @@ void map_manager_details(
 
 /* A on a row: _map_manager_stays, _typing, _leaving or _closes (never in
 the library, whose map deleted goes back to its list), or the library's
-_import or _open_folder */
+_import */
 short map_manager_choose(
 	short row);
 

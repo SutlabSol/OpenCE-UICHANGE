@@ -6388,8 +6388,8 @@ def _map_manager() -> list:
                      [("type", "text"), ("controller", 1), ("width", 238), ("height", 22), ("font", "ui\\large_ui"),
                       ("color", "#FF2896FF"), ("text_y", 4)], [])
     lines += _widget(f"{base}/map_state",
-                     [("type", "text"), ("controller", 1), ("width", 134), ("height", 22), ("font", "ui\\small_ui"),
-                      ("color", "#FF2896FF"), ("align", "center"), ("text_y", 6), ("text_flags", "no_focus_test")],
+                     [("type", "text"), ("controller", 1), ("width", 132), ("height", 22), ("font", "ui\\small_ui"),
+                      ("color", "#FF2896FF"), ("align", "right"), ("text_y", 6), ("text_flags", "no_focus_test")],
                      [])
     # (in the lobby's frame, sel_list_desc_bkd's: the row chosen's title, the
     # rest, and under them its map's picture)
@@ -6422,19 +6422,44 @@ def _map_manager() -> list:
 
 # ---------- the main menu's MODS (menu_functions.c's "port hub" functions):
 # a hub laid out as the Map Manager is, a row each with its name and state,
-# and on the right, in the lobby's frame, the row chosen's details: CUSTOM
-# EDITION MAPS (the Map Manager at its library, the whole of custom_maps:
-# "port ce maps init", map_manager.c), MASTER CHIEF COLLECTION MAPS (a hub of
-# its own: MCC's shared files, the Steam Workshop, IMPORT, MCC PACKAGES, MCC
-# DOWNLOADS and, on the desktop, its folder), OPENCE MODS (_mods' screen) and
-# CONTENT EVOLVED WORKSHOP (not yet). A row's screen is opened by the code, as
-# an open= handler would, so that its B comes back to the row
+# and on the right, in the lobby's frame, the row chosen's details: CE MAPS
+# (the Map Manager at its library, the whole of custom_maps: "port ce maps
+# init", map_manager.c), MCC MAPS (a hub of its own: REQUIRED FILES, IMPORT
+# MCC MAPS, IMPORT MCC SHARED FILES, STEAM WORKSHOP), OPEN CE MODS (_mods'
+# screen), and under them COMMUNITY CONTENT, greyed and no row (not yet). A
+# row's screen is opened by the code, as an open= handler would, so that its
+# B comes back to the row. CE MAPS and MCC MAPS have the desktop's OPEN
+# FOLDER at their top right, in their button bars (left and right from BACK)
 MODS_HUB = f"{MODS}/hub"
 MODS_MCC = f"{MODS}/mcc_maps"
 MODS_CE = f"{MODS}/ce_maps"
 # (each hub's rows: the code hides those it has no item for)
-MODS_HUB_ROWS = 4
-MODS_MCC_ROWS = 6
+MODS_HUB_ROWS = 3
+MODS_MCC_ROWS = 4
+# OPEN FOLDER's place: the screen's top right, beside its title, from its
+# button bar (at 414)
+MODS_FOLDER_BUTTON_PLACE = (470, 32 - 414)
+MODS_FOLDER_BUTTON_WIDTH = 150
+
+
+def _mods_folder_bar(base: str, back_run, folder_run: str) -> list:
+    """a screen's button bar: BACK (back_run, else back=), and the
+    desktop's OPEN FOLDER (folder_run) at the screen's top right"""
+    x, y = MODS_FOLDER_BUTTON_PLACE
+    lines = _widget(f"{base}/button_bar",
+                    [("type", "column_list"), ("width", 640), ("height", 28),
+                     ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],
+                    [*([f'<child widget="{base}/button_folder" x="{x}" y="{y}" platform="desktop"/>']
+                       if folder_run else []),
+                     f'<child widget="{base}/button_back" x="510" y="1"/>'])
+    back = ([f'<on event="a" run="{back_run}"/>', f'<on event="start" run="{back_run}"/>'] if back_run else
+            ['<on event="a" back="true"/>', '<on event="start" back="true"/>'])
+    lines += _text_button(f"{base}/button_back", "BACK", back)
+    if folder_run:
+        lines += _text_button(f"{base}/button_folder", "OPEN FOLDER",
+                              [f'<on event="a" run="{folder_run}"/>', f'<on event="start" run="{folder_run}"/>'],
+                              MODS_FOLDER_BUTTON_WIDTH)
+    return lines
 
 
 def _hub_header(name: str, text: str) -> list:
@@ -6444,7 +6469,7 @@ def _hub_header(name: str, text: str) -> list:
                           ("text_x", 13), ("text_y", 16)], [])
 
 
-def _hub_screen(base: str, screen: str, list_name: str, header: list, rows: int) -> list:
+def _hub_screen(base: str, screen: str, list_name: str, header: list, rows: int, folder_run: str = None) -> list:
     """a hub's screen (screen, its widget's whole name): its rows (op_map_<n>,
     as the Map Manager's), their details, and BACK"""
     back = ['<on event="b" back="true"/>', '<on event="back" back="true"/>']
@@ -6486,21 +6511,24 @@ def _hub_screen(base: str, screen: str, list_name: str, header: list, rows: int)
     lines += _widget(f"{base}/map_details_text",
                      [("type", "text"), ("controller", 1), ("left", 412), ("top", 130), ("width", 200),
                       ("height", 272), ("font", "ui\\small_ui"), ("color", "#FF2896FF")], [])
-    lines += _widget(f"{base}/button_bar",
-                     [("type", "column_list"), ("width", 640), ("height", 28),
-                      ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],
-                     [f'<child widget="{base}/button_back" x="510" y="1"/>'])
-    lines += _text_button(f"{base}/button_back", "BACK", ['<on event="a" back="true"/>',
-                                                         '<on event="start" back="true"/>'])
+    lines += _mods_folder_bar(base, None, folder_run)
     return lines
 
 
 def _mods_hub() -> list:
     # (the main menu's item opens it: _mods)
-    lines = _hub_screen(MODS_HUB, f"{MODS}/hub_screen", "hub_list", [f'<child widget="{MODS}/header_mods"/>'],
+    # (COMMUNITY CONTENT: words where a fourth row would be, greyed, no row
+    # to choose)
+    lines = _hub_screen(MODS_HUB, f"{MODS}/hub_screen", "hub_list",
+                        [f'<child widget="{MODS}/header_mods"/>', f'<child widget="{MODS_HUB}/community_content"/>'],
                         MODS_HUB_ROWS)
+    lines += _widget(f"{MODS_HUB}/community_content",
+                     [("type", "text"), ("controller", 1), ("left", 32), ("top", 73 + 30 * MODS_HUB_ROWS),
+                      ("width", 372), ("height", 22), ("text", "COMMUNITY CONTENT (COMING SOON)"),
+                      ("font", "ui\\large_ui"), ("color", "#FF4C5866"), ("text_y", 4),
+                      ("text_flags", "no_focus_test")], [])
     lines += _hub_screen(MODS_MCC, f"{MODS_MCC}/mcc_maps_screen", "mcc_list",
-                         [f'<child widget="{MODS_MCC}/header_mcc"/>'], MODS_MCC_ROWS)
+                         [f'<child widget="{MODS_MCC}/header_mcc"/>'], MODS_MCC_ROWS, "port mcc maps folder")
     lines += _hub_header(f"{MODS_MCC}/header_mcc", "MASTER CHIEF COLLECTION MAPS")
     # (CUSTOM EDITION MAPS: the Map Manager's rows and details, its list's
     # opening the library's)
@@ -6518,7 +6546,8 @@ def _mods_hub() -> list:
                       '<on event="deleted" run="port maps close"/>',
                       *[f'<child widget="{MAPS}/op_map_{index + 1}" x="20" y="{73 + 30 * index}"/>'
                         for index in range(MAP_MANAGER_ROWS)],
-                      f'<child widget="{MAPS}/button_bar" y="414"/>'])
+                      f'<child widget="{MODS_CE}/button_bar" y="414"/>'])
+    lines += _mods_folder_bar(MODS_CE, "port maps back", "port ce maps folder")
     return lines
 
 

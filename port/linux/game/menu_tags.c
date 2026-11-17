@@ -477,7 +477,8 @@ static char const *const port_function_names[] =
 	"port maps init", "port maps close", "port maps choose", "port maps back", "port map manage",
 	/* (the main menu's MODS and its MASTER CHIEF COLLECTION MAPS, and its
 	CUSTOM EDITION MAPS: the Map Manager at its library: menu_functions.c) */
-	"port hub init", "port hub close", "port hub choose", "port ce maps init",
+	"port hub init", "port hub close", "port hub choose", "port ce maps init", "port ce maps folder",
+	"port mcc maps folder",
 	/* (the Steam Workshop screen: steam_downloads.c) */
 	"port steam init", "port steam close", "port steam choose", "port steam back",
 	/* (Social: the main menu's Y, and Chat's BLOCKED & MUTED: menu_functions.c, social_menu.c) */

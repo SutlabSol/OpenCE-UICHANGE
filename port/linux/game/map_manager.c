@@ -65,6 +65,7 @@ enum
 	_list_compare,
 	/* (Mods > CUSTOM EDITION MAPS: map_manager_open_library) */
 	_list_library,
+	_list_manage,
 	_list_folder,
 	NUMBER_OF_LISTS
 };
@@ -99,7 +100,7 @@ enum
 	/* (the library's and a folder's: a map's value is its display index) */
 	_row_shared_files,
 	_row_import,
-	_row_open_folder,
+	_row_manage,
 	_row_new_folder,
 	_row_folder,
 	_row_library_map,
@@ -183,7 +184,6 @@ static struct
 	boolean library;
 	boolean open_library;
 	boolean can_import;
-	boolean can_open_folder;
 	char folder[CUSTOM_EDITION_MAP_CATEGORY_LENGTH];
 	short folder_maps[CUSTOM_EDITION_MAP_FOLDERS_MAXIMUM];
 	/* which of the shared files are there (looked at as the library opens,
@@ -443,8 +443,9 @@ static void rows_build(
 		row_add(_row_shared_files, 0);
 		if (manager.can_import)
 			row_add(_row_import, 0);
-		if (manager.can_open_folder)
-			row_add(_row_open_folder, 0);
+		row_add(_row_manage, 0);
+		break;
+	case _list_manage:
 		row_add(_row_new_folder, 0);
 		folder_maps_count();
 		for (index = 0; index < custom_edition_maps_folder_count() && index < CUSTOM_EDITION_MAP_FOLDERS_MAXIMUM; index++)
@@ -861,7 +862,7 @@ static void picture_choose(
 			custom_edition_maps_file_path(row->value, ".bmp", manager.picture_wanted, sizeof(manager.picture_wanted));
 		return;
 	}
-	if (manager.list == _list_library || manager.list == _list_folder)
+	if (manager.list == _list_library || manager.list == _list_manage || manager.list == _list_folder)
 		return;
 	have = map_get(&display_index, &file);
 	if (!have)
@@ -897,12 +898,10 @@ void map_manager_say(
 }
 
 void map_manager_open_library(
-	boolean can_import,
-	boolean can_open_folder)
+	boolean can_import)
 {
 	manager.open_library = TRUE;
 	manager.can_import = can_import;
-	manager.can_open_folder = can_open_folder;
 	manager.open_at[0] = 0;
 }
 
@@ -1009,13 +1008,13 @@ void map_manager_poll(
 			}
 		}
 	}
-	if (manager.list == _list_library || manager.list == _list_folder)
+	if (manager.list == _list_library || manager.list == _list_manage || manager.list == _list_folder)
 	{
-		/* (a folder gone: the library) */
+		/* (a folder gone: MANAGE MAPS) */
 		if (manager.list == _list_folder && folder_index() == NONE)
 		{
 			manager.folder[0] = 0;
-			manager.list = _list_library;
+			manager.list = _list_manage;
 		}
 	}
 	else if (!map_get(&display_index, &file))
@@ -1024,7 +1023,7 @@ void map_manager_poll(
 		if (manager.library)
 		{
 			manager.map[0] = 0;
-			manager.list = manager.folder[0] && folder_index() != NONE ? _list_folder : _list_library;
+			manager.list = manager.folder[0] && folder_index() != NONE ? _list_folder : _list_manage;
 		}
 		/* (else no rows, the screen's B leaves) */
 		else
@@ -1171,17 +1170,17 @@ void map_manager_row(
 		break;
 	}
 	case _row_shared_files:
-		snprintf(name, (size_t)name_size, "SHARED FILES");
+		snprintf(name, (size_t)name_size, "REQUIRED FILES");
 		if (shared_missing())
 			snprintf(state, (size_t)state_size, "%d MISSING", shared_missing());
 		else
 			snprintf(state, (size_t)state_size, "ALL FOUND");
 		break;
 	case _row_import:
-		snprintf(name, (size_t)name_size, "IMPORT MAPS");
+		snprintf(name, (size_t)name_size, "IMPORT CE MAP");
 		break;
-	case _row_open_folder:
-		snprintf(name, (size_t)name_size, "OPEN MAPS FOLDER");
+	case _row_manage:
+		snprintf(name, (size_t)name_size, "MANAGE MAPS");
 		break;
 	case _row_new_folder:
 		snprintf(name, (size_t)name_size, "NEW FOLDER");
@@ -1308,7 +1307,7 @@ void map_manager_details(
 			short index;
 			long length;
 
-			snprintf(title, (size_t)title_size, "Shared files");
+			snprintf(title, (size_t)title_size, "Required files");
 			about[0] = 0;
 			for (index = 0; index < SHARED_FILE_COUNT; index++)
 			{
@@ -1318,20 +1317,19 @@ void map_manager_details(
 			}
 			length = (long)strlen(about);
 			snprintf(about + length, sizeof(about) - (size_t)length, " \n%s",
-				!halo_custom_edition_tag_cache() ? "Custom Edition maps cannot run on this device (the log says why)." :
-				shared_missing() ? "Custom Edition maps take their bitmaps, sounds and text from these. Copy them from "
-					"a Halo Custom Edition install's maps folder into the maps folder, then press A." :
-				"Custom Edition maps take their bitmaps, sounds and text from these. A looks again.");
+				!halo_custom_edition_tag_cache() ? "Custom Edition maps can't run on this device (the log says why)." :
+				shared_missing() ? "Copy them from a Custom Edition install's maps folder into maps, then press A." :
+				"Every Custom Edition map needs these. A checks again.");
 			break;
 		}
 		case _row_import:
-			snprintf(title, (size_t)title_size, "Import maps");
+			snprintf(title, (size_t)title_size, "Import CE map");
 			snprintf(about, sizeof(about), "%s", import_help);
 			break;
-		case _row_open_folder:
-			snprintf(title, (size_t)title_size, "custom_maps");
-			snprintf(about, sizeof(about), "A opens custom_maps in the file browser. Maps put there show up here "
-				"and in the map lists.");
+		case _row_manage:
+			snprintf(title, (size_t)title_size, "Manage maps");
+			snprintf(about, sizeof(about), "custom_maps' folders and maps: A lists them, to move, describe, picture "
+				"or delete a map, and to make or delete folders.");
 			break;
 		case _row_new_folder:
 			snprintf(title, (size_t)title_size, "New folder");
@@ -1406,7 +1404,7 @@ short map_manager_choose(
 			if (!manager.library)
 				return _map_manager_closes;
 			manager.map[0] = 0;
-			manager.list = manager.folder[0] ? _list_folder : _list_library;
+			manager.list = manager.folder[0] ? _list_folder : _list_manage;
 			rows_build();
 		}
 		break;
@@ -1416,8 +1414,10 @@ short map_manager_choose(
 		break;
 	case _row_import:
 		return _map_manager_import;
-	case _row_open_folder:
-		return _map_manager_open_folder;
+	case _row_manage:
+		manager.folder[0] = 0;
+		list_open(_list_manage);
+		break;
 	case _row_new_folder:
 		return keyboard_open(_typing_new_folder, 0) ? _map_manager_typing : _map_manager_stays;
 	case _row_folder:
@@ -1435,7 +1435,7 @@ short map_manager_choose(
 		if (confirmed(row, "delete the folder and its maps") && folder_delete())
 		{
 			manager.folder[0] = 0;
-			manager.list = _list_library;
+			manager.list = _list_manage;
 			rows_build();
 		}
 		break;
@@ -1536,10 +1536,15 @@ boolean map_manager_back(
 		if (!manager.library)
 			return FALSE;
 		manager.map[0] = 0;
-		up = manager.folder[0] && folder_index() != NONE ? _list_folder : _list_library;
+		up = manager.folder[0] && folder_index() != NONE ? _list_folder : _list_manage;
 		break;
 	case _list_folder:
 		manager.folder[0] = 0;
+		up = _list_manage;
+		break;
+	case _list_manage:
+		if (!manager.library)
+			return FALSE;
 		up = _list_library;
 		break;
 	default: return FALSE;

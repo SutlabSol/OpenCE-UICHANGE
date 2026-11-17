@@ -12339,14 +12339,6 @@ static boolean maps_choose(struct widget_instance *widget, boolean *widget_delet
 	case _map_manager_import:
 		map_import_start();
 		break;
-	case _map_manager_open_folder:
-	{
-		char folder[1024];
-
-		platform_translate_path(CUSTOM_EDITION_MAP_DIRECTORY, folder, sizeof(folder));
-		folder_show(folder);
-		break;
-	}
 	}
 	return TRUE;
 }
@@ -12365,14 +12357,15 @@ static boolean maps_back(struct widget_instance *widget, boolean *widget_deleted
 /* ---------- Mods (the main menu's MODS: tools/port_settings.py's
 _mods_hub), and its MASTER CHIEF COLLECTION MAPS: laid out as the Map
 Manager is, with its text boxes' names, a row each with its name and state
-and, on the right, the row chosen's details. MODS has CUSTOM EDITION MAPS
-(the Map Manager at its library: "port ce maps init"), MASTER CHIEF
-COLLECTION MAPS, OPENCE MODS (the mods' own screen) and CONTENT EVOLVED
-WORKSHOP (not yet); MASTER CHIEF COLLECTION MAPS has MCC's shared files, the
-Steam Workshop (once Settings'), IMPORT, MCC PACKAGES and MCC DOWNLOADS
-(Network Setup > Map Sharing's too) and, on the desktop, the folder. A
-screen a row opens is loaded as an open= handler's would be, so its B comes
-back here, to that row. */
+and, on the right, the row chosen's details. MODS has CE MAPS (the Map
+Manager at its library: "port ce maps init"), MCC MAPS and OPEN CE MODS
+(the mods' own screen), and under them COMMUNITY CONTENT, greyed, no row
+(not yet); MCC MAPS has REQUIRED FILES (MCC's shared files), IMPORT MCC
+MAPS, IMPORT MCC SHARED FILES and the Steam Workshop (once Settings'). The
+desktop's OPEN FOLDER, at the top right of CE MAPS and MCC MAPS, shows
+their folder ("port ce maps folder", "port mcc maps folder"). A screen a
+row opens is loaded as an open= handler's would be, so its B comes back
+here, to that row. */
 
 #define HUB_ROWS 6
 #define HUB_DETAILS_LINES MOD_DETAILS_LINES
@@ -12386,21 +12379,16 @@ back here, to that row. */
 #define HUB_MODS_SCREEN "pc\\main_menu\\mods\\mods_screen"
 #define HUB_NETWORK_SETUP "pc\\main_menu\\settings_select\\player_setup\\player_profile_edit\\network_setup\\"
 #define HUB_STEAM_SCREEN HUB_NETWORK_SETUP "steam_workshop\\steam_workshop_screen"
-#define HUB_PACKAGES_SCREEN HUB_NETWORK_SETUP "mcc_packages\\mcc_packages_screen"
-#define HUB_DOWNLOADS_SCREEN HUB_NETWORK_SETUP "mcc_downloads\\screen"
 
 enum
 {
 	_hub_ce_maps,
 	_hub_mcc_maps,
 	_hub_opence_mods,
-	_hub_content_workshop,
 	_hub_mcc_shared,
-	_hub_mcc_steam,
 	_hub_mcc_import,
-	_hub_mcc_packages,
-	_hub_mcc_downloads,
-	_hub_mcc_folder,
+	_hub_mcc_import_shared,
+	_hub_mcc_steam,
 };
 
 /* the Custom Edition resource maps MODS looks for (the Map Manager's
@@ -12426,15 +12414,18 @@ static struct
 	int mcc_count;
 	long mods_on;
 	long mods_count;
-	/* the last thing said, and when */
+	/* the last thing said, when, and over which row's details (it goes
+	when another row is chosen) */
 	char message[MCC_IMPORT_TEXT_SIZE];
 	unsigned long message_time;
+	short message_row;
 } hub_screen;
 
 static void hub_say(char const *text)
 {
 	snprintf(hub_screen.message, sizeof(hub_screen.message), "%s", text);
 	hub_screen.message_time = system_milliseconds();
+	hub_screen.message_row = hub_screen.chosen;
 }
 
 static int hub_mcc_missing(void)
@@ -12475,17 +12466,32 @@ static void hub_items(void)
 		hub_screen.items[hub_screen.count++] = _hub_ce_maps;
 		hub_screen.items[hub_screen.count++] = _hub_mcc_maps;
 		hub_screen.items[hub_screen.count++] = _hub_opence_mods;
-		hub_screen.items[hub_screen.count++] = _hub_content_workshop;
 		return;
 	}
 	hub_screen.items[hub_screen.count++] = _hub_mcc_shared;
-	hub_screen.items[hub_screen.count++] = _hub_mcc_steam;
 	if (map_import_available())
+	{
 		hub_screen.items[hub_screen.count++] = _hub_mcc_import;
-	hub_screen.items[hub_screen.count++] = _hub_mcc_packages;
-	hub_screen.items[hub_screen.count++] = _hub_mcc_downloads;
-	if (platform_import_file_pick_available())
-		hub_screen.items[hub_screen.count++] = _hub_mcc_folder;
+		hub_screen.items[hub_screen.count++] = _hub_mcc_import_shared;
+	}
+	hub_screen.items[hub_screen.count++] = _hub_mcc_steam;
+}
+
+/* an MCC shared file's name as the details show it (mcc_maps'
+_shared/multiplayer/sounds.map: "Multiplayer sounds.map") */
+static void hub_mcc_file_label(char const *path, char *label, size_t size)
+{
+	char const *set = strncmp(path, "_shared/", 8) ? path : path + 8;
+	char const *slash = strchr(set, '/');
+
+	if (!slash)
+	{
+		snprintf(label, size, "%s", path);
+		return;
+	}
+	snprintf(label, size, "%.*s %s", (int)(slash - set), set, slash + 1);
+	if (label[0] >= 'a' && label[0] <= 'z')
+		label[0] = (char)(label[0] - 'a' + 'A');
 }
 
 static void hub_row_text(short item, char *name, size_t name_size, char *state, size_t state_size)
@@ -12496,46 +12502,37 @@ static void hub_row_text(short item, char *name, size_t name_size, char *state, 
 	switch (item)
 	{
 	case _hub_ce_maps:
-		snprintf(name, name_size, "CUSTOM EDITION MAPS");
+		snprintf(name, name_size, "CE MAPS");
 		if (hub_screen.ce_missing)
-			snprintf(state, state_size, "NEEDS FILES");
+			snprintf(state, state_size, "FILES MISSING");
 		break;
 	case _hub_mcc_maps:
-		/* (no state: its name is across the row; the details say it) */
-		snprintf(name, name_size, "MASTER CHIEF COLLECTION MAPS");
+		snprintf(name, name_size, "MCC MAPS");
+		if (missing)
+			snprintf(state, state_size, "FILES MISSING");
 		break;
 	case _hub_opence_mods:
-		snprintf(name, name_size, "OPENCE MODS");
+		snprintf(name, name_size, "OPEN CE MODS");
 		if (hub_screen.mods_count)
 			snprintf(state, state_size, "%ld ON", hub_screen.mods_on);
 		break;
-	case _hub_content_workshop:
-		snprintf(name, name_size, "CONTENT EVOLVED WORKSHOP");
-		snprintf(state, state_size, "SOON");
-		break;
 	case _hub_mcc_shared:
-		snprintf(name, name_size, "SHARED FILES");
+		snprintf(name, name_size, "REQUIRED FILES");
 		if (missing)
 			snprintf(state, state_size, "%d MISSING", missing);
 		else
 			snprintf(state, state_size, "ALL FOUND");
 		break;
+	case _hub_mcc_import:
+		snprintf(name, name_size, "IMPORT MCC MAPS");
+		break;
+	case _hub_mcc_import_shared:
+		snprintf(name, name_size, "IMPORT MCC SHARED FILES");
+		break;
 	case _hub_mcc_steam:
 		snprintf(name, name_size, "STEAM WORKSHOP");
 		if (!steam_downloads_supported())
 			snprintf(state, state_size, "NOT HERE");
-		break;
-	case _hub_mcc_import:
-		snprintf(name, name_size, "IMPORT MCC MAPS");
-		break;
-	case _hub_mcc_packages:
-		snprintf(name, name_size, "MCC PACKAGES");
-		break;
-	case _hub_mcc_downloads:
-		snprintf(name, name_size, "MCC DOWNLOADS");
-		break;
-	case _hub_mcc_folder:
-		snprintf(name, name_size, "OPEN MCC FOLDER");
 		break;
 	default:
 		name[0] = 0;
@@ -12554,45 +12551,41 @@ static void hub_details(short item, char *title, size_t title_size, char *text, 
 	switch (item)
 	{
 	case _hub_ce_maps:
-		snprintf(title, title_size, "Custom Edition maps");
-		snprintf(about, sizeof(about), "Halo Custom Edition's maps, in custom_maps: whether the shared files they "
-			"need are here, importing maps, and sorting them into folders.\n \n%s",
-			hub_screen.ce_missing ? "Some of the shared files (bitmaps.map, sounds.map, loc.map) are missing." :
-			"Their shared files are all here.");
+		snprintf(title, title_size, "CE maps");
+		snprintf(about, sizeof(about), "Halo Custom Edition's maps, in custom_maps: the files they require, "
+			"importing maps, and sorting them into folders.\n \n%s",
+			hub_screen.ce_missing ? "Some required files are missing." : "Their required files are all here.");
 		break;
 	case _hub_mcc_maps:
-		snprintf(title, title_size, "Master Chief Collection maps");
+		snprintf(title, title_size, "MCC maps");
 		snprintf(about, sizeof(about), "Halo: Combat Evolved maps of the Master Chief Collection, in mcc_maps: "
-			"its shared files, the Steam Workshop, importing packages and the copies downloaded from hosts."
-			"\n \n%s", missing ? "Some of MCC's shared files are missing." : "MCC's shared files are all here.");
+			"the files they require, importing maps and the Steam Workshop.\n \n%s",
+			missing ? "Some required files are missing." : "Their required files are all here.");
 		break;
 	case _hub_opence_mods:
-		snprintf(title, title_size, "OpenCE mods");
+		snprintf(title, title_size, "Open CE mods");
 		snprintf(about, sizeof(about), "Mods change the game's own tags and files. Each is a folder of its own in "
 			"the mods folder, beside the maps folder: turn them on or off, and set which plays over which."
 			"\n \n%ld of %ld on.", hub_screen.mods_on, hub_screen.mods_count);
 		break;
-	case _hub_content_workshop:
-		snprintf(title, title_size, "Content Evolved Workshop");
-		snprintf(about, sizeof(about), "Maps, mods and tag profiles shared by Content Evolved's players.\n \nIn "
-			"development: not available yet.");
-		break;
 	case _hub_mcc_shared:
-		snprintf(title, title_size, "Shared files");
+		snprintf(title, title_size, "Required files");
 		for (index = 0; index < hub_screen.mcc_count; index++)
 		{
 			size_t length = strlen(about);
+			char label[96];
 
-			snprintf(about + length, sizeof(about) - length, "%s: %s\n", hub_screen.mcc_names[index],
+			hub_mcc_file_label(hub_screen.mcc_names[index], label, sizeof(label));
+			snprintf(about + length, sizeof(about) - length, "%s: %s\n", label,
 				hub_screen.mcc_present[index] ? "found" : "MISSING");
 		}
 		{
 			size_t length = strlen(about);
 
 			snprintf(about + length, sizeof(about) - length, " \n%s", missing ?
-				"MCC's maps take their bitmaps and sounds from these, in mcc_maps/_shared. A opens the Steam "
-				"Workshop, which downloads them for an account that owns MCC and Halo: CE Anniversary." :
-				"Everything MCC's maps need of MCC's own is here.");
+				"MCC's own files, in mcc_maps/_shared. A opens the Steam Workshop, which downloads them for an "
+				"account that owns MCC and Halo: CE Anniversary; or import them." :
+				"Every MCC map needs these. A checks again.");
 		}
 		break;
 	case _hub_mcc_steam:
@@ -12604,26 +12597,21 @@ static void hub_details(short item, char *title, size_t title_size, char *text, 
 	case _hub_mcc_import:
 		snprintf(title, title_size, "Import MCC maps");
 		snprintf(about, sizeof(about), "%s",
-			"A takes in a .zip of MCC content: Workshop packages, MCC's resource sets, or MCC maps alone (a "
-			"package named after the .zip). A package already installed is asked about first.");
+			"A takes in a .zip of MCC maps: Workshop packages (a ModInfo.json each), or maps alone (a package "
+			"named after the .zip). A package already installed is asked about first.");
 		break;
-	case _hub_mcc_packages:
-		snprintf(title, title_size, "MCC packages");
-		snprintf(about, sizeof(about), "Installed MCC maps, campaign mission order and optional Workshop "
-			"collection folders.");
-		break;
-	case _hub_mcc_downloads:
-		snprintf(title, title_size, "MCC downloads");
-		snprintf(about, sizeof(about), "Storage and removal of copies received from hosts. Original packages and "
-			"saves are kept.");
-		break;
-	case _hub_mcc_folder:
-		snprintf(title, title_size, "mcc_maps");
-		snprintf(about, sizeof(about), "A opens mcc_maps in the file browser.");
+	case _hub_mcc_import_shared:
+		snprintf(title, title_size, "Import MCC shared files");
+		snprintf(about, sizeof(about), "%s",
+			"A takes in a .zip of MCC's halo1 folder, or of its files: halo1/maps/bitmaps.map, and "
+			"halo1/maps/custom_edition/bitmaps.map and sounds.map. They go into mcc_maps/_shared.");
 		break;
 	}
-	if (hub_screen.message[0] && system_milliseconds() - hub_screen.message_time > HUB_MESSAGE_MILLISECONDS)
+	if (hub_screen.message[0] && (system_milliseconds() - hub_screen.message_time > HUB_MESSAGE_MILLISECONDS ||
+		hub_screen.message_row != hub_screen.chosen))
+	{
 		hub_screen.message[0] = 0;
+	}
 	if (hub_screen.message[0])
 		snprintf(text, text_size, "%s\n \n%s", hub_screen.message, about);
 	else
@@ -12782,10 +12770,6 @@ static boolean hub_choose(struct widget_instance *widget, boolean *widget_delete
 		return hub_open(widget, HUB_MCC_MAPS_SCREEN, widget_deleted);
 	case _hub_opence_mods:
 		return hub_open(widget, HUB_MODS_SCREEN, widget_deleted);
-	case _hub_content_workshop:
-		ui_play_audio_feedback_sound(SOUND_ERROR);
-		hub_say("Coming soon: the Content Evolved Workshop is still in development.");
-		return TRUE;
 	case _hub_mcc_shared:
 		hub_look();
 		if (!hub_mcc_missing())
@@ -12810,23 +12794,26 @@ static boolean hub_choose(struct widget_instance *widget, boolean *widget_delete
 		}
 		return hub_open(widget, HUB_STEAM_SCREEN, widget_deleted);
 	case _hub_mcc_import:
+	case _hub_mcc_import_shared:
 		ui_play_audio_feedback_sound(SOUND_FORWARD);
 		map_import_start();
 		return TRUE;
-	case _hub_mcc_packages:
-		return hub_open(widget, HUB_PACKAGES_SCREEN, widget_deleted);
-	case _hub_mcc_downloads:
-		return hub_open(widget, HUB_DOWNLOADS_SCREEN, widget_deleted);
-	case _hub_mcc_folder:
-	{
-		char folder[1024];
+	}
+	return TRUE;
+}
 
-		ui_play_audio_feedback_sound(SOUND_FORWARD);
+/* "port ce maps folder" and "port mcc maps folder" (the desktop's OPEN
+FOLDER, at the top right of CE MAPS and MCC MAPS): custom_maps, or mcc_maps,
+in the system's file browser */
+static boolean mods_folder_open(boolean mcc)
+{
+	char folder[1024];
+
+	if (mcc)
 		snprintf(folder, sizeof(folder), "%s/mcc_maps", platform_mcc_root());
-		folder_show(folder);
-		return TRUE;
-	}
-	}
+	else
+		platform_translate_path(CUSTOM_EDITION_MAP_DIRECTORY, folder, sizeof(folder));
+	ui_play_audio_feedback_sound(folder_show(folder) ? SOUND_FORWARD : SOUND_ERROR);
 	return TRUE;
 }
 
@@ -26191,8 +26178,12 @@ boolean pc_menu_event_function_invoke(
 		}
 		else if (!strcmp(name, "port ce maps init"))
 		{
-			map_manager_open_library(map_import_available(), platform_import_file_pick_available() != 0);
+			map_manager_open_library(map_import_available());
 			return maps_screen_reset(TRUE);
+		}
+		else if (!strcmp(name, "port ce maps folder") || !strcmp(name, "port mcc maps folder"))
+		{
+			return mods_folder_open(!strcmp(name, "port mcc maps folder"));
 		}
 		else if (!strcmp(name, "port hub init") || !strcmp(name, "port hub close"))
 		{
