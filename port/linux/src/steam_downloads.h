@@ -1,7 +1,7 @@
 /*
 STEAM_DOWNLOADS.H
 
-The Steam Workshop screen's model (Settings > STEAM WORKSHOP: tools/port_settings.py's _steam_workshop, menu_functions.c's
+The Steam Workshop screen's model (Mods > MASTER CHIEF COLLECTION MAPS > STEAM WORKSHOP: tools/port_settings.py's _steam_workshop, menu_functions.c's
 "port steam" functions): signing in with Steam (a QR code the Steam mobile
 app scans, or the account's name and password; the refresh token kept in
 steam/session.txt, sealed with the Android Keystore's key in the app's
@@ -96,6 +96,10 @@ int steam_downloads_shared_fetch(void);
 /* the same, without queueing: 1 while being fetched, -1 when they could not
 be, else 0 */
 int steam_downloads_shared_state(void);
+/* which of MCC's shared files mcc_maps has (a few file looks, no Steam):
+how many there are in all, each one's present[] (3 at most) and, when
+names is given, its path in mcc_maps (_shared/singleplayer/bitmaps.map...) */
+int steam_downloads_shared_files(int *present, char const **names, int maximum);
 
 enum
 {

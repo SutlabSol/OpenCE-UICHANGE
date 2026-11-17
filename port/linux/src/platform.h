@@ -107,6 +107,16 @@ cache_files_decompress_windows.c) read ahead by a thread of its own, so that the
 game works on what it has (xbox_files.c); its other reads, and every other file's, are as before */
 void platform_file_read_ahead(HANDLE file);
 const char *platform_data_root(void);
+/* the desktop's IMPORT (Mods > CUSTOM EDITION MAPS and MASTER CHIEF
+COLLECTION MAPS): a .map or .zip file the player picks with the system's
+file dialog, copied into the import inbox (mcc_import.h's inbox, which takes
+it in) on a thread, as <name>.part until it is whole; its file name in
+`picked`. FALSE when none was picked, or no dialog could be shown (why, in
+`picked`); always FALSE where the game has no such dialog (Android, the
+consoles and the web, which import their own ways) */
+BOOL platform_import_file_pick(const char *inbox, char *picked, int size);
+/* whether this build has that dialog */
+BOOL platform_import_file_pick_available(void);
 /* the folder holding mcc_maps: game.mcc.path's, else the data root (xbox_files.c) */
 const char *platform_mcc_root(void);
 /* the Halo Custom Edition install the Xbox drive h:\ is (paths.custom_edition),

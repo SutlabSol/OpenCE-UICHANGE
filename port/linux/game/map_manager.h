@@ -21,6 +21,16 @@ first back to the map list):
 	              which to keep (a shot chosen, or a Theater shot taken,
 	              while it has a picture)
 
+Opened from Mods > CUSTOM EDITION MAPS (map_manager_open_library), the
+lists start a level higher, at the whole of custom_maps:
+	LIBRARY       SHARED FILES (bitmaps.map, sounds.map and loc.map: found or
+	              missing), IMPORT MAPS and OPEN MAPS FOLDER (where the
+	              platform has them), NEW FOLDER, then custom_maps' folders
+	              and the maps at its top
+	FOLDER        a folder's maps, DELETE FOLDER
+A map chosen in either opens its MAP list, whose B comes back to it, as a
+map deleted does.
+
 Only the custom_maps folder's maps are managed (not a Custom Edition
 install's), and nothing is changed while a Custom Edition map is loaded.
 */
@@ -42,6 +52,10 @@ enum
 	_map_manager_leaving,
 	/* the map is gone (deleted): the screen goes back to the map list */
 	_map_manager_closes,
+	/* (the library's) IMPORT MAPS and OPEN MAPS FOLDER: the menu's to do
+	(menu_functions.c's map_import_start, and the folder shown) */
+	_map_manager_import,
+	_map_manager_open_folder,
 };
 
 /* ---------- structures */
@@ -59,8 +73,20 @@ void map_manager_open_at(
 	boolean pictures,
 	boolean choosing);
 
-/* the screen opened (map_manager_open_at's map), or closed (its picture
-let go) */
+/* the screen opens next at the library (the whole of custom_maps), with
+IMPORT MAPS and OPEN MAPS FOLDER where the platform has them; set before
+the screen is opened, instead of map_manager_open_at */
+void map_manager_open_library(
+	boolean can_import,
+	boolean can_open_folder);
+
+/* text said over the row chosen's details for a while (what an import
+did), as the last thing done is */
+void map_manager_say(
+	char const *text);
+
+/* the screen opened (map_manager_open_at's map, or the library), or closed
+(its picture let go) */
 void map_manager_open(
 	void);
 void map_manager_close(
@@ -105,7 +131,9 @@ void map_manager_details(
 	char *text,
 	long text_size);
 
-/* A on a row: _map_manager_stays, _typing, _leaving or _closes */
+/* A on a row: _map_manager_stays, _typing, _leaving or _closes (never in
+the library, whose map deleted goes back to its list), or the library's
+_import or _open_folder */
 short map_manager_choose(
 	short row);
 

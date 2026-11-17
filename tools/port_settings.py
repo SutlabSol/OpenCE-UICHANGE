@@ -107,7 +107,7 @@ DAILY_LEVEL_SKULL_CHILDREN = [f'<child widget="{DAILY_LEVEL_SKULL}" x="{421 + (i
                               for index in range(DAILY_LEVEL_SKULLS)]
 CAMPAIGN_BACK_ITEM_PLACE = (192, 391)
 # the profile settings' rows, in order: the PC version's nine, Gameplay before
-# About, then Steam Workshop and Credits after it, 78 to 372 (the nine's room,
+# About, then Credits after it (the Steam Workshop is Mods' now: _mods_hub), 78 to 372 (the nine's room,
 # to About's top at 342, grown by a row's pitch for the eleventh) so the
 # last one's 32-unit highlight stays beside the description panel (its foot,
 # 440) and left of the button bar's buttons. Each is
@@ -117,7 +117,7 @@ PROFILE_ROWS = [("name_profile_item", 78), ("controller_setup_profile_item", 111
                 ("gamepads_profile_item", 144), ("mouse_settings_profile_item", 177),
                 ("audio_settings_profile_item", 210), ("video_settings_profile_item", 243),
                 ("network_settings_profile_item", 277), ("color_profile_item", 277),
-                ("gameplay_profile_item", None), ("steam_workshop_item", None), ("credits_item", None)]
+                ("gameplay_profile_item", None), ("credits_item", None)]
 PROFILE_ROWS_TOP = 78
 PROFILE_ROWS_LAST_TOP = 372
 
@@ -793,9 +793,6 @@ _network["categories"] = [
      "What the Server Browser lists and its order: the\nsame settings as its Filters screen."),
     ("DISCORD ACCOUNT:", "network_setup/discord_account",
      "Link a Discord account, which lets you join\nservers that block VPNs while you use one."),
-    # (the Steam Workshop: _steam_workshop)
-    ("STEAM WORKSHOP:", "network_setup/steam_workshop",
-     "Sign in with Steam to download MCC's shared files\nand Halo 1 Workshop maps into mcc_maps."),
 ]
 SCREENS["network_setup/map_sharing"] = {
     "screen": "map_sharing_settings_screen", "header": _network["header"], "spacing": 30,
@@ -1290,7 +1287,6 @@ STRING_OVERRIDES = {
         "Internet play, updates and the\\nmultiplayer HUD.\\n\\nProfile:",
         "Change the current profile's\\nfree-for-all multiplayer color.\\n\\nProfile:",
         "How players and the AI fall:\\nthe animation, or a ragdoll.\\n\\nProfile:",
-        "Sign in with Steam to download\\nMCC's files and Workshop maps.\\n\\nProfile:",
         "The people behind the game, and\\nthe licenses of what it uses.\\n\\nProfile:",
     ],
 }
@@ -2567,7 +2563,7 @@ def settings_files() -> dict:
     files[f"{PE}/network_setup/mcc_download".replace("/", ".") + ".xml"] = _mcc_download()
     files[f"{PE}/network_setup/mcc_import".replace("/", ".") + ".xml"] = _mcc_import()
     files[f"{PE}/network_setup/map_import_page".replace("/", ".") + ".xml"] = _map_import_page()
-    files[STEAM_WORKSHOP.replace("/", ".") + ".xml"] = _steam_workshop() + _steam_workshop_item()
+    files[STEAM_WORKSHOP.replace("/", ".") + ".xml"] = _steam_workshop()
     files[f"{PE}/controls_setup".replace("/", ".") + ".xml"] = _controls_screen()
     files["main_menu.difficulty_select.randomizer.xml"] = _randomizer_screen()
     files["main_menu.difficulty_select.skulls.xml"] = _skulls_screen()
@@ -3126,11 +3122,10 @@ WIDGET_PATCHES = {
     f"{PE}/profile_edit_extended_description": {"children": [
         f'<child widget="{LAYOUT}/{controller}/overlay_small" x="4" platform="{spec["platform"]}"/>'
         for controller, spec in CONTROLLERS.items()]},
-    # (Gameplay, Steam Workshop and Credits, in About's place: Gameplay's screen is the gameplay file's; the rows'
-    # places, PROFILE_ROWS)
+    # (Gameplay and Credits, in About's place: Gameplay's screen is the gameplay file's; the rows' places,
+    # PROFILE_ROWS; the Steam Workshop is Mods' now, _mods_hub)
     f"{PE}/profile_edit_select_list": {"remove": [f"{PE}/about_item"], "insert_before": {
         f"{PE}/profile_edit_button_bar": [f'<child widget="{PE}/gameplay_profile_item"/>',
-                                          f'<child widget="{PE}/steam_workshop_item"/>',
                                           f'<child widget="{PE}/credits_item"/>'],
     }},
     # (straight to their screens: no "checking for updates" dialog, which
@@ -6068,7 +6063,7 @@ def multiplayer_files() -> dict:
         OPENCE_EDIT.replace("/", ".") + ".port.xml": head + _opence_options() + ["</menus>", ""],
         FLOOD_EDIT.replace("/", ".") + ".port.xml": head + _floodfection_options() + ["</menus>", ""],
         MODS.replace("/", ".") + ".xml": [head[0], "<!-- The port's Mods screen, in the PC version's style "
-                                          "(tools/port_settings.py) -->", head[2]] + _mods() + ["</menus>", ""],
+                                          "(tools/port_settings.py) -->", head[2]] + _mods() + _mods_hub() + ["</menus>", ""],
         DAILY.replace("/", ".") + ".xml": [head[0], "<!-- The port's Daily Challenge screens, in the PC version's "
                                            "style (tools/port_settings.py) -->", head[2]] + _daily() +
         ["</menus>", ""],
@@ -6247,9 +6242,11 @@ def _mods() -> list:
     bar: IMPORT (a mod's .zip file, the app's file picker,
     HaloActivity.importMods) and DELETE (the mod chosen, at a second press)"""
     base = MODS
+    # (the main menu's MODS opens the hub, _mods_hub, whose OPENCE MODS is
+    # this screen)
     lines = _widget("main_menu/main_menu_item_mods",
                     [("type", "text"), ("width", 256), ("height", 33), ("bitmap", "main_menu/menu_mods")],
-                    [f'<on event="a" open="{base}/mods_screen"/>', f'<on event="start" open="{base}/mods_screen"/>',
+                    [f'<on event="a" open="{base}/hub_screen"/>', f'<on event="start" open="{base}/hub_screen"/>',
                      '<on event="left_mouse" run="mouse emit accept event"/>'])
     lines += _widget(f"{base}/mods_screen", [("width", 640), ("height", 480),
                                              ("flags", "pass_unhandled_to_focused_child pause_game"),
@@ -6423,9 +6420,111 @@ def _map_manager() -> list:
     return lines
 
 
-# ---------- the Steam Workshop (port/linux/src/steam_downloads.c; Settings >
-# STEAM WORKSHOP, a row of the profile settings: _steam_workshop_item; the
-# widgets keep their Network Setup names, which mcc_share.c opens): laid out as the Map Manager is, with its
+# ---------- the main menu's MODS (menu_functions.c's "port hub" functions):
+# a hub laid out as the Map Manager is, a row each with its name and state,
+# and on the right, in the lobby's frame, the row chosen's details: CUSTOM
+# EDITION MAPS (the Map Manager at its library, the whole of custom_maps:
+# "port ce maps init", map_manager.c), MASTER CHIEF COLLECTION MAPS (a hub of
+# its own: MCC's shared files, the Steam Workshop, IMPORT, MCC PACKAGES, MCC
+# DOWNLOADS and, on the desktop, its folder), OPENCE MODS (_mods' screen) and
+# CONTENT EVOLVED WORKSHOP (not yet). A row's screen is opened by the code, as
+# an open= handler would, so that its B comes back to the row
+MODS_HUB = f"{MODS}/hub"
+MODS_MCC = f"{MODS}/mcc_maps"
+MODS_CE = f"{MODS}/ce_maps"
+# (each hub's rows: the code hides those it has no item for)
+MODS_HUB_ROWS = 4
+MODS_MCC_ROWS = 6
+
+
+def _hub_header(name: str, text: str) -> list:
+    """a screen's title as the Steam Workshop's is: words of the large font"""
+    return _widget(name, [("type", "text"), ("controller", 1), ("left", 35), ("top", 11), ("width", 363),
+                          ("height", 59), ("text", text), ("font", "ui\\large_ui"), ("color", "#FFFFFFFF"),
+                          ("text_x", 13), ("text_y", 16)], [])
+
+
+def _hub_screen(base: str, screen: str, list_name: str, header: list, rows: int) -> list:
+    """a hub's screen (screen, its widget's whole name): its rows (op_map_<n>,
+    as the Map Manager's), their details, and BACK"""
+    back = ['<on event="b" back="true"/>', '<on event="back" back="true"/>']
+    lines = _widget(screen, [("width", 640), ("height", 480),
+                             ("flags", "pass_unhandled_to_focused_child pause_game"), ("bitmap", "bitmaps/gradient")],
+                    [*back, '<child widget="main_menu/new_select/sel_list_desc_bkd"/>',
+                     f'<child widget="{base}/{list_name}"/>', *header])
+    lines += _widget(f"{base}/{list_name}", [("type", "column_list"), ("width", 640), ("height", 480),
+                                             ("flags", "pass_unhandled_to_focused_child up_down_tabs_children"),
+                                             ("description", f"{base}/details")],
+                     ['<data input="port hub update"/>', '<on event="created" run="port hub init"/>',
+                      '<on event="deleted" run="port hub close"/>',
+                      *[f'<child widget="{base}/op_map_{index + 1}" x="20" y="{73 + 30 * index}"/>'
+                        for index in range(rows)],
+                      f'<child widget="{base}/button_bar" y="414"/>'])
+    for index in range(rows):
+        lines += _widget(f"{base}/op_map_{index + 1}",
+                         [("width", 390), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
+                          ("bitmap", "bitmaps/sel_list_item_bkd_top" if index == 0 else "bitmaps/sel_list_item_bkd"),
+                          ("color", "#FF2896FF")],
+                         ['<on event="a" run="port hub choose"/>', '<on event="start" run="port hub choose"/>',
+                          '<on event="left_mouse" run="mouse emit accept event"/>',
+                          f'<child widget="{base}/map_name" x="12"/>',
+                          f'<child widget="{base}/map_state" x="282"/>'])
+    # (the name across the row, the state at its right end over it: the
+    # rows' long names have none)
+    lines += _widget(f"{base}/map_name",
+                     [("type", "text"), ("controller", 1), ("width", 372), ("height", 22), ("font", "ui\\large_ui"),
+                      ("color", "#FF2896FF"), ("text_y", 4)], [])
+    lines += _widget(f"{base}/map_state",
+                     [("type", "text"), ("controller", 1), ("width", 100), ("height", 22), ("font", "ui\\small_ui"),
+                      ("color", "#FF2896FF"), ("align", "right"), ("text_y", 6), ("text_flags", "no_focus_test")],
+                     [])
+    lines += _widget(f"{base}/details", [("width", 640), ("height", 480)],
+                     [f'<child widget="{base}/map_details_name"/>', f'<child widget="{base}/map_details_text"/>'])
+    lines += _widget(f"{base}/map_details_name",
+                     [("type", "text"), ("controller", 1), ("left", 412), ("top", 84), ("width", 200), ("height", 44),
+                      ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
+    lines += _widget(f"{base}/map_details_text",
+                     [("type", "text"), ("controller", 1), ("left", 412), ("top", 130), ("width", 200),
+                      ("height", 272), ("font", "ui\\small_ui"), ("color", "#FF2896FF")], [])
+    lines += _widget(f"{base}/button_bar",
+                     [("type", "column_list"), ("width", 640), ("height", 28),
+                      ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],
+                     [f'<child widget="{base}/button_back" x="510" y="1"/>'])
+    lines += _text_button(f"{base}/button_back", "BACK", ['<on event="a" back="true"/>',
+                                                         '<on event="start" back="true"/>'])
+    return lines
+
+
+def _mods_hub() -> list:
+    # (the main menu's item opens it: _mods)
+    lines = _hub_screen(MODS_HUB, f"{MODS}/hub_screen", "hub_list", [f'<child widget="{MODS}/header_mods"/>'],
+                        MODS_HUB_ROWS)
+    lines += _hub_screen(MODS_MCC, f"{MODS_MCC}/mcc_maps_screen", "mcc_list",
+                         [f'<child widget="{MODS_MCC}/header_mcc"/>'], MODS_MCC_ROWS)
+    lines += _hub_header(f"{MODS_MCC}/header_mcc", "MASTER CHIEF COLLECTION MAPS")
+    # (CUSTOM EDITION MAPS: the Map Manager's rows and details, its list's
+    # opening the library's)
+    back = ['<on event="b" run="port maps back"/>', '<on event="back" run="port maps back"/>']
+    lines += _widget(f"{MODS_CE}/ce_maps_screen", [("width", 640), ("height", 480),
+                                                  ("flags", "pass_unhandled_to_focused_child pause_game"),
+                                                  ("bitmap", "bitmaps/gradient")],
+                     [*back, '<child widget="main_menu/new_select/sel_list_desc_bkd"/>',
+                      f'<child widget="{MODS_CE}/maps_list"/>', f'<child widget="{MODS_CE}/header_ce"/>'])
+    lines += _hub_header(f"{MODS_CE}/header_ce", "CUSTOM EDITION MAPS")
+    lines += _widget(f"{MODS_CE}/maps_list", [("type", "column_list"), ("width", 640), ("height", 480),
+                                              ("flags", "pass_unhandled_to_focused_child up_down_tabs_children"),
+                                              ("description", f"{MAPS}/map_details")],
+                     ['<data input="port maps update"/>', '<on event="created" run="port ce maps init"/>',
+                      '<on event="deleted" run="port maps close"/>',
+                      *[f'<child widget="{MAPS}/op_map_{index + 1}" x="20" y="{73 + 30 * index}"/>'
+                        for index in range(MAP_MANAGER_ROWS)],
+                      f'<child widget="{MAPS}/button_bar" y="414"/>'])
+    return lines
+
+
+# ---------- the Steam Workshop (port/linux/src/steam_downloads.c; Mods >
+# MASTER CHIEF COLLECTION MAPS > STEAM WORKSHOP, _mods_hub; the widgets keep
+# their Network Setup names, which mcc_share.c opens): laid out as the Map Manager is, with its
 # text boxes' names (menu_functions.c measures and fills them alike): on the
 # left the rows (the account, MCC's shared files, the sort, a page of the
 # Halo 1 Workshop's items, the pages), a row each with its name and state;
@@ -6435,17 +6534,6 @@ STEAM_WORKSHOP = f"{PE}/network_setup/steam_workshop"
 STEAM_ROWS = 11
 # (a fifth smaller than the frame would hold: 160 overflowed it)
 STEAM_PICTURE_BOUNDS = (448, 262, 128, 128)
-
-
-def _steam_workshop_item() -> list:
-    """Settings' Steam Workshop row, before Credits (PROFILE_ROWS)"""
-    screen = f"{STEAM_WORKSHOP}/steam_workshop_screen"
-    return _widget(f"{PE}/steam_workshop_item",
-                   [("type", "text"), ("left", 51), ("top", profile_row_top("steam_workshop_item")), ("width", 232),
-                    ("height", 32), ("bitmap", "bitmaps/list_item_bkd"), ("text", "STEAM WORKSHOP"),
-                    ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("text_x", 13), ("text_y", 5)],
-                   [f'<on event="a" open="{screen}"/>', f'<on event="start" open="{screen}"/>',
-                    '<on event="left_mouse" run="mouse emit accept event"/>'])
 
 
 def _steam_workshop() -> list:

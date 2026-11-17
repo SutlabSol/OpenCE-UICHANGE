@@ -138,6 +138,7 @@ their handlers open opens.
 
 #include "halo_menus.h"
 #include "controller_remap.h"
+#include "cache_file_formats.h"
 #include "custom_edition_cache.h"
 #include "mcc_ui.h"
 #include "mcc_pause.h"
@@ -1765,6 +1766,12 @@ the count changes (map_import_look), as each one comes */
 #define MAP_IMPORT_LOOK_MILLISECONDS 1000
 
 void platform_translate_path(char const *xbox_path, char *host_path, unsigned long host_path_size);
+/* (the desktop's IMPORT: the system's file dialog, the file chosen copied
+into the import inbox; and the system's file browser: sdl_platform.c) */
+int platform_import_file_pick(char const *inbox, char *picked, int size);
+int platform_import_file_pick_available(void);
+void platform_open_url(char const *url);
+char const *platform_mcc_root(void);
 /* (the app's file picker: port/android/host/host_main.c, HaloActivity.importMaps) */
 void host_android_import_maps(const char *folder);
 #if defined(HALO_ANDROID) && !defined(HALO_SWITCH)
@@ -1887,8 +1894,94 @@ imported would never be seen, so the player is told why instead) */
 		map_import.page_screen = ui_widget_load_by_name_or_tag(MAP_IMPORT_PAGE_SCREEN, NONE, NULL, 0, NONE, NONE, NONE);
 	return TRUE;
 #else
-	return FALSE;
+	/* (the desktop's: the system's file dialog, the file chosen copied into
+	the import inbox on a thread, and taken in from there as Android's are;
+	what was imported said by the screen it was asked from:
+	map_import_report_take) */
+	char folder[1024];
+	char picked[256];
+
+	if (!platform_import_file_pick_available())
+		return FALSE;
+	if (!mcc_import_inbox(folder, sizeof(folder)))
+	{
+		snprintf(map_import.report, sizeof(map_import.report), "The import folder can't be made.");
+		map_import.done = TRUE;
+		return TRUE;
+	}
+	if (!platform_import_file_pick(folder, picked, sizeof(picked)))
+	{
+		if (picked[0])
+		{
+			platform_log("maps: IMPORT: no file dialog (%s)", picked);
+			snprintf(map_import.report, sizeof(map_import.report), "No file dialog could be shown (%s). Copy maps "
+				"into custom_maps or mcc_maps yourself.", picked);
+			map_import.done = TRUE;
+		}
+		return TRUE;
+	}
+	platform_log("maps: IMPORT: %s", picked);
+	map_import.importing = TRUE;
+	map_import.maps = map_import_count();
+	map_import.looked = system_milliseconds();
+	return TRUE;
 #endif
+}
+
+/* what the last import did, once it is done and no screen of the import's
+says it (the desktop's, which has none: the Mods screens show it); FALSE
+while there is none */
+static boolean map_import_report_take(char *text, size_t size)
+{
+	if (!map_import.done || map_import.screen || map_import.page_screen)
+		return FALSE;
+	map_import.done = FALSE;
+	snprintf(text, size, "%s", map_import.report);
+	return TRUE;
+}
+
+/* whether this build imports maps by the Mods screens' IMPORT rows (the web
+build's launcher imports its own way) */
+static boolean map_import_available(void)
+{
+#if (defined(HALO_ANDROID) && !defined(HALO_SWITCH)) || defined(HALO_SWITCH) || defined(HALO_PS5)
+	return TRUE;
+#else
+	return platform_import_file_pick_available() != 0;
+#endif
+}
+
+/* a folder (a host path) shown in the system's file browser: the desktop's
+alone (the same builds as its file dialog) */
+static boolean folder_show(char const *path)
+{
+	static char const keep[] = "/-_.~:";
+	char url[2048];
+	size_t length;
+	char const *character;
+
+	if (!platform_import_file_pick_available() || !path[0])
+		return FALSE;
+	snprintf(url, sizeof(url), "file://%s", path[0] == '/' ? "" : "/");
+	length = strlen(url);
+	for (character = path; *character && length + 4 < sizeof(url); character++)
+	{
+		unsigned char letter = (unsigned char)*character;
+
+		if (letter == '\\')
+			url[length++] = '/';
+		else if ((letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z') || (letter >= '0' && letter <= '9') ||
+			strchr(keep, letter))
+		{
+			url[length++] = (char)letter;
+		}
+		else
+			length += (size_t)snprintf(url + length, sizeof(url) - length, "%%%02X", letter);
+	}
+	url[length] = 0;
+	platform_log("maps: showing %s", url);
+	platform_open_url(url);
+	return TRUE;
 }
 
 /* TRUE when maps IMPORT awaits have come: the maps folders are then looked
@@ -9630,7 +9723,7 @@ static void tags_details_text(short place, char *title, size_t title_size, char 
 		{
 			snprintf(title, title_size, "No maps");
 			snprintf(text, text_size, "%s", tags_screen.mcc ? "No MCC maps of this kind: install them in mcc_maps, or "
-				"download them from the Steam Workshop (Settings > STEAM WORKSHOP)." :
+				"download them from the Steam Workshop (Mods > MASTER CHIEF COLLECTION MAPS)." :
 				"No Custom Edition maps of this kind: put them in custom_maps.");
 			break;
 		}
@@ -11790,7 +11883,8 @@ static short maps_row_place(struct widget_instance *row)
 }
 
 /* "port maps init" (the list's created) and "port maps close" (its
-deleted) */
+deleted); "port ce maps init", Mods > CUSTOM EDITION MAPS' list's created:
+the Map Manager at the library, the whole of custom_maps */
 static boolean maps_screen_reset(boolean opening)
 {
 	short index;
@@ -11827,6 +11921,13 @@ static void maps_update(struct widget_instance *list)
 	short count;
 	short focused_index;
 
+	/* (what an import from the library did) */
+	{
+		char report[MCC_IMPORT_TEXT_SIZE];
+
+		if (map_import_report_take(report, sizeof(report)))
+			map_manager_say(report);
+	}
 	map_manager_poll();
 	first = map_manager_first();
 	chosen = map_manager_chosen();
@@ -11922,7 +12023,7 @@ static void maps_update(struct widget_instance *list)
 	}
 }
 
-/* ---------- the Steam Workshop (Settings > STEAM WORKSHOP:
+/* ---------- the Steam Workshop (Mods > MASTER CHIEF COLLECTION MAPS > STEAM WORKSHOP:
 steam_downloads.c, tools/port_settings.py's _steam_workshop): laid out as
 the Map Manager is, with its text boxes' names (map_name, map_state,
 map_details_name, map_details_text), its rows op_map_<n>; while signing in,
@@ -12229,10 +12330,23 @@ static boolean maps_choose(struct widget_instance *widget, boolean *widget_delet
 		place = *map_manager_chosen();
 	*map_manager_chosen() = place;
 	ui_play_audio_feedback_sound(SOUND_FORWARD);
-	if (map_manager_choose(place) == _map_manager_closes)
+	switch (map_manager_choose(place))
 	{
+	case _map_manager_closes:
 		ui_widget_port_go_back(widget);
 		*widget_deleted = TRUE;
+		break;
+	case _map_manager_import:
+		map_import_start();
+		break;
+	case _map_manager_open_folder:
+	{
+		char folder[1024];
+
+		platform_translate_path(CUSTOM_EDITION_MAP_DIRECTORY, folder, sizeof(folder));
+		folder_show(folder);
+		break;
+	}
 	}
 	return TRUE;
 }
@@ -12245,6 +12359,474 @@ static boolean maps_back(struct widget_instance *widget, boolean *widget_deleted
 		return TRUE;
 	ui_widget_port_go_back(widget);
 	*widget_deleted = TRUE;
+	return TRUE;
+}
+
+/* ---------- Mods (the main menu's MODS: tools/port_settings.py's
+_mods_hub), and its MASTER CHIEF COLLECTION MAPS: laid out as the Map
+Manager is, with its text boxes' names, a row each with its name and state
+and, on the right, the row chosen's details. MODS has CUSTOM EDITION MAPS
+(the Map Manager at its library: "port ce maps init"), MASTER CHIEF
+COLLECTION MAPS, OPENCE MODS (the mods' own screen) and CONTENT EVOLVED
+WORKSHOP (not yet); MASTER CHIEF COLLECTION MAPS has MCC's shared files, the
+Steam Workshop (once Settings'), IMPORT, MCC PACKAGES and MCC DOWNLOADS
+(Network Setup > Map Sharing's too) and, on the desktop, the folder. A
+screen a row opens is loaded as an open= handler's would be, so its B comes
+back here, to that row. */
+
+#define HUB_ROWS 6
+#define HUB_DETAILS_LINES MOD_DETAILS_LINES
+/* how often what the rows' states say is looked at again (a few files) */
+#define HUB_LOOK_MILLISECONDS 2000
+/* how long the last thing said (an import's report) stays over the details */
+#define HUB_MESSAGE_MILLISECONDS 20000
+
+#define HUB_CE_MAPS_SCREEN "pc\\main_menu\\mods\\ce_maps\\ce_maps_screen"
+#define HUB_MCC_MAPS_SCREEN "pc\\main_menu\\mods\\mcc_maps\\mcc_maps_screen"
+#define HUB_MODS_SCREEN "pc\\main_menu\\mods\\mods_screen"
+#define HUB_NETWORK_SETUP "pc\\main_menu\\settings_select\\player_setup\\player_profile_edit\\network_setup\\"
+#define HUB_STEAM_SCREEN HUB_NETWORK_SETUP "steam_workshop\\steam_workshop_screen"
+#define HUB_PACKAGES_SCREEN HUB_NETWORK_SETUP "mcc_packages\\mcc_packages_screen"
+#define HUB_DOWNLOADS_SCREEN HUB_NETWORK_SETUP "mcc_downloads\\screen"
+
+enum
+{
+	_hub_ce_maps,
+	_hub_mcc_maps,
+	_hub_opence_mods,
+	_hub_content_workshop,
+	_hub_mcc_shared,
+	_hub_mcc_steam,
+	_hub_mcc_import,
+	_hub_mcc_packages,
+	_hub_mcc_downloads,
+	_hub_mcc_folder,
+};
+
+/* the Custom Edition resource maps MODS looks for (the Map Manager's
+library's SHARED FILES) */
+static short const hub_ce_shared_types[] = { _resource_map_bitmaps, _resource_map_sounds, _resource_map_locale };
+
+static struct
+{
+	/* MASTER CHIEF COLLECTION MAPS' (else MODS'), and its rows' items */
+	boolean mcc;
+	short items[HUB_ROWS];
+	short count;
+	short chosen;
+	/* what the details and each row show (made again when it changes) */
+	char shown[MOD_DETAILS_LENGTH];
+	char row_shown[HUB_ROWS][2 * ROW_TEXT_LENGTH + 16];
+	/* what was looked at, and when: the Custom Edition resource maps
+	missing, MCC's shared files, and the mods on */
+	unsigned long looked;
+	short ce_missing;
+	int mcc_present[4];
+	char const *mcc_names[4];
+	int mcc_count;
+	long mods_on;
+	long mods_count;
+	/* the last thing said, and when */
+	char message[MCC_IMPORT_TEXT_SIZE];
+	unsigned long message_time;
+} hub_screen;
+
+static void hub_say(char const *text)
+{
+	snprintf(hub_screen.message, sizeof(hub_screen.message), "%s", text);
+	hub_screen.message_time = system_milliseconds();
+}
+
+static int hub_mcc_missing(void)
+{
+	int index;
+	int missing = 0;
+
+	for (index = 0; index < hub_screen.mcc_count; index++)
+		missing += !hub_screen.mcc_present[index];
+	return missing;
+}
+
+/* the files and mods the rows' states tell of */
+static void hub_look(void)
+{
+	char path[256];
+	short index;
+	long position;
+
+	hub_screen.looked = system_milliseconds();
+	hub_screen.ce_missing = 0;
+	for (index = 0; index < (short)NUMBEROF(hub_ce_shared_types); index++)
+		hub_screen.ce_missing += !custom_edition_resource_map_file_path(hub_ce_shared_types[index], path);
+	hub_screen.mcc_count = steam_downloads_shared_files(hub_screen.mcc_present, hub_screen.mcc_names,
+		(int)NUMBEROF(hub_screen.mcc_present));
+	hub_screen.mods_count = port_mods_count();
+	hub_screen.mods_on = 0;
+	for (position = 0; position < hub_screen.mods_count; position++)
+		hub_screen.mods_on += port_mods_on(port_mods_at(position)) != 0;
+}
+
+/* the screen's rows, by its list */
+static void hub_items(void)
+{
+	hub_screen.count = 0;
+	if (!hub_screen.mcc)
+	{
+		hub_screen.items[hub_screen.count++] = _hub_ce_maps;
+		hub_screen.items[hub_screen.count++] = _hub_mcc_maps;
+		hub_screen.items[hub_screen.count++] = _hub_opence_mods;
+		hub_screen.items[hub_screen.count++] = _hub_content_workshop;
+		return;
+	}
+	hub_screen.items[hub_screen.count++] = _hub_mcc_shared;
+	hub_screen.items[hub_screen.count++] = _hub_mcc_steam;
+	if (map_import_available())
+		hub_screen.items[hub_screen.count++] = _hub_mcc_import;
+	hub_screen.items[hub_screen.count++] = _hub_mcc_packages;
+	hub_screen.items[hub_screen.count++] = _hub_mcc_downloads;
+	if (platform_import_file_pick_available())
+		hub_screen.items[hub_screen.count++] = _hub_mcc_folder;
+}
+
+static void hub_row_text(short item, char *name, size_t name_size, char *state, size_t state_size)
+{
+	int missing = hub_mcc_missing();
+
+	state[0] = 0;
+	switch (item)
+	{
+	case _hub_ce_maps:
+		snprintf(name, name_size, "CUSTOM EDITION MAPS");
+		if (hub_screen.ce_missing)
+			snprintf(state, state_size, "NEEDS FILES");
+		break;
+	case _hub_mcc_maps:
+		/* (no state: its name is across the row; the details say it) */
+		snprintf(name, name_size, "MASTER CHIEF COLLECTION MAPS");
+		break;
+	case _hub_opence_mods:
+		snprintf(name, name_size, "OPENCE MODS");
+		if (hub_screen.mods_count)
+			snprintf(state, state_size, "%ld ON", hub_screen.mods_on);
+		break;
+	case _hub_content_workshop:
+		snprintf(name, name_size, "CONTENT EVOLVED WORKSHOP");
+		snprintf(state, state_size, "SOON");
+		break;
+	case _hub_mcc_shared:
+		snprintf(name, name_size, "SHARED FILES");
+		if (missing)
+			snprintf(state, state_size, "%d MISSING", missing);
+		else
+			snprintf(state, state_size, "ALL FOUND");
+		break;
+	case _hub_mcc_steam:
+		snprintf(name, name_size, "STEAM WORKSHOP");
+		if (!steam_downloads_supported())
+			snprintf(state, state_size, "NOT HERE");
+		break;
+	case _hub_mcc_import:
+		snprintf(name, name_size, "IMPORT MCC MAPS");
+		break;
+	case _hub_mcc_packages:
+		snprintf(name, name_size, "MCC PACKAGES");
+		break;
+	case _hub_mcc_downloads:
+		snprintf(name, name_size, "MCC DOWNLOADS");
+		break;
+	case _hub_mcc_folder:
+		snprintf(name, name_size, "OPEN MCC FOLDER");
+		break;
+	default:
+		name[0] = 0;
+		break;
+	}
+}
+
+static void hub_details(short item, char *title, size_t title_size, char *text, size_t text_size)
+{
+	char about[MOD_DETAILS_LENGTH];
+	int missing = hub_mcc_missing();
+	int index;
+
+	about[0] = 0;
+	title[0] = 0;
+	switch (item)
+	{
+	case _hub_ce_maps:
+		snprintf(title, title_size, "Custom Edition maps");
+		snprintf(about, sizeof(about), "Halo Custom Edition's maps, in custom_maps: whether the shared files they "
+			"need are here, importing maps, and sorting them into folders.\n \n%s",
+			hub_screen.ce_missing ? "Some of the shared files (bitmaps.map, sounds.map, loc.map) are missing." :
+			"Their shared files are all here.");
+		break;
+	case _hub_mcc_maps:
+		snprintf(title, title_size, "Master Chief Collection maps");
+		snprintf(about, sizeof(about), "Halo: Combat Evolved maps of the Master Chief Collection, in mcc_maps: "
+			"its shared files, the Steam Workshop, importing packages and the copies downloaded from hosts."
+			"\n \n%s", missing ? "Some of MCC's shared files are missing." : "MCC's shared files are all here.");
+		break;
+	case _hub_opence_mods:
+		snprintf(title, title_size, "OpenCE mods");
+		snprintf(about, sizeof(about), "Mods change the game's own tags and files. Each is a folder of its own in "
+			"the mods folder, beside the maps folder: turn them on or off, and set which plays over which."
+			"\n \n%ld of %ld on.", hub_screen.mods_on, hub_screen.mods_count);
+		break;
+	case _hub_content_workshop:
+		snprintf(title, title_size, "Content Evolved Workshop");
+		snprintf(about, sizeof(about), "Maps, mods and tag profiles shared by Content Evolved's players.\n \nIn "
+			"development: not available yet.");
+		break;
+	case _hub_mcc_shared:
+		snprintf(title, title_size, "Shared files");
+		for (index = 0; index < hub_screen.mcc_count; index++)
+		{
+			size_t length = strlen(about);
+
+			snprintf(about + length, sizeof(about) - length, "%s: %s\n", hub_screen.mcc_names[index],
+				hub_screen.mcc_present[index] ? "found" : "MISSING");
+		}
+		{
+			size_t length = strlen(about);
+
+			snprintf(about + length, sizeof(about) - length, " \n%s", missing ?
+				"MCC's maps take their bitmaps and sounds from these, in mcc_maps/_shared. A opens the Steam "
+				"Workshop, which downloads them for an account that owns MCC and Halo: CE Anniversary." :
+				"Everything MCC's maps need of MCC's own is here.");
+		}
+		break;
+	case _hub_mcc_steam:
+		snprintf(title, title_size, "Steam Workshop");
+		snprintf(about, sizeof(about), "%s", steam_downloads_supported() ?
+			"Sign in with Steam to download MCC's shared files and Halo 1 Workshop maps into mcc_maps, and "
+			"browse the servers' map lists." : "This build can't reach Steam.");
+		break;
+	case _hub_mcc_import:
+		snprintf(title, title_size, "Import MCC maps");
+		snprintf(about, sizeof(about), "%s",
+			"A takes in a .zip of MCC content: Workshop packages, MCC's resource sets, or MCC maps alone (a "
+			"package named after the .zip). A package already installed is asked about first.");
+		break;
+	case _hub_mcc_packages:
+		snprintf(title, title_size, "MCC packages");
+		snprintf(about, sizeof(about), "Installed MCC maps, campaign mission order and optional Workshop "
+			"collection folders.");
+		break;
+	case _hub_mcc_downloads:
+		snprintf(title, title_size, "MCC downloads");
+		snprintf(about, sizeof(about), "Storage and removal of copies received from hosts. Original packages and "
+			"saves are kept.");
+		break;
+	case _hub_mcc_folder:
+		snprintf(title, title_size, "mcc_maps");
+		snprintf(about, sizeof(about), "A opens mcc_maps in the file browser.");
+		break;
+	}
+	if (hub_screen.message[0] && system_milliseconds() - hub_screen.message_time > HUB_MESSAGE_MILLISECONDS)
+		hub_screen.message[0] = 0;
+	if (hub_screen.message[0])
+		snprintf(text, text_size, "%s\n \n%s", hub_screen.message, about);
+	else
+		snprintf(text, text_size, "%s", about);
+}
+
+/* "port hub init" (the list's created: hub_list, or mcc_list) and "port hub close" */
+static boolean hub_screen_reset(struct widget_instance *list, boolean opening)
+{
+	short index;
+
+	if (opening)
+	{
+		hub_screen.mcc = list && !strcmp(list->name, "mcc_list");
+		hub_screen.chosen = 0;
+		hub_look();
+		hub_items();
+	}
+	hub_screen.shown[0] = 0;
+	csmemset(hub_screen.row_shown, 0, sizeof(hub_screen.row_shown));
+	/* (the text boxes' measures it shares with the Mods screen: none until
+	they are drawn) */
+	for (index = 0; index < NUMBER_OF_MOD_TEXT_BOXES; index++)
+	{
+		mods_screen.fonts[index] = NONE;
+		mods_screen.widths[index] = 0;
+	}
+	return TRUE;
+}
+
+/* "port hub update": what an import did, the rows and the chosen one's details */
+static void hub_update(struct widget_instance *list)
+{
+	struct widget_instance *details = list->parameters.list.extended_description;
+	struct widget_instance *focused;
+	struct widget_instance *row;
+	char report[MCC_IMPORT_TEXT_SIZE];
+	short focused_index;
+
+	hub_screen.mcc = !strcmp(list->name, "mcc_list");
+	if (map_import_report_take(report, sizeof(report)))
+	{
+		hub_say(report);
+		hub_look();
+	}
+	if (system_milliseconds() - hub_screen.looked > HUB_LOOK_MILLISECONDS)
+		hub_look();
+	hub_items();
+	focused = maps_row(list->focused_child);
+	focused_index = focused ? (short)(atoi(focused->name + 7) - 1) : NONE;
+	if (focused_index != NONE && focused_index < hub_screen.count)
+		hub_screen.chosen = focused_index;
+	hub_screen.chosen = (short)PIN(hub_screen.chosen, 0, MAX(hub_screen.count - 1, 0));
+	for (row = list->child; row; row = row->next)
+	{
+		short row_index;
+		char name[ROW_TEXT_LENGTH];
+		char state[ROW_TEXT_LENGTH];
+		char shown[sizeof(hub_screen.row_shown[0])];
+
+		if (strncmp(row->name, "op_map_", 7))
+			continue;
+		row_index = (short)PIN(atoi(row->name + 7) - 1, 0, HUB_ROWS - 1);
+		row->animation.current_frame_index = row == focused ? 1 : 0;
+		row->visible = row_index < hub_screen.count;
+		if (!row->visible)
+		{
+			if (row == focused)
+				focus_row(list, (short)(hub_screen.count - 1));
+			continue;
+		}
+		hub_row_text(hub_screen.items[row_index], name, sizeof(name), state, sizeof(state));
+		snprintf(shown, sizeof(shown), "%s|%s|%ld", name, state, mods_screen.fonts[_mod_row_name]);
+		if (strcmp(shown, hub_screen.row_shown[row_index]))
+		{
+			char shortened[MOD_DETAILS_LENGTH];
+			wchar_t wide[ROW_TEXT_LENGTH];
+
+			if (mods_text_fits(_mod_row_name, name, strlen(name)))
+				snprintf(shortened, sizeof(shortened), "%s", name);
+			else
+				mods_text_shorten(_mod_row_name, name, strlen(name), shortened, sizeof(shortened));
+			mods_wide_text(shortened, wide, ROW_TEXT_LENGTH);
+			text_set(named(row, "map_name", 0), wide);
+			mods_wide_text(state, wide, ROW_TEXT_LENGTH);
+			text_set(named(row, "map_state", 0), wide);
+			snprintf(hub_screen.row_shown[row_index], sizeof(hub_screen.row_shown[0]), "%s", shown);
+		}
+	}
+	if (details && hub_screen.count)
+	{
+		char title[MOD_DETAILS_LENGTH];
+		char text[MOD_DETAILS_LENGTH];
+		char wrapped[MOD_DETAILS_LENGTH];
+		char shown[sizeof(hub_screen.shown)];
+		wchar_t wide[MOD_DETAILS_LENGTH];
+
+		hub_details(hub_screen.items[hub_screen.chosen], title, sizeof(title), text, sizeof(text));
+		snprintf(shown, sizeof(shown), "%ld %d %ld %d|%s|%s", mods_screen.fonts[_mod_details_name],
+			mods_screen.widths[_mod_details_name], mods_screen.fonts[_mod_details_text],
+			mods_screen.widths[_mod_details_text], title, text);
+		if (strcmp(shown, hub_screen.shown))
+		{
+			snprintf(hub_screen.shown, sizeof(hub_screen.shown), "%s", shown);
+			wrapped[0] = 0;
+			mods_wrap(title, wrapped, sizeof(wrapped), _mod_details_name, 2, 0);
+			mods_wide_text(wrapped, wide, NUMBEROF(wide));
+			text_set_length(named(details, "map_details_name", 0), wide, NUMBEROF(wide));
+			wrapped[0] = 0;
+			mods_wrap(text, wrapped, sizeof(wrapped), _mod_details_text, HUB_DETAILS_LINES, 0);
+			mods_wide_text(wrapped, wide, NUMBEROF(wide));
+			text_set_length(named(details, "map_details_text", 0), wide, NUMBEROF(wide));
+		}
+	}
+}
+
+/* a screen opened from the row (widget), as an open= handler opens one:
+this screen's history pushed with the row, so that its B comes back to it */
+static boolean hub_open(struct widget_instance *widget, char const *name, boolean *widget_deleted)
+{
+	long screen = tag_loaded(DAILY_WIDGET_DEFINITION_TAG, name);
+	struct widget_instance *row = maps_row(widget) ? maps_row(widget) : widget;
+	struct widget_instance *root = widget_instance_get_topmost_parent(widget);
+
+	if (screen == NONE)
+	{
+		platform_log("mods: %s is not loaded", name);
+		ui_play_audio_feedback_sound(SOUND_ERROR);
+		return TRUE;
+	}
+	ui_play_audio_feedback_sound(SOUND_FORWARD);
+	if (!ui_widget_load_by_name_or_tag(NULL, screen, NULL, NONE, root->definition_tag_index,
+		row->parent ? row->parent->definition_tag_index : NONE, (short)widget_instance_get_child_index_from_parent(row)))
+	{
+		return TRUE;
+	}
+	*widget_deleted = TRUE;
+	return TRUE;
+}
+
+/* "port hub choose" (A on a row) */
+static boolean hub_choose(struct widget_instance *widget, boolean *widget_deleted)
+{
+	struct widget_instance *row = maps_row(widget);
+	short index = row ? (short)(atoi(row->name + 7) - 1) : hub_screen.chosen;
+
+	hub_items();
+	if (index < 0 || index >= hub_screen.count)
+		return TRUE;
+	hub_screen.chosen = index;
+	switch (hub_screen.items[index])
+	{
+	case _hub_ce_maps:
+		return hub_open(widget, HUB_CE_MAPS_SCREEN, widget_deleted);
+	case _hub_mcc_maps:
+		return hub_open(widget, HUB_MCC_MAPS_SCREEN, widget_deleted);
+	case _hub_opence_mods:
+		return hub_open(widget, HUB_MODS_SCREEN, widget_deleted);
+	case _hub_content_workshop:
+		ui_play_audio_feedback_sound(SOUND_ERROR);
+		hub_say("Coming soon: the Content Evolved Workshop is still in development.");
+		return TRUE;
+	case _hub_mcc_shared:
+		hub_look();
+		if (!hub_mcc_missing())
+		{
+			ui_play_audio_feedback_sound(SOUND_FORWARD);
+			hub_say("All of them are found.");
+			return TRUE;
+		}
+		/* (the Steam Workshop downloads them) */
+		if (!steam_downloads_supported())
+		{
+			ui_play_audio_feedback_sound(SOUND_ERROR);
+			hub_say("This build can't reach Steam: copy them into mcc_maps/_shared from an MCC install.");
+			return TRUE;
+		}
+		return hub_open(widget, HUB_STEAM_SCREEN, widget_deleted);
+	case _hub_mcc_steam:
+		if (!steam_downloads_supported())
+		{
+			ui_play_audio_feedback_sound(SOUND_ERROR);
+			return TRUE;
+		}
+		return hub_open(widget, HUB_STEAM_SCREEN, widget_deleted);
+	case _hub_mcc_import:
+		ui_play_audio_feedback_sound(SOUND_FORWARD);
+		map_import_start();
+		return TRUE;
+	case _hub_mcc_packages:
+		return hub_open(widget, HUB_PACKAGES_SCREEN, widget_deleted);
+	case _hub_mcc_downloads:
+		return hub_open(widget, HUB_DOWNLOADS_SCREEN, widget_deleted);
+	case _hub_mcc_folder:
+	{
+		char folder[1024];
+
+		ui_play_audio_feedback_sound(SOUND_FORWARD);
+		snprintf(folder, sizeof(folder), "%s/mcc_maps", platform_mcc_root());
+		folder_show(folder);
+		return TRUE;
+	}
+	}
 	return TRUE;
 }
 
@@ -25607,6 +26189,19 @@ boolean pc_menu_event_function_invoke(
 		{
 			return maps_screen_reset(!strcmp(name, "port maps init"));
 		}
+		else if (!strcmp(name, "port ce maps init"))
+		{
+			map_manager_open_library(map_import_available(), platform_import_file_pick_available() != 0);
+			return maps_screen_reset(TRUE);
+		}
+		else if (!strcmp(name, "port hub init") || !strcmp(name, "port hub close"))
+		{
+			return hub_screen_reset(widget, !strcmp(name, "port hub init"));
+		}
+		else if (!strcmp(name, "port hub choose"))
+		{
+			return hub_choose(widget, widget_deleted);
+		}
 		else if (!strcmp(name, "port maps choose"))
 		{
 			return maps_choose(widget, widget_deleted);
@@ -26254,6 +26849,8 @@ void pc_menu_game_data_function_invoke(
 		theater_update(widget);
 	else if (!strcmp(name, "port maps update"))
 		maps_update(widget);
+	else if (!strcmp(name, "port hub update"))
+		hub_update(widget);
 	else if (!strcmp(name, "port steam update"))
 		steam_update(widget);
 	else if (!strcmp(name, "port social update"))

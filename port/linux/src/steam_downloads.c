@@ -3972,6 +3972,27 @@ static void joiner_resume(void)
 	wake();
 }
 
+int steam_downloads_shared_files(int *present, char const **names, int maximum)
+{
+	static char shown[SHARED_FILES][64];
+	char root[1024];
+	int i;
+
+	mcc_root_find(root, sizeof(root));
+	for (i = 0; i < SHARED_FILES && i < maximum; i++)
+	{
+		char path[1200];
+		int directory = 0;
+
+		snprintf(path, sizeof(path), "%s/%s/%s", root, shared_files[i].folder, shared_files[i].name);
+		present[i] = path_exists(path, &directory) && !directory;
+		snprintf(shown[i], sizeof(shown[i]), "%s/%s", shared_files[i].folder, shared_files[i].name);
+		if (names)
+			names[i] = shown[i];
+	}
+	return SHARED_FILES;
+}
+
 int steam_downloads_shared_fetch(void)
 {
 	char root[1024];

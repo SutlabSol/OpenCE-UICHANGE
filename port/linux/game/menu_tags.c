@@ -475,6 +475,9 @@ static char const *const port_function_names[] =
 	"port theater record", "port theater export", "port theater import", "port theater watch", "port theater delete",
 	/* (the Map Manager, and the map lists' MANAGE MAP: menu_functions.c, map_manager.c) */
 	"port maps init", "port maps close", "port maps choose", "port maps back", "port map manage",
+	/* (the main menu's MODS and its MASTER CHIEF COLLECTION MAPS, and its
+	CUSTOM EDITION MAPS: the Map Manager at its library: menu_functions.c) */
+	"port hub init", "port hub close", "port hub choose", "port ce maps init",
 	/* (the Steam Workshop screen: steam_downloads.c) */
 	"port steam init", "port steam close", "port steam choose", "port steam back",
 	/* (Social: the main menu's Y, and Chat's BLOCKED & MUTED: menu_functions.c, social_menu.c) */
@@ -533,6 +536,8 @@ static char const *const port_game_data_input_names[] =
 	"skulls screen update", "gameplay screen update",
 	/* (the main menu's Mods) */
 	"port mods update",
+	/* (Mods' rows, and MASTER CHIEF COLLECTION MAPS') */
+	"port hub update",
 	/* (Forge > Tag Injector) */
 	"port tags update",
 	"port mcc share update", "port mcc share text", "port mcc share title",
@@ -2379,13 +2384,12 @@ the profile itself. */
 
 /* Change Name's keyboard and Change Color's pictures are ui.map's, Network
 Setup is for others' games (shown in co-op: its pages, pause_network_patch),
-and the Steam Workshop and Credits are nothing to it */
+and Credits is nothing to it */
 static char const *const pause_settings_hidden_items[] =
 {
 	"main_menu/settings_select/player_setup/player_profile_edit/name_profile_item",
 	PAUSE_NETWORK_ITEM,
 	"main_menu/settings_select/player_setup/player_profile_edit/color_profile_item",
-	"main_menu/settings_select/player_setup/player_profile_edit/steam_workshop_item",
 	"main_menu/settings_select/player_setup/player_profile_edit/credits_item",
 };
 

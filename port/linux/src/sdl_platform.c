@@ -3173,3 +3173,137 @@ void platform_input_read(struct platform_input_state *state, BOOL consume_motion
 	}
 	pthread_mutex_unlock(&input_lock);
 }
+
+/* ---------- the desktop's IMPORT (platform.h's platform_import_file_pick) */
+
+#if !defined(HALO_ANDROID) && !defined(HALO_WEB) && !defined(HALO_PS5) && !defined(HALO_SWITCH)
+struct import_pick
+{
+	SDL_AtomicInt done;
+	BOOL failed;
+	char path[1024];
+	char error[256];
+};
+
+static void SDLCALL import_file_chosen(void *userdata, const char * const *files, int filter)
+{
+	struct import_pick *pick = userdata;
+
+	(void)filter;
+	if (!files)
+	{
+		pick->failed = TRUE;
+		snprintf(pick->error, sizeof(pick->error), "%s",
+			*SDL_GetError() ? SDL_GetError() : "no file dialog could be shown");
+	}
+	else if (files[0])
+		snprintf(pick->path, sizeof(pick->path), "%s", files[0]);
+	SDL_SetAtomicInt(&pick->done, 1);
+}
+
+struct import_copy
+{
+	char from[1024];
+	char part[1200];
+	char to[1200];
+};
+
+/* the file copied as <name>.part, then renamed: the inbox takes only whole
+files (mcc_import_inbox_ready) */
+static void *import_copy_thread(void *context)
+{
+	struct import_copy *copy = context;
+	FILE *from = fopen(copy->from, "rb");
+	FILE *to = from ? fopen(copy->part, "wb") : NULL;
+	BOOL whole = from && to;
+	char *buffer = whole ? malloc(1 << 20) : NULL;
+	size_t count;
+
+	whole = whole && buffer;
+	while (whole && (count = fread(buffer, 1, 1 << 20, from)) > 0)
+		whole = fwrite(buffer, 1, count, to) == count;
+	if (whole && ferror(from))
+		whole = FALSE;
+	if (from)
+		fclose(from);
+	if (to && fclose(to) != 0)
+		whole = FALSE;
+	free(buffer);
+	remove(copy->to);
+	if (!whole || rename(copy->part, copy->to) != 0)
+	{
+		remove(copy->part);
+		platform_log("import: %s could not be copied into the import folder", copy->from);
+	}
+	else
+		platform_log("import: %s copied into the import folder", copy->from);
+	free(copy);
+	return NULL;
+}
+
+BOOL platform_import_file_pick_available(void)
+{
+	return TRUE;
+}
+
+BOOL platform_import_file_pick(const char *inbox, char *picked, int size)
+{
+	static const SDL_DialogFileFilter filters[] =
+	{
+		{ "Maps and .zip files of maps", "map;zip" },
+		{ "All files", "*" },
+	};
+	static struct import_pick pick;
+	struct import_copy *copy;
+	const char *name;
+	pthread_t thread;
+
+	picked[0] = 0;
+	memset(&pick, 0, sizeof(pick));
+	SDL_ShowOpenFileDialog(import_file_chosen, &pick, platform_window, filters, 2, NULL, false);
+	/* (the dialog answers through events, and on some systems another
+	thread: data_choose_image's wait) */
+	while (!SDL_GetAtomicInt(&pick.done))
+	{
+		SDL_PumpEvents();
+		SDL_Delay(50);
+	}
+	if (pick.failed)
+	{
+		snprintf(picked, (size_t)size, "%s", pick.error);
+		return FALSE;
+	}
+	if (!pick.path[0])
+		return FALSE;
+	name = pick.path + strlen(pick.path);
+	while (name > pick.path && name[-1] != '/' && name[-1] != '\\')
+		name--;
+	copy = calloc(1, sizeof(*copy));
+	if (!copy)
+		return FALSE;
+	snprintf(copy->from, sizeof(copy->from), "%s", pick.path);
+	snprintf(copy->to, sizeof(copy->to), "%s/%s", inbox, name);
+	snprintf(copy->part, sizeof(copy->part), "%s.part", copy->to);
+	snprintf(picked, (size_t)size, "%s", name);
+	if (pthread_create(&thread, NULL, import_copy_thread, copy) != 0)
+	{
+		import_copy_thread(copy);
+		return TRUE;
+	}
+	pthread_detach(thread);
+	return TRUE;
+}
+#else
+BOOL platform_import_file_pick_available(void)
+{
+	return FALSE;
+}
+
+BOOL platform_import_file_pick(const char *inbox, char *picked, int size)
+{
+	(void)inbox;
+	if (size > 0)
+		picked[0] = 0;
+	return FALSE;
+}
+#endif
