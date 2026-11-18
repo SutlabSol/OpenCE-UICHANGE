@@ -15,7 +15,7 @@ A zone with no route flies this too, on the automatic path's two points.
 A marker's usage (netgame flag team_index) holds:
 
 	bits 0-3    spawn type: FF_ROUTE_SPAWN_TYPE on a route's point, a drop
-	            point's kind on a drop point (FF_DROP_SPAWN_TYPE_*)
+	            point's factions on a drop point (FF_DROP_SPAWN_TYPE_*)
 	bits 4-7    a point's order in its leg (a zone's rounds)
 	bit  8      a point's leg (a zone's waves)
 	bits 9-10   a point's leg's style, the same on all of them
@@ -85,13 +85,15 @@ enum
 
 /* ---------- Enemy drop points
 
-A drop point (once the dropship zone) is a Firefight marker whose spawn type
-says which drops it takes: any (5, the dropship zone's old type, so older
-maps' zones take every drop), or the Covenant's, the humans' or the Flood's
-alone (types past the route's, outside Forge's type cycle). What carries a
-drop is the enemies': a Spirit the Covenant (and the Sentinels), a Pelican
-the humans, both on the flight below; the Flood come out of Keyes' Flood
-form, grown out of the floor where the point is, swollen, burst. */
+A drop point (once the dropship zone) is a Firefight marker that takes the
+drops of the factions it's set to spawn (Forge's FACTIONS TO SPAWN), its
+spawn type saying which: all three is 5, the dropship zone's old type, so
+older maps' zones take every drop; one or two are types past the route's,
+outside Forge's type cycle (8-10 one alone, as they were first made; 11-13
+two). What carries a drop is its faction's: a Spirit the Covenant (and the
+Sentinels), a Pelican the humans, both on the flight below; the Flood come out
+of Keyes' Flood form, grown out of the floor where the point is, swollen,
+burst. */
 
 enum
 {
@@ -99,42 +101,60 @@ enum
 	FF_DROP_SPAWN_TYPE_COVENANT = 8,
 	FF_DROP_SPAWN_TYPE_HUMAN = 9,
 	FF_DROP_SPAWN_TYPE_FLOOD = 10,
+	FF_DROP_SPAWN_TYPE_COVENANT_HUMAN = 11,
+	FF_DROP_SPAWN_TYPE_COVENANT_FLOOD = 12,
+	FF_DROP_SPAWN_TYPE_HUMAN_FLOOD = 13,
 
-	FF_DROP_KIND_ANY = 0,
 	FF_DROP_KIND_COVENANT = 1,
 	FF_DROP_KIND_HUMAN = 2,
 	FF_DROP_KIND_FLOOD = 3,
-	FF_DROP_KIND_COUNT = 4
+	FF_DROP_KIND_COUNT = 4,
+
+	/* (a set of factions: 1 << FF_DROP_KIND_*) */
+	FF_DROP_KINDS_COVENANT = 1 << FF_DROP_KIND_COVENANT,
+	FF_DROP_KINDS_HUMAN = 1 << FF_DROP_KIND_HUMAN,
+	FF_DROP_KINDS_FLOOD = 1 << FF_DROP_KIND_FLOOD,
+	FF_DROP_KINDS_SHIPS = FF_DROP_KINDS_COVENANT | FF_DROP_KINDS_HUMAN,
+	FF_DROP_KINDS_ALL = FF_DROP_KINDS_SHIPS | FF_DROP_KINDS_FLOOD
 };
 
-/* a spawn type's drop kind, or -1 when it isn't a drop point */
-static inline int ff_drop_point_kind(int spawn_type)
+/* the factions a spawn type's drop point spawns, or 0 when it isn't one */
+static inline unsigned ff_drop_point_kinds(int spawn_type)
 {
 	switch (spawn_type)
 	{
-	case FF_DROP_SPAWN_TYPE_ANY:      return FF_DROP_KIND_ANY;
-	case FF_DROP_SPAWN_TYPE_COVENANT: return FF_DROP_KIND_COVENANT;
-	case FF_DROP_SPAWN_TYPE_HUMAN:    return FF_DROP_KIND_HUMAN;
-	case FF_DROP_SPAWN_TYPE_FLOOD:    return FF_DROP_KIND_FLOOD;
-	default:                          return -1;
+	case FF_DROP_SPAWN_TYPE_ANY:            return FF_DROP_KINDS_ALL;
+	case FF_DROP_SPAWN_TYPE_COVENANT:       return FF_DROP_KINDS_COVENANT;
+	case FF_DROP_SPAWN_TYPE_HUMAN:          return FF_DROP_KINDS_HUMAN;
+	case FF_DROP_SPAWN_TYPE_FLOOD:          return FF_DROP_KINDS_FLOOD;
+	case FF_DROP_SPAWN_TYPE_COVENANT_HUMAN: return FF_DROP_KINDS_COVENANT | FF_DROP_KINDS_HUMAN;
+	case FF_DROP_SPAWN_TYPE_COVENANT_FLOOD: return FF_DROP_KINDS_COVENANT | FF_DROP_KINDS_FLOOD;
+	case FF_DROP_SPAWN_TYPE_HUMAN_FLOOD:    return FF_DROP_KINDS_HUMAN | FF_DROP_KINDS_FLOOD;
+	default:                                return 0;
 	}
 }
 
-static inline int ff_drop_point_type(int kind)
+/* a set of factions' drop point type (none: all of them) */
+static inline int ff_drop_point_type(unsigned kinds)
 {
-	switch (kind)
+	switch (kinds & FF_DROP_KINDS_ALL)
 	{
-	case FF_DROP_KIND_COVENANT: return FF_DROP_SPAWN_TYPE_COVENANT;
-	case FF_DROP_KIND_HUMAN:    return FF_DROP_SPAWN_TYPE_HUMAN;
-	case FF_DROP_KIND_FLOOD:    return FF_DROP_SPAWN_TYPE_FLOOD;
-	default:                    return FF_DROP_SPAWN_TYPE_ANY;
+	case FF_DROP_KINDS_COVENANT:                         return FF_DROP_SPAWN_TYPE_COVENANT;
+	case FF_DROP_KINDS_HUMAN:                            return FF_DROP_SPAWN_TYPE_HUMAN;
+	case FF_DROP_KINDS_FLOOD:                            return FF_DROP_SPAWN_TYPE_FLOOD;
+	case FF_DROP_KINDS_COVENANT | FF_DROP_KINDS_HUMAN:   return FF_DROP_SPAWN_TYPE_COVENANT_HUMAN;
+	case FF_DROP_KINDS_COVENANT | FF_DROP_KINDS_FLOOD:   return FF_DROP_SPAWN_TYPE_COVENANT_FLOOD;
+	case FF_DROP_KINDS_HUMAN | FF_DROP_KINDS_FLOOD:      return FF_DROP_SPAWN_TYPE_HUMAN_FLOOD;
+	default:                                             return FF_DROP_SPAWN_TYPE_ANY;
 	}
 }
 
 /* (a spawn type mask's bits of every drop point's type) */
 #define FF_DROP_POINT_TYPE_MASK \
 	((1UL << FF_DROP_SPAWN_TYPE_ANY) | (1UL << FF_DROP_SPAWN_TYPE_COVENANT) | \
-	 (1UL << FF_DROP_SPAWN_TYPE_HUMAN) | (1UL << FF_DROP_SPAWN_TYPE_FLOOD))
+	 (1UL << FF_DROP_SPAWN_TYPE_HUMAN) | (1UL << FF_DROP_SPAWN_TYPE_FLOOD) | \
+	 (1UL << FF_DROP_SPAWN_TYPE_COVENANT_HUMAN) | (1UL << FF_DROP_SPAWN_TYPE_COVENANT_FLOOD) | \
+	 (1UL << FF_DROP_SPAWN_TYPE_HUMAN_FLOOD))
 
 static inline char const *ff_drop_kind_name(int kind)
 {
@@ -143,7 +163,7 @@ static inline char const *ff_drop_kind_name(int kind)
 	case FF_DROP_KIND_COVENANT: return "COVENANT";
 	case FF_DROP_KIND_HUMAN:    return "HUMAN";
 	case FF_DROP_KIND_FLOOD:    return "FLOOD";
-	default:                    return "ANY";
+	default:                    return "";
 	}
 }
 

@@ -184,12 +184,12 @@ static short g_queued_reinforcement_enemies = 0;
 static byte g_queued_reinforcement_subtypes[256];
 static byte g_dropship_squad_subtypes[32];
 static short g_dropship_squad_subtype_count = 0;
-/* (the wave being spawned's) the drop kinds (1 << FF_DROP_KIND_*) its enemies
-are of, which select_wave_spawn_zones puts a drop point of in slot 0 before
-one taking any; and the kind of the drop point it put there (-1: slot 0 is
-no drop point) */
+/* (the wave being spawned's) the factions (1 << FF_DROP_KIND_*) its enemies
+are of, a drop point spawning one of which select_wave_spawn_zones puts in
+slot 0; and the factions of the drop point it put there (0: slot 0 is no
+drop point) */
 static unsigned g_drop_kinds_wanted = 0;
-static int g_zone0_drop_kind = -1;
+static unsigned g_zone0_drop_kinds = 0;
 static real g_active_wave_facings[FIREFIGHT_MAX_SPAWN_ZONES_PER_WAVE];
 
 /* MAP CONTENT's: the map's own enemies (ones the roster has no place for:
@@ -2115,7 +2115,7 @@ static short select_wave_spawn_zones(
 	short selected = 0;
 	short i, s;
 
-	g_zone0_drop_kind = -1;
+	g_zone0_drop_kinds = 0;
 
 	/* Custom Forge Firefight Spawn Override:
 	 * When the map has placed Firefight Infantry/Dropship Spawn markers ('ffsp' / flag->type == 15),
@@ -2173,32 +2173,21 @@ static short select_wave_spawn_zones(
 						desired_zones);
 				}
 
-				/* An enemy drop point among the candidates goes in slot 0, so the
-				drop comes there: first one of a kind the wave has
-				(g_drop_kinds_wanted), then one taking any */
+				/* An enemy drop point spawning a faction the wave has
+				(g_drop_kinds_wanted) goes in slot 0, so the drop comes there */
+				for (i = 0; i < candidate_count; i++)
 				{
-					short pass_kind;
+					short c_idx = candidate_indices[i];
+					unsigned kinds = ff_drop_point_kinds(custom_types[c_idx]);
 
-					for (pass_kind = 0; pass_kind < 2 && selected == 0; pass_kind++)
-					{
-						for (i = 0; i < candidate_count; i++)
-						{
-							short c_idx = candidate_indices[i];
-							int kind = ff_drop_point_kind(custom_types[c_idx]);
-
-							if (kind < 0 || (pass_kind == 0 ? (kind == FF_DROP_KIND_ANY ||
-								(g_drop_kinds_wanted & (1U << kind)) == 0) : kind != FF_DROP_KIND_ANY))
-							{
-								continue;
-							}
-							out_zones[0] = custom_pts[c_idx];
-							out_facings[0] = custom_facings[c_idx];
-							g_zone0_drop_kind = kind;
-							selected = 1;
-							candidate_indices[i] = candidate_indices[--candidate_count];
-							break;
-						}
-					}
+					if ((kinds & g_drop_kinds_wanted) == 0)
+						continue;
+					out_zones[0] = custom_pts[c_idx];
+					out_facings[0] = custom_facings[c_idx];
+					g_zone0_drop_kinds = kinds;
+					selected = 1;
+					candidate_indices[i] = candidate_indices[--candidate_count];
+					break;
 				}
 
 				while (selected < desired_zones && candidate_count > 0)
@@ -4049,7 +4038,7 @@ static boolean dropship_flight_prepare(struct ff_route_flight *flight, real_poin
 			&scen->netgame_flags, i, struct scenario_netgame_flag);
 
 		if (flag && flag->type == FF_NETGAME_FLAG_FIREFIGHT_SPAWN &&
-			ff_drop_point_kind(FF_UNPACK_SPAWN_TYPE(flag->team_index)) >= 0 &&
+			ff_drop_point_kinds(FF_UNPACK_SPAWN_TYPE(flag->team_index)) != 0 &&
 			FF_ROUTE_ID(flag->team_index) != 0)
 		{
 			real distance = distance3d(&flag->position, zone);
@@ -4213,67 +4202,125 @@ static void dropship_flash(
 	}
 }
 
-/* ---------- A flight tested in Forge: the same flight, with no one aboard */
+/* ---------- A flight tested in Forge: the same flight, with no one aboard
+
+Forge's TEST DROP flies one ship and then the next on the same flight, the
+second setting off as the first leaves, so two may be in the air at once */
+
+#define FF_DROPSHIP_PREVIEW_SHIPS 2
 
 static struct
 {
 	long vehicle_index;
 	struct ff_route_flight flight;
 	real tick;
-} g_dropship_preview = { NONE };
+	short phase;
+} g_dropship_preview[FF_DROPSHIP_PREVIEW_SHIPS] = { { NONE }, { NONE } };
+
+static void dropship_preview_stop_ship(short ship)
+{
+	if (g_dropship_preview[ship].vehicle_index != NONE &&
+		object_try_and_get_and_verify_type(g_dropship_preview[ship].vehicle_index, _object_mask_vehicle))
+	{
+		object_delete(g_dropship_preview[ship].vehicle_index);
+	}
+	g_dropship_preview[ship].vehicle_index = NONE;
+	g_dropship_preview[ship].phase = 0;
+}
 
 void firefight_dropship_preview_stop(void)
 {
-	if (g_dropship_preview.vehicle_index != NONE &&
-		object_try_and_get_and_verify_type(g_dropship_preview.vehicle_index, _object_mask_vehicle))
-	{
-		object_delete(g_dropship_preview.vehicle_index);
-	}
-	g_dropship_preview.vehicle_index = NONE;
+	short ship;
+
+	for (ship = 0; ship < FF_DROPSHIP_PREVIEW_SHIPS; ship++)
+		dropship_preview_stop_ship(ship);
 }
 
+/* a ship flown to the zone beside any already in the air (the oldest's place
+taken when there's no room) */
 boolean firefight_dropship_preview_start(real_point3d const *zone, real facing, long dropship_tag)
 {
 	struct ff_route_pose pose;
+	short ship = 0;
+	short k;
 
-	firefight_dropship_preview_stop();
-	dropship_flight_prepare(&g_dropship_preview.flight, zone, facing);
-	g_dropship_preview.vehicle_index = dropship_new(dropship_tag, &g_dropship_preview.flight, _game_team_covenant);
-	if (g_dropship_preview.vehicle_index == NONE)
+	for (k = FF_DROPSHIP_PREVIEW_SHIPS - 1; k >= 0; k--)
+	{
+		if (g_dropship_preview[k].vehicle_index == NONE)
+			ship = k;
+	}
+	dropship_preview_stop_ship(ship);
+	dropship_flight_prepare(&g_dropship_preview[ship].flight, zone, facing);
+	g_dropship_preview[ship].vehicle_index = dropship_new(dropship_tag, &g_dropship_preview[ship].flight, _game_team_covenant);
+	if (g_dropship_preview[ship].vehicle_index == NONE)
 		return FALSE;
 
-	g_dropship_preview.tick = 0.0f;
-	pose = ff_route_flight_pose(&g_dropship_preview.flight, 0.0f);
-	dropship_fly(g_dropship_preview.vehicle_index, &pose);
-	dropship_flash(&g_dropship_preview.flight, -1.0f, 0.0f, &pose, _firefight_faction_covenant, FALSE);
+	g_dropship_preview[ship].tick = 0.0f;
+	pose = ff_route_flight_pose(&g_dropship_preview[ship].flight, 0.0f);
+	g_dropship_preview[ship].phase = (short)pose.phase;
+	dropship_fly(g_dropship_preview[ship].vehicle_index, &pose);
+	dropship_flash(&g_dropship_preview[ship].flight, -1.0f, 0.0f, &pose, _firefight_faction_covenant, FALSE);
 	return TRUE;
 }
 
-/* a frame of the test flight: its phase, or 0 once there's none in the air */
+/* a frame of the test flights: the newest ship's phase, or 0 once none is in
+the air */
 short firefight_dropship_preview_update(real seconds)
 {
-	struct ff_route_pose pose;
-	real previous_tick = g_dropship_preview.tick;
+	short newest_phase = 0;
+	short ship;
 
-	if (g_dropship_preview.vehicle_index == NONE)
-		return 0;
-
-	g_dropship_preview.tick += seconds * (real)FF_ROUTE_TICKS_PER_SECOND;
-	if (g_dropship_preview.tick >= (real)ff_route_flight_total_ticks(&g_dropship_preview.flight))
+	for (ship = 0; ship < FF_DROPSHIP_PREVIEW_SHIPS; ship++)
 	{
-		firefight_dropship_preview_stop();
-		return 0;
-	}
+		struct ff_route_pose pose;
+		real previous_tick = g_dropship_preview[ship].tick;
 
-	pose = ff_route_flight_pose(&g_dropship_preview.flight, g_dropship_preview.tick);
-	if (!dropship_fly(g_dropship_preview.vehicle_index, &pose))
-	{
-		g_dropship_preview.vehicle_index = NONE;
-		return 0;
+		if (g_dropship_preview[ship].vehicle_index == NONE)
+			continue;
+		g_dropship_preview[ship].tick += seconds * (real)FF_ROUTE_TICKS_PER_SECOND;
+		if (g_dropship_preview[ship].tick >= (real)ff_route_flight_total_ticks(&g_dropship_preview[ship].flight))
+		{
+			dropship_preview_stop_ship(ship);
+			continue;
+		}
+		pose = ff_route_flight_pose(&g_dropship_preview[ship].flight, g_dropship_preview[ship].tick);
+		if (!dropship_fly(g_dropship_preview[ship].vehicle_index, &pose))
+		{
+			g_dropship_preview[ship].vehicle_index = NONE;
+			g_dropship_preview[ship].phase = 0;
+			continue;
+		}
+		dropship_flash(&g_dropship_preview[ship].flight, previous_tick, g_dropship_preview[ship].tick, &pose,
+			_firefight_faction_covenant, FALSE);
+		g_dropship_preview[ship].phase = (short)pose.phase;
 	}
-	dropship_flash(
-		&g_dropship_preview.flight, previous_tick, g_dropship_preview.tick, &pose, _firefight_faction_covenant, FALSE);
-	return (short)pose.phase;
+	{
+		real newest_tick = 0.0f;
+
+		for (ship = 0; ship < FF_DROPSHIP_PREVIEW_SHIPS; ship++)
+		{
+			if (g_dropship_preview[ship].vehicle_index != NONE &&
+				(newest_phase == 0 || g_dropship_preview[ship].tick < newest_tick))
+			{
+				newest_phase = g_dropship_preview[ship].phase;
+				newest_tick = g_dropship_preview[ship].tick;
+			}
+		}
+	}
+	return newest_phase;
+}
+
+/* whether any test ship is leaving the zone now (FF_ROUTE_PHASE_DEPARTURE) */
+boolean firefight_dropship_preview_departing(void)
+{
+	short ship;
+
+	for (ship = 0; ship < FF_DROPSHIP_PREVIEW_SHIPS; ship++)
+	{
+		if (g_dropship_preview[ship].vehicle_index != NONE && g_dropship_preview[ship].phase == FF_ROUTE_PHASE_DEPARTURE)
+			return TRUE;
+	}
+	return FALSE;
 }
 
 /* a client's ship: what the host's state says of how it looks */
@@ -4355,20 +4402,17 @@ static byte drop_kind_faction(byte wave_faction, int kind, unsigned kinds)
 	}
 }
 
-/* the drop kind of a wave's drop at its zone 0 (select_wave_spawn_zones's
-g_zone0_drop_kind), or -1 for none there: a drop point of one kind takes its
-kind's drop alone, any other spot one of a kind the wave has, picked */
+/* the faction of a wave's drop at its zone 0, or -1 for none there: of those
+the wave has, one the drop point there spawns (select_wave_spawn_zones's
+g_zone0_drop_kinds), or any at a spot that's no drop point, picked */
 static int wave_drop_kind_choose(unsigned kinds)
 {
 	int choices[FF_DROP_KIND_COUNT];
 	int choice_count = 0;
 	int kind;
 
-	if (g_zone0_drop_kind > FF_DROP_KIND_ANY)
-	{
-		return ((kinds & (1U << g_zone0_drop_kind)) != 0 && drop_kind_carrier_loaded(g_zone0_drop_kind)) ?
-			g_zone0_drop_kind : -1;
-	}
+	if (g_zone0_drop_kinds != 0)
+		kinds &= g_zone0_drop_kinds;
 	for (kind = FF_DROP_KIND_COVENANT; kind < FF_DROP_KIND_COUNT; kind++)
 	{
 		if ((kinds & (1U << kind)) != 0 && drop_kind_carrier_loaded(kind))
@@ -4376,6 +4420,9 @@ static int wave_drop_kind_choose(unsigned kinds)
 	}
 	if (choice_count == 0)
 	{
+		/* (a drop point of none of the wave's factions brings none) */
+		if (g_zone0_drop_kinds != 0)
+			return -1;
 		/* (a Flood wave with no Flood form here comes by ship, as before) */
 		return drop_kind_carrier_loaded(FF_DROP_KIND_COVENANT) ? FF_DROP_KIND_COVENANT : -1;
 	}
@@ -6753,6 +6800,9 @@ struct flood_drop_show
 	real_point3d ground;
 	real facing;
 	long tag; /* Keyes' Flood form's (NONE: none here) */
+	/* its burst's effect and the gore it throws up (NONE: none) */
+	long burst_effect;
+	long puff_effect;
 };
 
 static void flood_drop_show_clear(struct flood_drop_show *show)
@@ -6762,10 +6812,48 @@ static void flood_drop_show_clear(struct flood_drop_show *show)
 	show->object_index = NONE;
 }
 
-static void flood_drop_show_begin(struct flood_drop_show *show, real_point3d const *ground, real facing, long tag)
+/* (the first of these loaded here, NONE for none) */
+static long flood_drop_effect_find(char const *const *names, short count)
+{
+	short i;
+
+	for (i = 0; i < count; i++)
+	{
+		long tag = tag_loaded(EFFECT_DEFINITION_TAG, names[i]);
+
+		if (tag != NONE)
+			return tag;
+	}
+	return NONE;
+}
+
+/* (a carrier form's pop, the Flood's own burst: c10's, d40's; made harmless) */
+static char const *const g_flood_drop_burst_effects[] = {
+	"characters\\floodcarrier\\effects\\body destroyed",
+	"effects\\flood bit skin explode",
+	"effects\\flood bit death",
+	"weapons\\frag grenade\\effects\\explosion",
+};
+static char const *const g_flood_drop_puff_effects[] = {
+	"characters\\flood_captain\\punchspray",
+	"effects\\flood bit death",
+};
+
+/* (the effects: those given, else those of the names loaded here) */
+static void flood_drop_show_begin(
+	struct flood_drop_show *show,
+	real_point3d const *ground,
+	real facing,
+	long tag,
+	long burst_effect,
+	long puff_effect)
 {
 	flood_drop_show_clear(show);
 	show->tag = tag;
+	show->burst_effect = burst_effect != NONE ? burst_effect :
+		flood_drop_effect_find(g_flood_drop_burst_effects, (short)NUMBEROF(g_flood_drop_burst_effects));
+	show->puff_effect = puff_effect != NONE ? puff_effect :
+		flood_drop_effect_find(g_flood_drop_puff_effects, (short)NUMBEROF(g_flood_drop_puff_effects));
 	show->last_tick = -1;
 	show->ground = *ground;
 	show->facing = facing;
@@ -6773,34 +6861,26 @@ static void flood_drop_show_begin(struct flood_drop_show *show, real_point3d con
 	show->depth = 2.0f;
 }
 
-/* (the first puff's effect loaded of these) */
-static void flood_drop_effect(char const *const *names, short count, real_point3d const *position)
+/* an effect at a spot, harmless (as pod_effect, by its tag) */
+static void flood_drop_effect(long effect_tag, real_point3d const *position)
 {
-	short i;
+	char const *marker_names[1] = { "" };
+	real_point3d marker_points[1];
+	real_vector3d marker_forwards[1];
 
-	for (i = 0; i < count; i++)
-	{
-		if (tag_loaded(EFFECT_DEFINITION_TAG, names[i]) != NONE)
-		{
-			pod_effect(names[i], position);
-			return;
-		}
-	}
+	if (effect_tag == NONE)
+		return;
+	marker_points[0] = *position;
+	marker_forwards[0] = *global_up3d;
+	skulls_effect_harmless = TRUE;
+	effect_new_unattached_from_markers(effect_tag, NONE, NULL, 1, marker_names, marker_points, marker_forwards,
+		0.0f, 0.0f, NULL, NULL, TRUE);
+	skulls_effect_harmless = FALSE;
 }
 
 /* shows the form as it is this many ticks in; FALSE once it's over */
 static boolean flood_drop_show_tick(struct flood_drop_show *show, long elapsed)
 {
-	static char const *const puffs[] = {
-		"characters\\flood_captain\\punchspray",
-		"effects\\flood bit death",
-		"characters\\floodcarrier\\effects\\carrier burst",
-	};
-	static char const *const bursts[] = {
-		"characters\\floodcarrier\\effects\\carrier burst",
-		"effects\\flood bit death",
-		"weapons\\frag grenade\\effects\\explosion",
-	};
 	struct ff_flood_drop_pose pose = ff_flood_drop_pose_at((real)elapsed);
 	long previous = show->last_tick;
 
@@ -6820,7 +6900,7 @@ static boolean flood_drop_show_tick(struct flood_drop_show *show, long elapsed)
 			short i;
 
 			middle.z += 0.8f;
-			flood_drop_effect(bursts, (short)NUMBEROF(bursts), &middle);
+			flood_drop_effect(show->burst_effect, &middle);
 			for (i = 0; i < 3; i++)
 			{
 				real_point3d bit = show->ground;
@@ -6829,7 +6909,7 @@ static boolean flood_drop_show_tick(struct flood_drop_show *show, long elapsed)
 				bit.x += cosine(angle) * 1.0f;
 				bit.y += sine(angle) * 1.0f;
 				bit.z += 0.4f;
-				flood_drop_effect(puffs, (short)NUMBEROF(puffs) - 1, &bit);
+				flood_drop_effect(show->puff_effect != NONE ? show->puff_effect : show->burst_effect, &bit);
 			}
 		}
 		flood_drop_show_clear(show);
@@ -6865,22 +6945,21 @@ static boolean flood_drop_show_tick(struct flood_drop_show *show, long elapsed)
 				SET_FLAG(object->object.flags, _object_no_collisions_bit, TRUE);
 				object_set_automatic_deactivation(show->object_index, FALSE);
 			}
-			error(_error_silent, "firefight: flood drop form %s (object %08lX) scale %.2f",
-				show->object_index != NONE ? "made" : "NOT made", (unsigned long)show->object_index, show->full_scale);
+			if (show->object_index == NONE)
+				error(_error_silent, "firefight: the Flood's drop form could not be made");
 		}
 		else
 		{
 			error(_error_silent, "firefight: no %s for the Flood's drop: its squad comes out of the floor alone",
 				FF_FLOOD_DROP_TAG);
 		}
-		pod_effect("effects\\coop teleport", &show->ground);
 	}
 
 	/* (dirt and gore thrown up as it pushes out) */
 	if (elapsed < FF_FLOOD_DROP_GROW_TICKS &&
 		(previous < 0 || previous / FF_FLOOD_DROP_PUFF_TICKS != elapsed / FF_FLOOD_DROP_PUFF_TICKS))
 	{
-		flood_drop_effect(puffs, (short)NUMBEROF(puffs) - 1, &show->ground);
+		flood_drop_effect(show->puff_effect, &show->ground);
 	}
 
 	if (show->object_index != NONE && object_try_and_get_and_verify_type(show->object_index, _object_mask_scenery))
@@ -6937,27 +7016,9 @@ static boolean flood_drop_show_tick(struct flood_drop_show *show, long elapsed)
 				object_reconnect_to_map(show->object_index, &floor_location);
 			}
 		}
-		/* (diagnostics: what the form is, as it grows) */
-		if ((previous < 0 && elapsed >= 0) || (previous < 60 && elapsed >= 60) ||
-			(previous < 140 && elapsed >= 140) || (previous < 190 && elapsed >= 190))
-		{
-			struct object_header_datum *header = object_header_get(show->object_index);
-
-			error(_error_silent,
-				"firefight: flood drop form tick %ld: at %.2f %.2f %.2f (floor %.2f) scale %.2f sphere %.2f %.2f %.2f r %.2f "
-				"cluster %d floor cluster %d flags %08lX header %04X",
-				elapsed, object->object.position.x, object->object.position.y, object->object.position.z,
-				show->ground.z, object->object.scale,
-				object->object.bounding_sphere_center.x, object->object.bounding_sphere_center.y,
-				object->object.bounding_sphere_center.z, object->object.bounding_sphere_radius,
-				(int)object->object.location.cluster_index, (int)floor_location.cluster_index,
-				(unsigned long)object->object.flags, (unsigned)header->flags);
-		}
 	}
 	else
 	{
-		if (show->object_index != NONE)
-			error(_error_silent, "firefight: flood drop form %08lX gone at tick %ld", (unsigned long)show->object_index, elapsed);
 		show->object_index = NONE;
 	}
 	return TRUE;
@@ -6980,7 +7041,7 @@ void firefight_flood_drop_update(void)
 	if (g_flood_drop_shown_time != drop_time)
 	{
 		flood_drop_show_begin(&g_flood_drop_show, &ff_state.flood_drop_position, ff_state.flood_drop_facing,
-			tag_loaded('scen', FF_FLOOD_DROP_TAG));
+			tag_loaded('scen', FF_FLOOD_DROP_TAG), NONE, NONE);
 		g_flood_drop_shown_time = drop_time;
 	}
 	if (g_flood_drop_show.last_tick < FF_FLOOD_DROP_TOTAL_TICKS)
@@ -7013,7 +7074,12 @@ void firefight_flood_drop_preview_stop(void)
 	g_flood_drop_preview_tick = -1.0f;
 }
 
-boolean firefight_flood_drop_preview_start(real_point3d const *zone, real facing, long flood_form_tag)
+boolean firefight_flood_drop_preview_start(
+	real_point3d const *zone,
+	real facing,
+	long flood_form_tag,
+	long burst_effect_tag,
+	long puff_effect_tag)
 {
 	real_point3d ground = *zone;
 
@@ -7021,7 +7087,10 @@ boolean firefight_flood_drop_preview_start(real_point3d const *zone, real facing
 	if (flood_form_tag == NONE)
 		return FALSE;
 	project_point_to_ground(&ground, 0.0f);
-	flood_drop_show_begin(&g_flood_drop_preview, &ground, facing, flood_form_tag);
+	flood_drop_show_begin(&g_flood_drop_preview, &ground, facing, flood_form_tag, burst_effect_tag, puff_effect_tag);
+	error(_error_silent, "firefight: test flood: form %08lX, burst effect %08lX, gore effect %08lX",
+		(unsigned long)flood_form_tag, (unsigned long)g_flood_drop_preview.burst_effect,
+		(unsigned long)g_flood_drop_preview.puff_effect);
 	g_flood_drop_preview_tick = 0.0f;
 	flood_drop_show_tick(&g_flood_drop_preview, 0);
 	return TRUE;

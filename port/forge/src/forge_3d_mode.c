@@ -2709,10 +2709,13 @@ static char const *forge_ff_spawn_type_label(int type)
 	case _forge_ff_spawn_enemy_vehicle_only: return "ENEMY VEHICLE";
 	case _forge_ff_spawn_enemy_ghost_only:   return "ENEMY GHOST";
 	case _forge_ff_spawn_enemy_heavy_veh:    return "ENEMY HEAVY VEH";
-	case FF_DROP_SPAWN_TYPE_ANY:             return "ENEMY DROP: ANY";
-	case FF_DROP_SPAWN_TYPE_COVENANT:        return "ENEMY DROP: COVENANT";
-	case FF_DROP_SPAWN_TYPE_HUMAN:           return "ENEMY DROP: HUMAN";
-	case FF_DROP_SPAWN_TYPE_FLOOD:           return "ENEMY DROP: FLOOD";
+	case FF_DROP_SPAWN_TYPE_ANY:
+	case FF_DROP_SPAWN_TYPE_COVENANT:
+	case FF_DROP_SPAWN_TYPE_HUMAN:
+	case FF_DROP_SPAWN_TYPE_FLOOD:
+	case FF_DROP_SPAWN_TYPE_COVENANT_HUMAN:
+	case FF_DROP_SPAWN_TYPE_COVENANT_FLOOD:
+	case FF_DROP_SPAWN_TYPE_HUMAN_FLOOD:     return "ENEMY DROP POINT";
 	case _forge_ff_spawn_player_vehicle:     return "PLAYER VEH PAD";
 	case FF_ROUTE_SPAWN_TYPE:                return "DROPSHIP ROUTE";
 	default:                                 return "AI INFANTRY";
@@ -3772,7 +3775,9 @@ void forge_3d_move_instance(
 extern boolean firefight_dropship_preview_start(real_point3d const *zone, real facing, long dropship_tag);
 extern short firefight_dropship_preview_update(real seconds);
 extern void firefight_dropship_preview_stop(void);
-extern boolean firefight_flood_drop_preview_start(real_point3d const *zone, real facing, long flood_form_tag);
+extern boolean firefight_dropship_preview_departing(void);
+extern boolean firefight_flood_drop_preview_start(
+	real_point3d const *zone, real facing, long flood_form_tag, long burst_effect_tag, long puff_effect_tag);
 extern boolean firefight_flood_drop_preview_update(real seconds);
 extern void firefight_flood_drop_preview_stop(void);
 extern short firefight_ordnance_preview_start(real_point3d const *area, long area_object, short count);
@@ -3860,41 +3865,112 @@ void forge_3d_delete_instance(int32_t live_idx, int broadcast_net)
 
 /* ---------- Dropship routes: a zone's flight path, as linked Firefight markers (halo_firefight_route.h) */
 
-/* an enemy drop point (once the dropship zone), of any kind */
+/* the factions an enemy drop point (once the dropship zone) spawns
+(FF_DROP_KINDS_*), 0 for anything else */
+static unsigned forge_ff_drop_kinds(struct forge_live_instance const *inst)
+{
+	return inst->active && inst->group_tag == 'ffsp' ?
+		ff_drop_point_kinds(FORGE_FF_UNPACK_TYPE(inst->team_designator)) : 0;
+}
+
 static int forge_ff_is_dropship_zone(struct forge_live_instance const *inst)
 {
-	return inst->active && inst->group_tag == 'ffsp' &&
-		ff_drop_point_kind(FORGE_FF_UNPACK_TYPE(inst->team_designator)) >= 0;
+	return forge_ff_drop_kinds(inst) != 0;
 }
 
-/* a drop point of the Flood's alone: no ship, so no route, and its test is
-Keyes' Flood form growing */
-static int forge_ff_is_flood_drop(struct forge_live_instance const *inst)
-{
-	return forge_ff_is_dropship_zone(inst) &&
-		ff_drop_point_kind(FORGE_FF_UNPACK_TYPE(inst->team_designator)) == FF_DROP_KIND_FLOOD;
-}
-
-/* the SPAWN TYPE row's next type: the drop points' kinds one after another
-where the dropship zone was, the route's points' type left out */
+/* the SPAWN TYPE row's next type: an enemy drop point is one, whatever
+factions it spawns (a new one all three), and the route's points' type is
+left out */
 static int forge_ff_spawn_type_step(int type, int dir)
 {
 	static int const cycle[] = {
 		_forge_ff_spawn_ai_infantry_only, _forge_ff_spawn_ai_and_vehicles, _forge_ff_spawn_enemy_vehicle_only,
 		_forge_ff_spawn_enemy_ghost_only, _forge_ff_spawn_enemy_heavy_veh,
-		FF_DROP_SPAWN_TYPE_ANY, FF_DROP_SPAWN_TYPE_COVENANT, FF_DROP_SPAWN_TYPE_HUMAN, FF_DROP_SPAWN_TYPE_FLOOD,
+		FF_DROP_SPAWN_TYPE_ANY,
 		_forge_ff_spawn_player_vehicle,
 	};
 	int count = (int)(sizeof(cycle) / sizeof(cycle[0]));
 	int at = 0;
 	int k;
 
+	if (ff_drop_point_kinds(type) != 0)
+		type = FF_DROP_SPAWN_TYPE_ANY;
 	for (k = 0; k < count; k++)
 	{
 		if (cycle[k] == type)
 			at = k;
 	}
 	return cycle[(at + count + dir) % count];
+}
+
+/* ---------- A drop point's own rows, after the six every Firefight marker has
+
+FLIGHT ROUTE (and its legs' styles once it has one) and TEST DROP while it
+spawns a ship's faction, FACTIONS TO SPAWN (a page of its own), and TEST
+FLOOD while it spawns the Flood */
+
+enum forge_ff_zone_row
+{
+	_forge_ff_zone_row_route,
+	_forge_ff_zone_row_arrival,
+	_forge_ff_zone_row_departure,
+	_forge_ff_zone_row_factions,
+	_forge_ff_zone_row_test_drop,
+	_forge_ff_zone_row_test_flood
+};
+
+#define FORGE_FF_ZONE_FIRST_ROW 6
+#define FORGE_FF_ZONE_MAX_ROWS 6
+
+static int forge_ff_zone_rows(struct forge_live_instance const *inst, int *rows)
+{
+	unsigned kinds = forge_ff_drop_kinds(inst);
+	int count = 0;
+
+	if (kinds & FF_DROP_KINDS_SHIPS)
+	{
+		rows[count++] = _forge_ff_zone_row_route;
+		if (FF_ROUTE_ID(inst->team_designator) != 0)
+		{
+			rows[count++] = _forge_ff_zone_row_arrival;
+			rows[count++] = _forge_ff_zone_row_departure;
+		}
+	}
+	rows[count++] = _forge_ff_zone_row_factions;
+	if (kinds & FF_DROP_KINDS_SHIPS)
+		rows[count++] = _forge_ff_zone_row_test_drop;
+	if (kinds & FF_DROP_KINDS_FLOOD)
+		rows[count++] = _forge_ff_zone_row_test_flood;
+	return count;
+}
+
+/* the panel's row a zone's row is at, or -1 when it has none */
+static int forge_ff_zone_row_at(struct forge_live_instance const *inst, int cursor)
+{
+	int rows[FORGE_FF_ZONE_MAX_ROWS];
+	int count = forge_ff_zone_rows(inst, rows);
+
+	return cursor >= FORGE_FF_ZONE_FIRST_ROW && cursor < FORGE_FF_ZONE_FIRST_ROW + count ?
+		rows[cursor - FORGE_FF_ZONE_FIRST_ROW] : -1;
+}
+
+/* the FACTIONS TO SPAWN page: HUMAN, COVENANT, FLOOD, then BACK */
+static int s_props_factions_open = 0;
+static int const s_props_faction_kinds[3] = { FF_DROP_KIND_HUMAN, FF_DROP_KIND_COVENANT, FF_DROP_KIND_FLOOD };
+
+static void forge_ff_factions_summary(unsigned kinds, char *out, size_t size)
+{
+	if ((kinds & FF_DROP_KINDS_ALL) == FF_DROP_KINDS_ALL)
+	{
+		snprintf(out, size, "ALL");
+		return;
+	}
+	snprintf(out, size, "%s%s%s%s%s",
+		(kinds & FF_DROP_KINDS_HUMAN) ? "HUMAN" : "",
+		(kinds & FF_DROP_KINDS_HUMAN) && (kinds & (FF_DROP_KINDS_COVENANT | FF_DROP_KINDS_FLOOD)) ? " + " : "",
+		(kinds & FF_DROP_KINDS_COVENANT) ? "COV" : "",
+		(kinds & FF_DROP_KINDS_COVENANT) && (kinds & FF_DROP_KINDS_FLOOD) ? " + " : "",
+		(kinds & FF_DROP_KINDS_FLOOD) ? "FLOOD" : "");
 }
 
 static int forge_ff_is_route_point(struct forge_live_instance const *inst)
@@ -4291,80 +4367,147 @@ static void forge_ff_route_insert_point(int32_t point_idx, int after)
 		forge_set_status("Added Route Point");
 }
 
-/* flies this zone's flight now, as Firefight would. The host's: the ship is a
-network object, so everyone sees it. Pressed again, it's called off */
-static int s_route_test_flying = 0;
+/* TEST DROP: this zone's flight flown now, as Firefight would, by the
+Covenant's Spirit and then the humans' Pelican (those of them the point
+spawns), the Pelican setting off as the Spirit leaves. The host's: a ship is
+a network object, so everyone sees it. TEST FLOOD: Keyes' Flood form grown and
+burst there, on this machine alone (scenery isn't sent). Pressed again,
+either is called off */
+static int s_route_test_flying = 0; /* 1: TEST DROP's ships; 2: TEST FLOOD */
+static struct
+{
+	long next_ship_tag; /* the Pelican, once the Spirit leaves (NONE: none) */
+	real_point3d where;
+	real facing;
+	char const *flying_name;
+	char const *next_name;
+} s_test_drop = { NONE };
+
+static long forge_ff_test_ship_tag(char const *path)
+{
+	uint32_t actual_group = 'vehi';
+
+	return forge_resolve_engine_tag('vehi', path, &actual_group);
+}
+
+static void forge_ff_test_stop(void)
+{
+	firefight_dropship_preview_stop();
+	firefight_flood_drop_preview_stop();
+	s_route_test_flying = 0;
+	s_test_drop.next_ship_tag = NONE;
+}
 
 static void forge_ff_route_test_flight(int32_t zone_idx)
 {
-	static char const *const spirit_tags[] = { "vehicles\\c_dropship\\c_dropship", "vehicles\\pelican\\pelican" };
-	static char const *const pelican_tags[] = { "vehicles\\pelican\\pelican", "vehicles\\c_dropship\\c_dropship" };
 	struct forge_live_instance const *zone = &g_forge.live_instances[zone_idx];
-	int kind = ff_drop_point_kind(FORGE_FF_UNPACK_TYPE(zone->team_designator));
-	char const *const *ship_tags = kind == FF_DROP_KIND_HUMAN ? pelican_tags : spirit_tags;
-	real_point3d where;
-	long ship_tag = NONE;
-	int k;
+	unsigned kinds = forge_ff_drop_kinds(zone);
+	long spirit_tag;
+	long pelican_tag;
 
 	if (s_route_test_flying)
 	{
-		firefight_dropship_preview_stop();
-		firefight_flood_drop_preview_stop();
-		s_route_test_flying = 0;
-		forge_set_status(kind == FF_DROP_KIND_FLOOD ? "Test Drop Stopped" : "Test Flight Stopped");
-		return;
-	}
-	if (kind == FF_DROP_KIND_FLOOD)
-	{
-		uint32_t actual_group = 'scen';
-		long form_tag = forge_resolve_engine_tag('scen', FF_FLOOD_DROP_TAG, &actual_group);
-
-		where.x = zone->x;
-		where.y = zone->y;
-		where.z = zone->z;
-		if (form_tag == NONE)
-		{
-			forge_set_status("Keyes' Flood Form Is Not Loaded in This Map");
-		}
-		else if (firefight_flood_drop_preview_start(&where, zone->yaw, form_tag))
-		{
-			s_route_test_flying = 2;
-			g_forge.active_modal = _forge_modal_none;
-		}
-		else
-		{
-			forge_set_status("The Flood Form Could Not Be Made");
-		}
+		forge_set_status(s_route_test_flying == 2 ? "Test Flood Stopped" : "Test Drop Stopped");
+		forge_ff_test_stop();
 		return;
 	}
 	if (game_connection() == _game_connection_network_client)
 	{
-		forge_set_status("Only the Host Can Fly a Test Flight");
+		forge_set_status("Only the Host Can Fly a Test Drop");
 		return;
 	}
-	for (k = 0; k < 2 && ship_tag == NONE; k++)
+	spirit_tag = (kinds & FF_DROP_KINDS_COVENANT) ? forge_ff_test_ship_tag("vehicles\\c_dropship\\c_dropship") : NONE;
+	pelican_tag = (kinds & FF_DROP_KINDS_HUMAN) ? forge_ff_test_ship_tag("vehicles\\pelican\\pelican") : NONE;
+	if (spirit_tag == NONE && pelican_tag == NONE)
 	{
-		uint32_t actual_group = 'vehi';
-
-		ship_tag = forge_resolve_engine_tag('vehi', ship_tags[k], &actual_group);
-	}
-	if (ship_tag == NONE)
-	{
-		forge_set_status("No Dropship Tag Is Loaded in This Map");
+		forge_set_status("No Spirit or Pelican Tag Is Loaded in This Map");
 		return;
 	}
 
-	where.x = zone->x;
-	where.y = zone->y;
-	where.z = zone->z;
-	if (firefight_dropship_preview_start(&where, zone->yaw, ship_tag))
+	s_test_drop.where.x = zone->x;
+	s_test_drop.where.y = zone->y;
+	s_test_drop.where.z = zone->z;
+	s_test_drop.facing = zone->yaw;
+	s_test_drop.flying_name = spirit_tag != NONE ? "Spirit" : "Pelican";
+	s_test_drop.next_name = "Pelican";
+	forge_ff_test_stop();
+	s_test_drop.next_ship_tag = spirit_tag != NONE ? pelican_tag : NONE;
+	if (firefight_dropship_preview_start(&s_test_drop.where, s_test_drop.facing,
+		spirit_tag != NONE ? spirit_tag : pelican_tag))
 	{
 		s_route_test_flying = 1;
 		g_forge.active_modal = _forge_modal_none;
+		s_props_factions_open = 0;
 	}
 	else
 	{
+		s_test_drop.next_ship_tag = NONE;
 		forge_set_status("The Test Ship Could Not Be Made");
+	}
+}
+
+static void forge_ff_zone_test_flood(int32_t zone_idx)
+{
+	struct forge_live_instance const *zone = &g_forge.live_instances[zone_idx];
+	uint32_t actual_group = 'scen';
+	real_point3d where;
+	long form_tag;
+	long burst_tag;
+	long puff_tag;
+
+	if (s_route_test_flying)
+	{
+		forge_set_status(s_route_test_flying == 2 ? "Test Flood Stopped" : "Test Drop Stopped");
+		forge_ff_test_stop();
+		return;
+	}
+	form_tag = forge_resolve_engine_tag('scen', FF_FLOOD_DROP_TAG, &actual_group);
+	/* (and its burst and the gore it throws, which Firefight's levels have
+	copied in and Forge's reads from its pack now, the first of each found) */
+	{
+		static char const *const bursts[] = {
+			"characters\\floodcarrier\\effects\\body destroyed",
+			"effects\\flood bit death",
+		};
+		static char const *const puffs[] = {
+			"characters\\flood_captain\\punchspray",
+			"effects\\flood bit death",
+		};
+		int k;
+
+		burst_tag = NONE;
+		puff_tag = NONE;
+		for (k = 0; k < 2 && burst_tag == NONE; k++)
+		{
+			uint32_t effect_group = 'effe';
+
+			burst_tag = forge_resolve_engine_tag('effe', bursts[k], &effect_group);
+		}
+		for (k = 0; k < 2 && puff_tag == NONE; k++)
+		{
+			uint32_t effect_group = 'effe';
+
+			puff_tag = forge_resolve_engine_tag('effe', puffs[k], &effect_group);
+		}
+	}
+	if (form_tag == NONE)
+	{
+		forge_set_status("Keyes' Flood Form Is Not Loaded in This Map");
+		return;
+	}
+	where.x = zone->x;
+	where.y = zone->y;
+	where.z = zone->z;
+	forge_ff_test_stop();
+	if (firefight_flood_drop_preview_start(&where, zone->yaw, form_tag, burst_tag, puff_tag))
+	{
+		s_route_test_flying = 2;
+		g_forge.active_modal = _forge_modal_none;
+		s_props_factions_open = 0;
+	}
+	else
+	{
+		forge_set_status("The Flood Form Could Not Be Made");
 	}
 }
 
@@ -4425,15 +4568,15 @@ static void forge_ff_route_test_flight_update(float dt)
 {
 	if (s_route_test_flying == 2)
 	{
-		/* (a Flood drop point's: Keyes' form, this machine's alone) */
+		/* (TEST FLOOD's: Keyes' form, this machine's alone) */
 		if (!firefight_flood_drop_preview_update(dt))
 		{
 			s_route_test_flying = 0;
-			forge_set_status("Test Drop Finished");
+			forge_set_status("Test Flood Finished");
 		}
 		else
 		{
-			forge_set_status("Test Drop: The Flood Is Emerging");
+			forge_set_status("Test Flood: The Flood Is Emerging");
 		}
 	}
 	else if (s_route_test_flying)
@@ -4441,14 +4584,26 @@ static void forge_ff_route_test_flight_update(float dt)
 		static char const *const phases[] = { "", "Approach", "Hover", "Departure" };
 		short phase = firefight_dropship_preview_update(dt);
 
+		/* (the Pelican sets off on the same flight as the Spirit leaves) */
+		if (s_test_drop.next_ship_tag != NONE && (phase == 0 || firefight_dropship_preview_departing()))
+		{
+			long next = s_test_drop.next_ship_tag;
+
+			s_test_drop.next_ship_tag = NONE;
+			if (firefight_dropship_preview_start(&s_test_drop.where, s_test_drop.facing, next))
+			{
+				s_test_drop.flying_name = s_test_drop.next_name;
+				phase = FF_ROUTE_PHASE_APPROACH;
+			}
+		}
 		if (phase == 0)
 		{
 			s_route_test_flying = 0;
-			forge_set_status("Test Flight Finished");
+			forge_set_status("Test Drop Finished");
 		}
 		else
 		{
-			forge_set_status("Test Flight: %s", phases[phase]);
+			forge_set_status("Test Drop: %s %s", s_test_drop.flying_name, phases[phase]);
 		}
 	}
 }
@@ -6289,11 +6444,9 @@ void forge_3d_reset_session_tracking(void)
 	s_route_props_live_idx = -1;
 	g_forge.route_follow_live_index = -1;
 	if (s_route_test_flying)
-	{
-		firefight_dropship_preview_stop();
-		firefight_flood_drop_preview_stop();
-	}
+		forge_ff_test_stop();
 	s_route_test_flying = 0;
+	s_props_factions_open = 0;
 	/* (a level's test drop's pods went with it) */
 	if (s_test_dropping)
 		firefight_ordnance_preview_stop();
@@ -6394,6 +6547,7 @@ static void forge_props_open(void)
 
 	g_forge.active_modal = _forge_modal_object_properties;
 	g_forge.props_cursor = 0;
+	s_props_factions_open = 0;
 	s_route_taken.count = 0;
 	s_props_opened.inst = *inst;
 	s_props_opened.snap_mode = g_forge.snap_mode;
@@ -7190,8 +7344,14 @@ void forge_3d_update(float dt)
 			modal_before_hotkeys != _forge_modal_none &&
 			modal_before_hotkeys != _forge_modal_save_copy_as)
 		{
+			/* (out of a drop point's FACTIONS TO SPAWN, to its panel) */
+			if (modal_before_hotkeys == _forge_modal_object_properties && s_props_factions_open)
+			{
+				s_props_factions_open = 0;
+				g_forge.props_cursor = FORGE_FF_ZONE_FIRST_ROW;
+			}
 			/* (out of a group of actors, to the groups) */
-			if (modal_before_hotkeys == _forge_modal_spawn_palette && s_palette_ai_group != NONE)
+			else if (modal_before_hotkeys == _forge_modal_spawn_palette && s_palette_ai_group != NONE)
 			{
 				s_palette_ai_group = NONE;
 				g_forge.palette_cursor = 0;
@@ -7553,14 +7713,66 @@ void forge_3d_update(float dt)
 		int test_drop_row = forge_is_drop_area(inst) ? (snap_row ? 6 : 5) : -1;
 		/* (a placed vehicle's ALWAYS SPAWN, after DELETE OBJECT) */
 		int always_row = forge_props_always_spawn_row(inst, snap_row, test_drop_row);
+		int zone_rows[FORGE_FF_ZONE_MAX_ROWS];
+		int zone_row_count = is_zone ? forge_ff_zone_rows(inst, zone_rows) : 0;
 		int max_props_row = is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS - 1 : is_tele ? (snap_row ? 6 : 5) :
-			(is_zone ? (forge_ff_is_flood_drop(inst) ? 6 : FF_ROUTE_ID(inst->team_designator) != 0 ? 9 : 7) :
+			(is_zone ? FORGE_FF_ZONE_FIRST_ROW - 1 + zone_row_count :
 				(is_route_point ? 6 : (always_row >= 0 ? always_row :
 					(test_drop_row >= 0 ? test_drop_row : ((is_ff_spawn || snap_row) ? 5 : 4)))));
 		/* (DONE and UNDO, side by side under the rows) */
 		int props_done = max_props_row + 1;
 		int props_undo = max_props_row + 2;
 		int dir = (cur_left && !prev_left) ? -1 : ((cur_right && !prev_right) || (cur_enter && !prev_enter) ? 1 : 0);
+
+		/* FACTIONS TO SPAWN: a drop point's page of HUMAN, COVENANT and FLOOD,
+		each on or off (one at least), then BACK */
+		if (s_props_factions_open && !is_zone)
+			s_props_factions_open = 0;
+		if (s_props_factions_open)
+		{
+			int back_row = 3;
+
+			if (g_forge.props_cursor > back_row)
+				g_forge.props_cursor = back_row;
+			if (cur_up && !prev_up)
+				g_forge.props_cursor = g_forge.props_cursor == 0 ? back_row : g_forge.props_cursor - 1;
+			if (cur_down && !prev_down)
+				g_forge.props_cursor = g_forge.props_cursor >= back_row ? 0 : g_forge.props_cursor + 1;
+			if (g_forge.props_cursor == back_row)
+			{
+				if (cur_enter && !prev_enter)
+				{
+					int k;
+
+					s_props_factions_open = 0;
+					g_forge.props_cursor = FORGE_FF_ZONE_FIRST_ROW;
+					for (k = 0; k < zone_row_count; k++)
+					{
+						if (zone_rows[k] == _forge_ff_zone_row_factions)
+							g_forge.props_cursor = FORGE_FF_ZONE_FIRST_ROW + k;
+					}
+				}
+			}
+			else if (dir != 0)
+			{
+				unsigned kinds = forge_ff_drop_kinds(inst);
+				unsigned bit = 1U << s_props_faction_kinds[g_forge.props_cursor];
+
+				if ((kinds & ~bit & FF_DROP_KINDS_ALL) == 0)
+				{
+					forge_set_status("A Drop Point Spawns One Faction at Least");
+				}
+				else
+				{
+					kinds ^= bit;
+					forge_ff_marker_set_usage(g_forge.grabbed_live_index,
+						FF_ROUTE_WITH_ID(FORGE_FF_PACK_USAGE(ff_drop_point_type(kinds),
+							FORGE_FF_UNPACK_ROUND(inst->team_designator), FORGE_FF_UNPACK_WAVE(inst->team_designator)),
+							FF_ROUTE_ID(inst->team_designator)));
+				}
+			}
+			goto update_prev_keys;
+		}
 		if (g_forge.props_cursor > props_undo)
 			g_forge.props_cursor = props_undo;
 		/* (round the panel: up from the first row is DONE, down from the buttons the first row) */
@@ -7714,25 +7926,41 @@ void forge_3d_update(float dt)
 					if (cur_enter && !prev_enter && zone_idx >= 0)
 						forge_ff_route_test_flight(zone_idx);
 				}
-				else if (is_zone && g_forge.props_cursor == max_props_row)
+				else if (is_zone && g_forge.props_cursor >= FORGE_FF_ZONE_FIRST_ROW)
 				{
-					/* (TEST FLIGHT, last of a zone's rows) */
-					if (cur_enter && !prev_enter)
-						forge_ff_route_test_flight(g_forge.grabbed_live_index);
-				}
-				else if (g_forge.props_cursor == 7 || g_forge.props_cursor == 8)
-				{
-					int leg = (g_forge.props_cursor == 7) ? FF_ROUTE_APPROACH : FF_ROUTE_DEPARTURE;
+					switch (forge_ff_zone_row_at(inst, g_forge.props_cursor))
+					{
+					case _forge_ff_zone_row_route:
+						if (cur_route != 0)
+							forge_ff_route_set_automatic(g_forge.grabbed_live_index);
+						else
+							forge_ff_route_set_custom(g_forge.grabbed_live_index);
+						break;
+					case _forge_ff_zone_row_arrival:
+					case _forge_ff_zone_row_departure:
+					{
+						int leg = forge_ff_zone_row_at(inst, g_forge.props_cursor) == _forge_ff_zone_row_arrival ?
+							FF_ROUTE_APPROACH : FF_ROUTE_DEPARTURE;
 
-					forge_ff_route_set_leg_style(cur_route, leg,
-						(forge_ff_route_leg_style(cur_route, leg) + FF_ROUTE_STYLE_COUNT + dir) % FF_ROUTE_STYLE_COUNT);
-				}
-				else if (g_forge.props_cursor == 6)
-				{
-					if (cur_route != 0)
-						forge_ff_route_set_automatic(g_forge.grabbed_live_index);
-					else
-						forge_ff_route_set_custom(g_forge.grabbed_live_index);
+						forge_ff_route_set_leg_style(cur_route, leg,
+							(forge_ff_route_leg_style(cur_route, leg) + FF_ROUTE_STYLE_COUNT + dir) % FF_ROUTE_STYLE_COUNT);
+						break;
+					}
+					case _forge_ff_zone_row_factions:
+						s_props_factions_open = 1;
+						g_forge.props_cursor = 0;
+						break;
+					case _forge_ff_zone_row_test_drop:
+						if (cur_enter && !prev_enter)
+							forge_ff_route_test_flight(g_forge.grabbed_live_index);
+						break;
+					case _forge_ff_zone_row_test_flood:
+						if (cur_enter && !prev_enter)
+							forge_ff_zone_test_flood(g_forge.grabbed_live_index);
+						break;
+					default:
+						break;
+					}
 				}
 				else if (g_forge.props_cursor == 3)
 				{
@@ -9219,7 +9447,7 @@ static void draw_teleporter_and_objective_markers(
 		{
 			int ff_type = FORGE_FF_UNPACK_TYPE(inst->team_designator);
 			uint32_t ring_col = (ff_type == _forge_ff_spawn_player_vehicle) ? 0xFF24FF54u :
-				(ff_drop_point_kind(ff_type) >= 0 || ff_type == FF_ROUTE_SPAWN_TYPE ? 0xFFFFC824u :
+				(ff_drop_point_kinds(ff_type) != 0 || ff_type == FF_ROUTE_SPAWN_TYPE ? 0xFFFFC824u :
 				(ff_type >= _forge_ff_spawn_ai_and_vehicles ? 0xFFFF8C14u : 0xFFFF6868u));
 			char ff_lbl[64];
 
@@ -9735,13 +9963,16 @@ void forge_3d_draw_hud(
 			int is_tele = forge_tele_is(inst);
 			int test_drop_row = forge_is_drop_area(inst) ? (snap_row ? 6 : 5) : -1;
 			int always_row = forge_props_always_spawn_row(inst, snap_row, test_drop_row);
-			int row_count = is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS : is_tele ? (snap_row ? 7 : 6) :
-				(is_zone ? (forge_ff_is_flood_drop(inst) ? 7 : FF_ROUTE_ID(inst->team_designator) != 0 ? 10 : 8) :
+			int zone_rows[FORGE_FF_ZONE_MAX_ROWS];
+			int zone_row_count = is_zone ? forge_ff_zone_rows(inst, zone_rows) : 0;
+			/* (a drop point's FACTIONS TO SPAWN page: its three, then BACK alone) */
+			int factions_page = is_zone && s_props_factions_open;
+			int row_count = factions_page ? 3 : is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS : is_tele ? (snap_row ? 7 : 6) :
+				(is_zone ? FORGE_FF_ZONE_FIRST_ROW + zone_row_count :
 					(is_route_point ? 7 : (always_row >= 0 ? always_row + 1 :
 						(test_drop_row >= 0 ? test_drop_row + 1 : ((is_ff_spawn || snap_row) ? 6 : 5)))));
 			short box_w = (short)(is_ai_spawn ? 372 : 312);
-			short box_h = (short)(is_ai_spawn ? 34 + NUMBER_OF_FORGE_AI_ROWS * 28 + 50 :
-				(row_count == 10 ? 364 : (row_count == 8 ? 308 : (row_count == 7 ? 280 : (row_count == 6 ? 252 : 224)))));
+			short box_h = (short)(34 + row_count * 28 + 50);
 			short px0 = (short)(window_x0 + 16);
 			short py0 = (short)(window_y0 + 34);
 			short px1 = (short)(px0 + box_w);
@@ -9755,8 +9986,9 @@ void forge_3d_draw_hud(
 			draw_ce_pause_box(px0, py0, box_w, box_h, 1);
 
 			draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 4),
-				is_ai_spawn ? "AI SPAWN" : (is_tele ? "TELEPORTER" :
-					(is_route_point ? "DROPSHIP ROUTE" : (is_ff_spawn ? "FIREFIGHT SPAWN" : "OBJECT PROPERTIES"))), 0xFFFFFFFFu);
+				factions_page ? "FACTIONS TO SPAWN" : is_ai_spawn ? "AI SPAWN" : (is_tele ? "TELEPORTER" :
+					(is_route_point ? "DROPSHIP ROUTE" : (is_zone ? "ENEMY DROP POINT" :
+					(is_ff_spawn ? "FIREFIGHT SPAWN" : "OBJECT PROPERTIES")))), 0xFFFFFFFFu);
 
 			if (is_ai_spawn)
 			{
@@ -9826,7 +10058,7 @@ void forge_3d_draw_hud(
 				values[4][0] = 0;
 				snprintf(labels[5], sizeof(labels[5]), "DELETE OBJECT");
 				values[5][0] = 0;
-				snprintf(labels[6], sizeof(labels[6]), "%s", s_route_test_flying ? "STOP TEST FLIGHT" : "TEST FLIGHT");
+				snprintf(labels[6], sizeof(labels[6]), "%s", s_route_test_flying == 1 ? "STOP TEST DROP" : "TEST DROP");
 				values[6][0] = 0;
 			}
 			else if (is_ff_spawn)
@@ -9846,31 +10078,50 @@ void forge_3d_draw_hud(
 				values[4][0] = 0;
 				snprintf(labels[5], sizeof(labels[5]), "DELETE OBJECT");
 				values[5][0] = 0;
-				if (is_zone && forge_ff_is_flood_drop(inst))
-				{
-					snprintf(labels[6], sizeof(labels[6]), "%s", s_route_test_flying ? "STOP TEST DROP" : "TEST DROP");
-					values[6][0] = 0;
-				}
-				else if (is_zone)
+				if (is_zone)
 				{
 					int route_id = FF_ROUTE_ID(inst->team_designator);
+					int k;
 
-					snprintf(labels[6], sizeof(labels[6]), "FLIGHT ROUTE:");
-					if (route_id != 0)
-						snprintf(values[6], sizeof(values[6]), "%d POINTS", forge_ff_route_point_count(route_id));
-					else
-						snprintf(values[6], sizeof(values[6]), "AUTOMATIC");
-					if (route_id != 0)
+					for (k = 0; k < zone_row_count; k++)
 					{
-						snprintf(labels[7], sizeof(labels[7]), "ARRIVAL:");
-						snprintf(values[7], sizeof(values[7]), "%s",
-							ff_route_style_name(forge_ff_route_leg_style(route_id, FF_ROUTE_APPROACH), FF_ROUTE_APPROACH));
-						snprintf(labels[8], sizeof(labels[8]), "DEPARTURE:");
-						snprintf(values[8], sizeof(values[8]), "%s",
-							ff_route_style_name(forge_ff_route_leg_style(route_id, FF_ROUTE_DEPARTURE), FF_ROUTE_DEPARTURE));
+						int row = FORGE_FF_ZONE_FIRST_ROW + k;
+
+						values[row][0] = 0;
+						switch (zone_rows[k])
+						{
+						case _forge_ff_zone_row_route:
+							snprintf(labels[row], sizeof(labels[0]), "FLIGHT ROUTE:");
+							if (route_id != 0)
+								snprintf(values[row], sizeof(values[0]), "%d POINTS", forge_ff_route_point_count(route_id));
+							else
+								snprintf(values[row], sizeof(values[0]), "AUTOMATIC");
+							break;
+						case _forge_ff_zone_row_arrival:
+							snprintf(labels[row], sizeof(labels[0]), "ARRIVAL:");
+							snprintf(values[row], sizeof(values[0]), "%s",
+								ff_route_style_name(forge_ff_route_leg_style(route_id, FF_ROUTE_APPROACH), FF_ROUTE_APPROACH));
+							break;
+						case _forge_ff_zone_row_departure:
+							snprintf(labels[row], sizeof(labels[0]), "DEPARTURE:");
+							snprintf(values[row], sizeof(values[0]), "%s",
+								ff_route_style_name(forge_ff_route_leg_style(route_id, FF_ROUTE_DEPARTURE), FF_ROUTE_DEPARTURE));
+							break;
+						case _forge_ff_zone_row_factions:
+							snprintf(labels[row], sizeof(labels[0]), "FACTIONS:");
+							forge_ff_factions_summary(forge_ff_drop_kinds(inst), values[row], sizeof(values[0]));
+							break;
+						case _forge_ff_zone_row_test_drop:
+							snprintf(labels[row], sizeof(labels[0]), "%s", s_route_test_flying == 1 ? "STOP TEST DROP" : "TEST DROP");
+							break;
+						case _forge_ff_zone_row_test_flood:
+							snprintf(labels[row], sizeof(labels[0]), "%s", s_route_test_flying == 2 ? "STOP TEST FLOOD" : "TEST FLOOD");
+							break;
+						default:
+							labels[row][0] = 0;
+							break;
+						}
 					}
-					snprintf(labels[row_count - 1], sizeof(labels[0]), "%s", s_route_test_flying ? "STOP TEST FLIGHT" : "TEST FLIGHT");
-					values[row_count - 1][0] = 0;
 				}
 			}
 			else
@@ -9923,6 +10174,18 @@ void forge_3d_draw_hud(
 				}
 			}
 
+			if (factions_page)
+			{
+				unsigned kinds = forge_ff_drop_kinds(inst);
+
+				for (r = 0; r < 3; r++)
+				{
+					snprintf(labels[r], sizeof(labels[0]), "%s:", ff_drop_kind_name(s_props_faction_kinds[r]));
+					snprintf(values[r], sizeof(values[0]), "%s",
+						(kinds & (1U << s_props_faction_kinds[r])) ? "ON" : "OFF");
+				}
+			}
+
 			for (r = 0; r < row_count; r++)
 			{
 				short rx0 = (short)(px0 + 14);
@@ -9950,12 +10213,15 @@ void forge_3d_draw_hud(
 
 			/* (reached with the arrows, as the rows are: forge_3d_update) */
 			forge_hit_add(_forge_hit_props_row, row_count, (short)(px0 + 14), (short)(py1 - 32), (short)(px0 + 150), (short)(py1 - 8));
-			forge_hit_add(_forge_hit_props_row, row_count + 1, (short)(px1 - 150), (short)(py1 - 32), (short)(px1 - 14), (short)(py1 - 8));
 			s_props_row_has_value[row_count & 15] = s_props_row_has_value[(row_count + 1) & 15] = 0;
 			draw_ce_text_button(font_index, (short)(px0 + 14), (short)(py1 - 32), 136, 24,
-				g_forge.props_cursor == row_count, "DONE");
-			draw_ce_text_button(font_index, (short)(px1 - 150), (short)(py1 - 32), 136, 24,
-				g_forge.props_cursor == row_count + 1, g_forge.props_cursor == row_count + 1 ? "HOLD TO UNDO" : "UNDO");
+				g_forge.props_cursor == row_count, factions_page ? "BACK" : "DONE");
+			if (!factions_page)
+			{
+				forge_hit_add(_forge_hit_props_row, row_count + 1, (short)(px1 - 150), (short)(py1 - 32), (short)(px1 - 14), (short)(py1 - 8));
+				draw_ce_text_button(font_index, (short)(px1 - 150), (short)(py1 - 32), 136, 24,
+					g_forge.props_cursor == row_count + 1, g_forge.props_cursor == row_count + 1 ? "HOLD TO UNDO" : "UNDO");
+			}
 			if (s_undo_hold_fraction > 0.0f)
 			{
 				rectangle2d undo_bar;

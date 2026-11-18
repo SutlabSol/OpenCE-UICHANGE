@@ -2279,6 +2279,9 @@ static void seed_firefight_donor(struct tag_import_donor *donor)
 	{
 		"effects\\coop teleport",
 		"characters\\floodcarrier\\effects\\carrier burst",
+		/* (a carrier form's pop: the Flood's drop bursts with it) */
+		"characters\\floodcarrier\\effects\\body destroyed",
+		"effects\\flood bit skin explode",
 		"weapons\\plasma grenade\\effects\\explosion",
 		"weapons\\frag grenade\\effects\\explosion",
 	};

@@ -7738,7 +7738,7 @@ static int resolve_marker_kind_and_color(
 		*out_mesh_kind = _marker_mesh_firefight_spawn;
 		if (ff_type == _forge_ff_spawn_player_vehicle)
 			*out_color_preset = _marker_color_tele_green;
-		else if (ff_drop_point_kind(ff_type) >= 0 || ff_type == FF_ROUTE_SPAWN_TYPE)
+		else if (ff_drop_point_kinds(ff_type) != 0 || ff_type == FF_ROUTE_SPAWN_TYPE)
 			*out_color_preset = _marker_color_koth_gold;
 		else if (ff_type >= _forge_ff_spawn_ai_and_vehicles && ff_type <= _forge_ff_spawn_enemy_heavy_veh)
 			*out_color_preset = _marker_color_race_orange;

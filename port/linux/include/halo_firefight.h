@@ -961,7 +961,12 @@ void firefight_flood_drop_update(void);
 long firefight_flood_drop_object(void);
 /* Forge's TEST DROP of a Flood drop point: the form grown and burst on this
 machine, no squad */
-boolean firefight_flood_drop_preview_start(real_point3d const *zone, real facing, long flood_form_tag);
+boolean firefight_flood_drop_preview_start(
+	real_point3d const *zone,
+	real facing,
+	long flood_form_tag,
+	long burst_effect_tag,
+	long puff_effect_tag);
 boolean firefight_flood_drop_preview_update(real seconds);
 void firefight_flood_drop_preview_stop(void);
 /* (port) how long after the drop's time a pod is let go (its group's), and
