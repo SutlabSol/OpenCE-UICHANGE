@@ -570,6 +570,199 @@ int forge_teleporter_scenery_tag(uint32_t group_tag, char const *tag_path)
 	return strstr(lower_buf, "teleporter") != NULL && strstr(lower_buf, "shield") == NULL;
 }
 
+static void forge_lowercase(char const *in, char *out, size_t size)
+{
+	size_t i;
+
+	for (i = 0; in && in[i] && i + 1 < size; i++)
+		out[i] = (in[i] >= 'A' && in[i] <= 'Z') ? (char)(in[i] - 'A' + 'a') : in[i];
+	out[size ? i : 0] = '\0';
+}
+
+/* a particle emitter: a scenery whose attachments make fire, sparks, steam
+and the like (the EFFECTS tab), which the scenery list leaves out */
+static int is_forge_particle_emitter_tag(uint32_t grp, char const *tag_path)
+{
+	static char const *const s_emitters[] = {
+		"scenery\\emitters\\",
+		"_emitter",
+		"\\grav_lift_particles\\",
+		"rocks_smoldering",
+		"scenery\\tubewire\\",
+	};
+	char lower_buf[260];
+	size_t k;
+
+	if (grp != 'scen' || !tag_path || !tag_path[0])
+		return 0;
+	forge_lowercase(tag_path, lower_buf, sizeof(lower_buf));
+	for (k = 0; k < sizeof(s_emitters) / sizeof(s_emitters[0]); k++)
+	{
+		if (strstr(lower_buf, s_emitters[k]) != NULL)
+			return 1;
+	}
+	return 0;
+}
+
+/* an effect placed as itself (an effect spot: Forge plays it again and again
+where it's put, forge_3d_mode.c's forge_effect_spots_update): the blood and
+the Flood's gore, which no emitter scenery makes */
+int is_forge_effect_spot_tag(uint32_t grp, char const *tag_path)
+{
+	/* (those that show something played as they are: particles, or the bits
+	they throw. The blood collisions, flood bit death and the infection
+	form's deaths are a decal, a sound or damage alone: DECALS has those) */
+	static char const *const s_spots[] = {
+		"effects\\blood aoe elite",
+		"effects\\blood aoe flood",
+		"effects\\blood aoe human",
+		"effects\\blood aoe hunter",
+		"effects\\flood bit skin explode",
+		"effects\\flood bit limb explode",
+		"effects\\flood bit h-head explode",
+		"effects\\debris floodcombat scabs",
+		"characters\\floodcarrier\\effects\\body destroyed",
+		"characters\\flood_infection\\body depleted",
+		"characters\\flood_captain\\punchspray",
+	};
+	char lower_buf[260];
+	size_t k;
+
+	if (grp != 'effe' || !tag_path || !tag_path[0])
+		return 0;
+	forge_lowercase(tag_path, lower_buf, sizeof(lower_buf));
+	for (k = 0; k < sizeof(s_spots) / sizeof(s_spots[0]); k++)
+	{
+		if (!strcmp(lower_buf, s_spots[k]))
+			return 1;
+	}
+	return 0;
+}
+
+/* ---------- The palette's origins and keyword folders
+
+SCENERY, VEHICLES, WEAPONS, EQUIPMENT and EFFECTS show a folder of each origin
+the tab has tags of, and in each the tags that share a keyword (two at least)
+in a folder of their own */
+
+int forge_catalog_category_split(int category)
+{
+	return category == _forge_cat_scenery || category == _forge_cat_vehicles ||
+		category == _forge_cat_weapons || category == _forge_cat_equipment ||
+		category == _forge_cat_effects || category == _forge_cat_decals;
+}
+
+char const *forge_catalog_origin_name(int origin)
+{
+	switch (origin)
+	{
+	case _forge_origin_custom:   return "CUSTOM";
+	case _forge_origin_campaign: return "CAMPAIGN";
+	case _forge_origin_map:      return "MAP";
+	case _forge_origin_profile:  return "TAG PROFILE";
+	default:                     return "FORGE";
+	}
+}
+
+/* (a tab's keywords, the first a tag's path has deciding its folder) */
+static struct
+{
+	uint8_t category;
+	char const *word;
+	char const *folder;
+} const s_catalog_keywords[] = {
+	{ _forge_cat_scenery, "tree", "TREES" },
+	{ _forge_cat_scenery, "boulder", "ROCKS" },
+	{ _forge_cat_scenery, "rock", "ROCKS" },
+	{ _forge_cat_scenery, "shrub", "PLANTS" },
+	{ _forge_cat_scenery, "bush", "PLANTS" },
+	{ _forge_cat_scenery, "plant", "PLANTS" },
+	{ _forge_cat_scenery, "fern", "PLANTS" },
+	{ _forge_cat_scenery, "vine", "PLANTS" },
+	{ _forge_cat_scenery, "lilypad", "PLANTS" },
+	{ _forge_cat_scenery, "crashed", "WRECKS" },
+	{ _forge_cat_scenery, "scenery\\vehicles\\", "WRECKS" },
+	{ _forge_cat_scenery, "vehicles\\", "VEHICLE PROPS" },
+	{ _forge_cat_scenery, "barricade", "BARRICADES" },
+	{ _forge_cat_scenery, "beacon", "BEACONS" },
+	{ _forge_cat_scenery, "scenery\\c_", "COVENANT PROPS" },
+	{ _forge_cat_scenery, "metal", "COVENANT PROPS" },
+	{ _forge_cat_scenery, "scenery\\h_", "HUMAN PROPS" },
+	{ _forge_cat_vehicles, "warthog", "WARTHOGS" },
+	{ _forge_cat_vehicles, "ghost", "GHOSTS" },
+	{ _forge_cat_vehicles, "banshee", "BANSHEES" },
+	{ _forge_cat_vehicles, "scorpion", "SCORPIONS" },
+	{ _forge_cat_vehicles, "pelican", "PELICANS" },
+	{ _forge_cat_vehicles, "dropship", "SPIRITS" },
+	{ _forge_cat_vehicles, "lifepod", "LIFEPODS" },
+	{ _forge_cat_vehicles, "turret", "TURRETS" },
+	{ _forge_cat_vehicles, "wraith", "WRAITHS" },
+	{ _forge_cat_weapons, "plasma", "COVENANT" },
+	{ _forge_cat_weapons, "needler", "COVENANT" },
+	{ _forge_cat_weapons, "energy sword", "COVENANT" },
+	{ _forge_cat_weapons, "fuel rod", "COVENANT" },
+	{ _forge_cat_equipment, "grenade", "GRENADES" },
+	{ _forge_cat_equipment, "ammo", "AMMO" },
+	{ _forge_cat_equipment, "powerups\\", "POWERUPS" },
+	{ _forge_cat_effects, "glowingdrip", "FLOOD" },
+	{ _forge_cat_effects, "blood", "BLOOD" },
+	{ _forge_cat_effects, "flood", "FLOOD" },
+	{ _forge_cat_effects, "fire", "FIRE" },
+	{ _forge_cat_effects, "flame", "FIRE" },
+	{ _forge_cat_effects, "smolder", "FIRE" },
+	{ _forge_cat_effects, "spark", "SPARKS" },
+	{ _forge_cat_effects, "steam", "SMOKE & STEAM" },
+	{ _forge_cat_effects, "smoke", "SMOKE & STEAM" },
+	{ _forge_cat_effects, "condensation", "SMOKE & STEAM" },
+	{ _forge_cat_effects, "dust", "SMOKE & STEAM" },
+	{ _forge_cat_effects, "tubewire", "SMOKE & STEAM" },
+	{ _forge_cat_effects, "water", "WATER" },
+	{ _forge_cat_effects, "spray", "WATER" },
+	{ _forge_cat_effects, "drip", "WATER" },
+	{ _forge_cat_effects, "bubble", "WATER" },
+	{ _forge_cat_decals, "blood", "BLOOD" },
+	{ _forge_cat_decals, "glowingdrip", "BLOOD" },
+	{ _forge_cat_decals, "burn", "BURNS & SCORCHES" },
+	{ _forge_cat_decals, "char", "BURNS & SCORCHES" },
+	{ _forge_cat_decals, "glow", "BURNS & SCORCHES" },
+	{ _forge_cat_decals, "bullet holes", "BULLET HOLES" },
+	{ _forge_cat_decals, "treadmark", "TRACKS" },
+	{ _forge_cat_decals, "decals-environment", "SIGNS & SYMBOLS" },
+};
+
+/* (keywords are numbered from 1 by their folder's first row) */
+char const *forge_catalog_keyword_name(int keyword)
+{
+	return keyword > 0 && keyword <= (int)(sizeof(s_catalog_keywords) / sizeof(s_catalog_keywords[0])) ?
+		s_catalog_keywords[keyword - 1].folder : "";
+}
+
+static uint8_t forge_catalog_keyword_of(int category, char const *tag_path)
+{
+	char lower_buf[260];
+	size_t k;
+
+	if (!forge_catalog_category_split(category))
+		return 0;
+	forge_lowercase(tag_path, lower_buf, sizeof(lower_buf));
+	for (k = 0; k < sizeof(s_catalog_keywords) / sizeof(s_catalog_keywords[0]); k++)
+	{
+		if (s_catalog_keywords[k].category == category && strstr(lower_buf, s_catalog_keywords[k].word) != NULL)
+		{
+			size_t first = 0;
+
+			/* (a folder's number is its first row's) */
+			while (s_catalog_keywords[first].category != s_catalog_keywords[k].category ||
+				strcmp(s_catalog_keywords[first].folder, s_catalog_keywords[k].folder))
+			{
+				first++;
+			}
+			return (uint8_t)(first + 1);
+		}
+	}
+	return 0;
+}
+
 static int is_excluded_scenery_or_effect_tag(char const *tag_path)
 {
 	static char const *const s_excluded_substrings[] = {
@@ -620,8 +813,7 @@ static int is_excluded_scenery_or_effect_tag(char const *tag_path)
 		"scenery\\index_hold\\index_hold",
 		"levels\\c40\\scenery\\c40_snowbushsmall_dark\\c40_snowbushsmall_dark",
 		"scenery\\hilltop\\hilltop",
-		"scenery\\captain_implant\\captain_implant",
-		"flood_captain"
+		"scenery\\captain_implant\\captain_implant"
 	};
 	char lower_buf[260];
 	size_t i, k;
@@ -703,6 +895,16 @@ int forge_catalog_entry_allowed(struct forge_catalog_entry const *entry)
 	/* (the Actors tab decides its own, a Tag Injector actor's among them) */
 	if (entry->category == _forge_cat_ai_squads)
 		return forge_ai_palette_entry_allowed(entry);
+	/* (a folder's row: forge_catalog_folders_rebuild made it of tags allowed) */
+	if (entry->group_tag == FORGE_GROUP_FOLDER)
+		return 1;
+	/* (EFFECTS: the particle emitters, which the scenery's rules leave out) */
+	if (entry->category == _forge_cat_effects)
+		return entry->source_cache_id == 2 || is_forge_particle_emitter_tag(entry->group_tag, entry->tag_path) ||
+			is_forge_effect_spot_tag(entry->group_tag, entry->tag_path);
+	/* (DECALS: any decal) */
+	if (entry->category == _forge_cat_decals)
+		return entry->group_tag == 'deca';
 	if (entry->source_cache_id == 2)
 		return 1;
 	/* Allow map-local tags (source_cache_id == 0) populated by forge_SyncScenarioTagsWithLoadedMap() */
@@ -832,6 +1034,9 @@ static void add_catalog_entry(
 	char const *tag_path,
 	char const *display_prefix);
 
+/* the origin the entries now added are of (enum forge_catalog_origin) */
+static uint8_t s_catalog_origin = _forge_origin_builtin;
+
 /* a rank's name, its group's row if it is the first, and RANDOM once the group
 has a choice */
 static int s_catalog_row_replaced = -1;
@@ -927,7 +1132,12 @@ static void add_catalog_entry(
 	{
 		if (g_forge.catalog[i].group_tag == group_tag &&
 		    g_forge.catalog[i].category == category &&
-		    _stricmp(g_forge.catalog[i].tag_path, tag_path) == 0)
+		    _stricmp(g_forge.catalog[i].tag_path, tag_path) == 0 &&
+		    /* (a split tab has it once in each origin's folder) */
+		    (!forge_catalog_category_split(category) || g_forge.catalog[i].origin == s_catalog_origin ||
+		     /* (the props' and a profile's are one tag of the level) */
+		     (s_catalog_origin != _forge_origin_campaign && s_catalog_origin != _forge_origin_map &&
+		      g_forge.catalog[i].origin != _forge_origin_campaign && g_forge.catalog[i].origin != _forge_origin_map)))
 		{
 			if (source_cache_id == 2 && g_forge.catalog[i].source_cache_id != 2)
 			{
@@ -943,6 +1153,9 @@ static void add_catalog_entry(
 	e->category = category;
 	e->source_cache_id = source_cache_id;
 	e->pad = 0;
+	e->origin = s_catalog_origin;
+	e->keyword = forge_catalog_keyword_of(category, tag_path);
+	e->pad2 = 0;
 	snprintf(e->tag_path, sizeof(e->tag_path), "%s", tag_path);
 	make_short_display_name(tag_path, display_prefix, e->display_name, sizeof(e->display_name));
 	if (ai_kind != FORGE_AI_KIND_HIDDEN)
@@ -999,15 +1212,26 @@ static void scan_cached_tags_manifest(char const *manifest_path)
 				{
 					continue;
 				}
-				if (src_id != 2 && grp == 'scen' && is_excluded_scenery_or_effect_tag(tag_path))
+				if (src_id != 2 && grp == 'scen' && is_excluded_scenery_or_effect_tag(tag_path) &&
+					!is_forge_particle_emitter_tag(grp, tag_path))
+				{
 					continue;
+				}
 				if (src_id != 2 && grp == 'vehi' && _stricmp(tag_path, "vehicles\\wraith\\wraith") == 0)
 					continue;
 				if (src_id != 2 && (grp == 'weap' || grp == 'eqip') && is_excluded_weapon_or_equipment_tag(tag_path))
 					continue;
 
 				/* Map group tag directly to the separated WEAPONS vs EQUIPMENT vs VEHICLES vs SCENERY vs DOORS vs LIGHTS tabs */
-				if (grp == 'weap')
+				if (grp == 'effe')
+				{
+					if (!is_forge_effect_spot_tag(grp, tag_path))
+						continue;
+					cat_id = _forge_cat_effects;
+				}
+				else if (grp == 'deca')
+					cat_id = _forge_cat_decals;
+				else if (grp == 'weap')
 					cat_id = _forge_cat_weapons;
 				else if (grp == 'eqip' || grp == 'garb')
 					cat_id = _forge_cat_equipment;
@@ -1015,6 +1239,8 @@ static void scan_cached_tags_manifest(char const *manifest_path)
 					cat_id = _forge_cat_vehicles;
 				else if (is_forge_door_tag(grp, tag_path) || grp == 'ctrl')
 					cat_id = _forge_cat_barriers_devices;
+				else if (is_forge_particle_emitter_tag(grp, tag_path))
+					cat_id = _forge_cat_effects;
 				else if (is_forge_light_beacon_emitter_tag(grp, tag_path))
 					cat_id = _forge_cat_lights;
 				else if (grp == 'scen' || grp == 'mach' || grp == 'lifi')
@@ -1085,7 +1311,18 @@ static void forge_pack_palette_add(struct tag_import_donor *donor, char const *m
 		char grp_str[5];
 		int cat_id = -1;
 
-		if (!tname || !tname[0] || is_excluded_scenery_or_effect_tag(tname))
+		if (!tname || !tname[0])
+			continue;
+		/* (an effect spot, a decal: no object nor model; before the scenery's
+		rules, which leave out every path with "effect" in it) */
+		if (grp == 'effe' || grp == 'deca')
+		{
+			if (grp == 'deca' || is_forge_effect_spot_tag(grp, tname))
+				fprintf(out, "%s|%d|0|%s|%s\n", grp == 'deca' ? "deca" : "effe",
+					grp == 'deca' ? (int)_forge_cat_decals : (int)_forge_cat_effects, tname, map);
+			continue;
+		}
+		if (is_excluded_scenery_or_effect_tag(tname) && !is_forge_particle_emitter_tag(grp, tname))
 			continue;
 		/* (an actor is no object, and places as a spawn: forge_ai.c) */
 		if (grp == 'actv')
@@ -1111,6 +1348,8 @@ static void forge_pack_palette_add(struct tag_import_donor *donor, char const *m
 		}
 		else if (is_forge_door_tag(grp, tname))
 			cat_id = _forge_cat_barriers_devices;
+		else if (is_forge_particle_emitter_tag(grp, tname))
+			cat_id = _forge_cat_effects;
 		else if (is_forge_light_beacon_emitter_tag(grp, tname) &&
 				 (grp == 'scen' || is_allowed_forge_light_or_device_tag(grp, tname)))
 			cat_id = _forge_cat_lights;
@@ -1153,7 +1392,10 @@ static int forge_pack_palette_ready(void)
 
 	if (pack < 0 || !tag_pack_ready(FORGE_PACK))
 		return 0;
-	snprintf(want, sizeof(want), "# forge palette %08lx\n", content);
+	/* (v2: with the particle emitters; v3 Keyes' Flood form and the blood and
+	Flood effects; v4 those effects again, which v3 left out, and the decals;
+	v5 the effects that show nothing left out) */
+	snprintf(want, sizeof(want), "# forge palette %08lx v5\n", content);
 	f = fopen(FORGE_PACK_PALETTE_FILE, "r");
 	if (f)
 	{
@@ -1283,7 +1525,8 @@ static void forge_profile_catalog_add(long profile)
 		else if (grp == 'mach' || grp == 'ctrl')
 			cat_id = is_forge_light_beacon_emitter_tag(grp, tag_path) ? _forge_cat_lights : _forge_cat_barriers_devices;
 		else if (grp == 'scen')
-			cat_id = is_forge_light_beacon_emitter_tag(grp, tag_path) ? _forge_cat_lights : _forge_cat_scenery;
+			cat_id = is_forge_particle_emitter_tag(grp, tag_path) ? _forge_cat_effects :
+				is_forge_light_beacon_emitter_tag(grp, tag_path) ? _forge_cat_lights : _forge_cat_scenery;
 		else
 			continue;
 		custom_name = port_tag_profiles_tag_option(profile, t, "name");
@@ -1296,6 +1539,72 @@ static void forge_profile_catalog_add(long profile)
 		else
 			snprintf(prefix_buf, sizeof(prefix_buf), "[C]");
 		add_catalog_entry(grp, cat_id, 2, tag_path, prefix_buf);
+	}
+}
+
+/* the folder rows of the split tabs (FORGE_GROUP_FOLDER), made again from the
+tags there are: an origin's that has any tag of the tab, and a keyword's that
+two or more of an origin's tags share. Their path names their tab, origin and
+keyword; they go after the tags, so the rows' order is the tags' */
+static void forge_catalog_folders_rebuild(void)
+{
+	int r, w = 0;
+	int category;
+
+	for (r = 0; r < g_forge.catalog_count; r++)
+	{
+		if (g_forge.catalog[r].group_tag != FORGE_GROUP_FOLDER)
+		{
+			if (w != r)
+				g_forge.catalog[w] = g_forge.catalog[r];
+			w++;
+		}
+	}
+	g_forge.catalog_count = w;
+
+	for (category = 0; category < NUMBER_OF_FORGE_PALETTE_CATEGORIES; category++)
+	{
+		int origin;
+
+		if (!forge_catalog_category_split(category))
+			continue;
+		for (origin = _forge_origin_custom; origin < NUMBER_OF_FORGE_CATALOG_ORIGINS; origin++)
+		{
+			int keyword_counts[256];
+			int any = 0;
+			int k;
+
+			memset(keyword_counts, 0, sizeof(keyword_counts));
+			for (r = 0; r < w; r++)
+			{
+				struct forge_catalog_entry const *e = &g_forge.catalog[r];
+
+				if (e->category != category || e->origin != origin || !forge_catalog_entry_allowed(e))
+					continue;
+				any = 1;
+				keyword_counts[e->keyword]++;
+			}
+			if (!any || g_forge.catalog_count >= FORGE_MAX_CATALOG_ENTRIES)
+				continue;
+			for (k = 0; k < 256 && g_forge.catalog_count < FORGE_MAX_CATALOG_ENTRIES; k++)
+			{
+				struct forge_catalog_entry *e;
+
+				/* (the origin's own row first, then its keywords' of two or more) */
+				if (k != 0 && keyword_counts[k] < 2)
+					continue;
+				e = &g_forge.catalog[g_forge.catalog_count++];
+				memset(e, 0, sizeof(*e));
+				e->group_tag = FORGE_GROUP_FOLDER;
+				e->category = (uint8_t)category;
+				e->source_cache_id = 1;
+				e->origin = (uint8_t)origin;
+				e->keyword = (uint8_t)k;
+				snprintf(e->tag_path, sizeof(e->tag_path), FORGE_FOLDER_PATH "%d\\%d\\%d", category, origin, k);
+				snprintf(e->display_name, sizeof(e->display_name), "%s",
+					k ? forge_catalog_keyword_name(k) : forge_catalog_origin_name(origin));
+			}
+		}
 	}
 }
 
@@ -1322,11 +1631,15 @@ void forge_runtime_reload_catalogs(void)
 
 	/* 1. The tags of the map's bake, the game's props and the chosen Tag Injector profile (at the top of each
 	category), then the pack's */
-	forge_profile_catalog_add(forge_baked_profile());
+	s_catalog_origin = _forge_origin_custom;
 	forge_profile_catalog_add(tag_injector_level_props_profile());
+	s_catalog_origin = _forge_origin_profile;
+	forge_profile_catalog_add(forge_baked_profile());
 	forge_profile_catalog_add(forge_chosen_profile());
+	s_catalog_origin = _forge_origin_campaign;
 	if (forge_pack_palette_ready())
 		scan_cached_tags_manifest(FORGE_PACK_PALETTE_FILE);
+	s_catalog_origin = _forge_origin_builtin;
 
 	/* 2. Stable-sort custom entries (source_cache_id == 2) to the front of g_forge.catalog */
 	if (g_forge.catalog_count > 10)
@@ -1355,6 +1668,7 @@ void forge_runtime_reload_catalogs(void)
 			free(sorted);
 		}
 	}
+	forge_catalog_folders_rebuild();
 }
 
 #ifdef _WIN32
@@ -5600,8 +5914,10 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 	char const *cur = text_buf;
 	char line[512];
 	int in_forge_state = 0;
-	/* (the next OBJECT line's vehicle is set to ALWAYS SPAWN) */
+	/* (the next OBJECT line's vehicle is set to ALWAYS SPAWN; its scenery's
+	SCALE, 0 for none) */
 	int always_spawn = 0;
+	float scale = 0.0f;
 
 	if (!cur)
 		return;
@@ -5634,6 +5950,10 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 		{
 			always_spawn = 1;
 		}
+		else if (in_forge_state && strncmp(line, "OBJECT_SCALE|", 13) == 0)
+		{
+			scale = (float)atof(line + 13);
+		}
 		else if (in_forge_state && strncmp(line, "OBJECT|", 7) == 0)
 		{
 			unsigned int grp = 0;
@@ -5641,8 +5961,10 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 			float x = 0, y = 0, z = 0, yaw = 0, pitch = 0, roll = 0;
 			char tpath[256];
 			int object_always_spawn = always_spawn;
+			float object_scale = scale;
 
 			always_spawn = 0;
+			scale = 0.0f;
 			tpath[0] = 0;
 			if (sscanf(line + 7, "%u|%d|%d|%f|%f|%f|%f|%f|%f|%d|%255[^\r\n]",
 					&grp, &src_cache, &baked, &x, &y, &z, &yaw, &pitch, &roll, &team, tpath) == 11 && tpath[0])
@@ -5651,6 +5973,7 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 				{
 					/* Cached tag object not baked into base_map: spawn live now! */
 					g_forge_next_spawn_always = object_always_spawn;
+					g_forge_next_spawn_scale = object_scale;
 					forge_3d_spawn_object_at((uint32_t)grp, tpath, (uint8_t)src_cache, x, y, z, yaw, pitch, roll, (int16_t)team, 0);
 				}
 				else
@@ -5710,6 +6033,7 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 					{
 						/* Not yet spawned by scenario: spawn live and record in placed_objects */
 						g_forge_next_spawn_always = object_always_spawn;
+						g_forge_next_spawn_scale = object_scale;
 						forge_3d_spawn_object_at((uint32_t)grp, tpath, (uint8_t)src_cache, x, y, z, yaw, pitch, roll, (int16_t)team, 0);
 					}
 					else if (g_forge.edit_state.placed_object_count < FORGE_MAX_PLACED_OBJECTS)
@@ -5759,6 +6083,14 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 							inst->yaw = yaw; inst->pitch = pitch; inst->roll = roll;
 							snprintf(inst->tag_path, sizeof(inst->tag_path), "%s", tpath);
 							forge_3d_move_instance(li_idx, x, y, z, yaw, pitch, roll, 0);
+							{
+								extern void forge_scenery_hold_still_if_strayed(long object_index);
+
+								forge_scenery_hold_still_if_strayed(found_oidx);
+							}
+							/* (the baked scenery the scenario made, at its size) */
+							if (object_scale > 0.0f)
+								forge_3d_scale_apply(li_idx, object_scale);
 						}
 					}
 				}
@@ -6509,7 +6841,17 @@ static void forge_SyncScenarioTagsWithLoadedMap(void)
 			continue;
 		}
 
-		if (grp == 'weap')
+		if (grp == 'effe')
+		{
+			if (!is_forge_effect_spot_tag(grp, tpath))
+				continue;
+			cat_id = _forge_cat_effects;
+		}
+		else if (grp == 'deca')
+		{
+			cat_id = _forge_cat_decals;
+		}
+		else if (grp == 'weap')
 		{
 			if (is_excluded_weapon_or_equipment_tag(tpath))
 				continue;
@@ -6545,21 +6887,29 @@ static void forge_SyncScenarioTagsWithLoadedMap(void)
 		}
 		else if (grp == 'scen')
 		{
-			if (is_excluded_scenery_or_effect_tag(tpath))
+			if (is_forge_particle_emitter_tag(grp, tpath))
+				cat_id = _forge_cat_effects;
+			else if (is_excluded_scenery_or_effect_tag(tpath))
 				continue;
-			cat_id = is_forge_light_beacon_emitter_tag(grp, tpath)
-				? _forge_cat_lights
-				: _forge_cat_scenery;
+			else
+				cat_id = is_forge_light_beacon_emitter_tag(grp, tpath)
+					? _forge_cat_lights
+					: _forge_cat_scenery;
 		}
 		else
 		{
 			continue;
 		}
 
+		/* (a split tab's MAP folder has all of the map's own, the pack's
+		too, but not those the props or a profile copied in; any other tab
+		a tag once) */
 		for (k = 0; k < g_forge.catalog_count; k++)
 		{
 			if (g_forge.catalog[k].group_tag == grp &&
-			    _stricmp(g_forge.catalog[k].tag_path, tpath) == 0)
+			    _stricmp(g_forge.catalog[k].tag_path, tpath) == 0 &&
+			    (!forge_catalog_category_split(cat_id) ||
+			     (g_forge.catalog[k].origin != _forge_origin_campaign && g_forge.catalog[k].origin != _forge_origin_map)))
 			{
 				exists = 1;
 				break;
@@ -6567,9 +6917,13 @@ static void forge_SyncScenarioTagsWithLoadedMap(void)
 		}
 		if (!exists && g_forge.catalog_count < FORGE_MAX_CATALOG_ENTRIES)
 		{
-			add_catalog_entry(grp, cat_id, 0, tpath, grp == FORGE_GROUP_AI_SPAWN ? "" : "[MAP]");
+			s_catalog_origin = _forge_origin_map;
+			add_catalog_entry(grp, cat_id, 0, tpath,
+				grp == FORGE_GROUP_AI_SPAWN || forge_catalog_category_split(cat_id) ? "" : "[MAP]");
+			s_catalog_origin = _forge_origin_builtin;
 		}
 	}
+	forge_catalog_folders_rebuild();
 }
 
 static void normalize_hud_placement_at(uint8_t *placement, int halve_offset, int halve_scale)
@@ -7722,6 +8076,15 @@ static int resolve_marker_kind_and_color(
 			group_tag == 'weap' ? _marker_color_oddball_purple : _marker_color_tele_green;
 		return 1;
 	}
+	/* (an effect spot, a decal, an emitter: where it is, to grab it; Forge's
+	mode alone, as the Firefight mesh is) */
+	if (group_tag == 'effe' || group_tag == 'deca' || is_forge_particle_emitter_tag(group_tag, tag_path))
+	{
+		*out_mesh_kind = _marker_mesh_firefight_spawn;
+		*out_color_preset = group_tag == 'effe' ? _marker_color_red_team :
+			group_tag == 'deca' ? _marker_color_oddball_purple : _marker_color_race_orange;
+		return 1;
+	}
 	if (group_tag == FORGE_GROUP_AI_SPAWN)
 	{
 		*out_mesh_kind = _marker_mesh_firefight_spawn;
@@ -7980,7 +8343,8 @@ static void render_world_objective_and_spawn_markers(void)
 			continue;
 		if (inst->group_tag != 'spwn' && inst->group_tag != 'tele' && inst->group_tag != 'flag' && inst->group_tag != 'ffsp' &&
 			inst->group_tag != FORGE_GROUP_AI_SPAWN && inst->group_tag != 'vehi' && inst->group_tag != 'weap' &&
-			inst->group_tag != 'eqip')
+			inst->group_tag != 'eqip' && inst->group_tag != 'effe' && inst->group_tag != 'deca' &&
+			!is_forge_particle_emitter_tag(inst->group_tag, inst->tag_path))
 			continue;
 		if (!resolve_marker_kind_and_color(
 				inst->group_tag,
@@ -8215,8 +8579,11 @@ static void render_spawn_palette_3d_preview(long object_index, void const *light
 			chosen_idx = filtered[g_forge.palette_cursor];
 		(void)match_count;
 		/* (a group's row is no tag to read) */
-		if (chosen_idx >= 0 && g_forge.catalog[chosen_idx].group_tag == FORGE_GROUP_AI_MENU)
+		if (chosen_idx >= 0 && (g_forge.catalog[chosen_idx].group_tag == FORGE_GROUP_AI_MENU ||
+			g_forge.catalog[chosen_idx].group_tag == FORGE_GROUP_FOLDER))
+		{
 			chosen_idx = -1;
+		}
 		/* (RANDOM shows each of its group's ranks in turn) */
 		if (chosen_idx >= 0 && forge_ai_row_is_random(&g_forge.catalog[chosen_idx]))
 		{
@@ -8242,6 +8609,10 @@ static void render_spawn_palette_3d_preview(long object_index, void const *light
 		return;
 
 	entry = &g_forge.catalog[chosen_idx];
+	/* (an effect, an emitter, a decal: forge_3d_mode.c's live preview shows
+	the real one in the world) */
+	if (entry->category == _forge_cat_effects || entry->category == _forge_cat_decals)
+		return;
 
 	/* An actor shows as the unit it is, read as any other palette tag is */
 	load_group = entry->group_tag == FORGE_GROUP_AI_SPAWN ? 'actv' : entry->group_tag;

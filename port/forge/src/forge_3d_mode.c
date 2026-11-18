@@ -23,6 +23,9 @@
 #include "tag_files/tag_groups.h"
 #include "camera/director.h"
 #include "camera/observer.h"
+#include "effects/effects.h"
+#include "effects/decals.h"
+#include "halo_skulls.h"
 #include "objects/objects.h"
 #include "units/units.h"
 #include "physics/collisions.h"
@@ -3211,12 +3214,34 @@ static void forge_ensure_object_connected_to_bsp(long object_index, float x, flo
 	}
 }
 
+/* a scenery whose own animation puts its model far from where it stands
+(Keyes' Flood form: d20's idle has its root where he was in that level, 130
+units off) stands in its model's pose instead, as Firefight's Flood drop does */
+void forge_scenery_hold_still_if_strayed(long object_index)
+{
+	struct object_datum *obj = (struct object_datum *)object_try_and_get_and_verify_type(object_index, _object_mask_scenery);
+
+	if (obj && obj->object.animation.state.index != NONE &&
+		distance3d(&obj->object.bounding_sphere_center, &obj->object.position) >
+			20.0f + obj->object.bounding_sphere_radius)
+	{
+		union real_point3d position = obj->object.position;
+		union real_vector3d forward = obj->object.forward;
+		union real_vector3d up = obj->object.up;
+
+		obj->object.animation.state.index = NONE;
+		SET_FLAG(obj->object.flags, _object_animates_automatically_bit, FALSE);
+		object_set_position(object_index, &position, &forward, &up);
+	}
+}
+
 static long forge_create_configured_engine_object(
 	long def_idx,
 	uint32_t group_tag,
 	float x, float y, float z,
 	float yaw, float pitch, float roll,
-	int always_spawn)
+	int always_spawn,
+	float scale)
 {
 	struct object_placement_data placement;
 	long obj_idx;
@@ -3240,6 +3265,13 @@ static long forge_create_configured_engine_object(
 	obj = forge_valid_object_get(obj_idx);
 	if (!obj)
 		return NONE;
+	forge_scenery_hold_still_if_strayed(obj_idx);
+	/* (SCALE: set, and moved where it is, which works out its nodes at its size) */
+	if (scale > 0.0f && fabs((double)scale - 1.0) > 0.001)
+	{
+		obj->object.scale = scale;
+		object_set_position(obj_idx, &placement.position, &placement.forward, &placement.up);
+	}
 
 	SET_FLAG(obj->object.flags, _object_cannot_be_garbage_bit, TRUE);
 	SET_FLAG(obj->object.flags, _object_deleted_when_deactivated_bit, FALSE);
@@ -3281,6 +3313,7 @@ static long forge_create_configured_engine_object(
 its OBJECT_ALWAYS_SPAWN line read just before its OBJECT line
 (forge_runtime_tags.c), or a network peer's !FV: */
 int g_forge_next_spawn_always = 0;
+float g_forge_next_spawn_scale = 0.0f;
 
 int32_t forge_3d_spawn_object_at_slot(
 	int32_t forced_live_idx,
@@ -3295,8 +3328,10 @@ int32_t forge_3d_spawn_object_at_slot(
 	int32_t live_idx = -1;
 	struct forge_live_instance *inst;
 	int always_spawn = g_forge_next_spawn_always && group_tag == 'vehi';
+	float spawn_scale = group_tag == 'scen' || group_tag == 'deca' ? g_forge_next_spawn_scale : 0.0f;
 
 	g_forge_next_spawn_always = 0;
+	g_forge_next_spawn_scale = 0.0f;
 	if (!tag_path || !tag_path[0])
 		return -1;
 
@@ -3353,6 +3388,7 @@ int32_t forge_3d_spawn_object_at_slot(
 	inst->netgame_flag_type = -1;
 	inst->team_designator = team_designator;
 	inst->always_spawn = (uint8_t)always_spawn;
+	inst->scale = spawn_scale;
 	inst->x = x;
 	inst->y = y;
 	inst->z = z;
@@ -3493,10 +3529,11 @@ int32_t forge_3d_spawn_object_at_slot(
 							   actual_grp == 'eqip' || actual_grp == 'bipd');
 		int skip_local_obj_new_on_client = (game_connection() == _game_connection_network_client && is_net_obj_type);
 
-		if (def_idx != NONE && !skip_local_obj_new_on_client)
+		/* (an effect spot is no object: forge_effect_spots_update plays it there) */
+		if (def_idx != NONE && !skip_local_obj_new_on_client && group_tag != 'effe' && group_tag != 'deca')
 		{
 			inst->object_index = forge_create_configured_engine_object(
-				def_idx, group_tag, x, y, z, yaw, pitch, roll, inst->always_spawn);
+				def_idx, group_tag, x, y, z, yaw, pitch, roll, inst->always_spawn, inst->scale);
 		}
 
 		if (g_forge.edit_state.placed_object_count < FORGE_MAX_PLACED_OBJECTS)
@@ -3509,6 +3546,7 @@ int32_t forge_3d_spawn_object_at_slot(
 			po->group_tag = group_tag;
 			po->gametype_flags = inst->gametype_flags;
 			po->always_spawn = inst->always_spawn;
+			po->scale = inst->scale;
 			po->category = (group_tag == 'vehi') ? _forge_object_vehicle :
 				(group_tag == 'weap') ? _forge_object_weapon :
 				(group_tag == 'bipd') ? _forge_object_biped :
@@ -3999,10 +4037,400 @@ void forge_3d_marker_usage_apply(int32_t live_idx, int16_t usage)
 		forge_tele_apply(live_idx, ((uint16_t)usage >> 8) & 3, usage & 0xFF);
 		return;
 	}
+	/* (an effect spot's REPEAT: its seconds) */
+	if (g_forge.live_instances[live_idx].active && g_forge.live_instances[live_idx].group_tag == 'effe')
+	{
+		struct forge_live_instance *inst = &g_forge.live_instances[live_idx];
+
+		inst->team_designator = usage;
+		if (inst->edit_entry_index >= 0 && inst->edit_entry_index < (int)g_forge.edit_state.placed_object_count)
+			g_forge.edit_state.placed_objects[inst->edit_entry_index].team_index = usage;
+		return;
+	}
 	if (!g_forge.live_instances[live_idx].active || g_forge.live_instances[live_idx].group_tag != 'ffsp')
 		return;
 	g_forge.live_instances[live_idx].team_designator = usage;
 	sync_live_netgame_flags_to_scenario();
+}
+
+/* ---------- Effect spots: an effect placed as itself, played there again and
+again (the blood and the Flood's gore: forge_runtime_tags.c's
+is_forge_effect_spot_tag). Every machine plays its own, in Forge and in a game
+of a saved map, harmless; REPEAT (the spot's team number) is how many seconds
+apart */
+
+static int const s_effect_spot_repeats[] = { 3, 1, 2, 5, 8, 12, 20, 30 };
+
+static int forge_effect_spot_seconds(struct forge_live_instance const *inst)
+{
+	int k;
+
+	for (k = 0; k < (int)(sizeof(s_effect_spot_repeats) / sizeof(s_effect_spot_repeats[0])); k++)
+	{
+		if (inst->team_designator == s_effect_spot_repeats[k])
+			return s_effect_spot_repeats[k];
+	}
+	return s_effect_spot_repeats[0];
+}
+
+/* REPEAT's next, in order of seconds */
+static int forge_effect_spot_seconds_step(int seconds, int dir)
+{
+	static int const s_ordered[] = { 1, 2, 3, 5, 8, 12, 20, 30 };
+	int count = (int)(sizeof(s_ordered) / sizeof(s_ordered[0]));
+	int k, at = 2;
+
+	for (k = 0; k < count; k++)
+	{
+		if (s_ordered[k] == seconds)
+			at = k;
+	}
+	return s_ordered[(at + count + dir) % count];
+}
+
+static long s_effect_spot_next_tick[FORGE_MAX_LIVE_INSTANCES];
+
+static void forge_effect_spots_update(void)
+{
+	long now = game_time_get();
+	int i;
+
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *inst = &g_forge.live_instances[i];
+		long period;
+		long effect_tag;
+		char const *marker_names[1] = { "" };
+		real_point3d marker_points[1];
+		real_vector3d marker_forwards[1];
+		real_vector3d forward;
+
+		if (!inst->active || inst->group_tag != 'effe')
+		{
+			s_effect_spot_next_tick[i] = 0;
+			continue;
+		}
+		period = (long)forge_effect_spot_seconds(inst) * TICKS_PER_SECOND;
+		/* (a new spot, or the game's time gone back: now) */
+		if (s_effect_spot_next_tick[i] <= 0 || s_effect_spot_next_tick[i] > now + period)
+			s_effect_spot_next_tick[i] = now;
+		if (now < s_effect_spot_next_tick[i])
+			continue;
+		s_effect_spot_next_tick[i] = now + period;
+		effect_tag = forge_resolve_engine_tag('effe', inst->tag_path, NULL);
+		if (effect_tag == NONE)
+			continue;
+		marker_points[0].x = inst->x;
+		marker_points[0].y = inst->y;
+		marker_points[0].z = inst->z + 0.1f;
+		/* (out of the spot's up, as a surface's blood comes off it) */
+		euler_to_forward_up(inst->yaw, inst->pitch, inst->roll, &forward, &marker_forwards[0]);
+		/* (harmless, but with its objects: the Flood's bursts are mostly the
+		bits they throw, garbage the game clears away) */
+		skulls_effect_harmless = TRUE;
+		effect_new_unattached_from_markers(effect_tag, NONE, NULL, 1, marker_names, marker_points, marker_forwards,
+			0.0f, 0.0f, NULL, NULL, TRUE);
+		skulls_effect_harmless = FALSE;
+	}
+}
+
+/* ---------- Placed decals: a decal put on the surface under where it's placed
+(its up's other way), at its SCALE, on every machine. A decal can't move, so
+one moved, scaled or made again by the level is taken away and made anew;
+the game's own made are kept to take away (decals.c's capture) */
+
+#define FORGE_DECAL_PIECES 8
+
+static float forge_inst_scale(struct forge_live_instance const *inst);
+static int get_filtered_catalog_indices(int *out_indices, int max_out);
+
+static struct
+{
+	long pieces[FORGE_DECAL_PIECES];
+	short piece_count;
+	/* (made, or tried: a decal with no surface under it isn't tried each frame) */
+	uint8_t tried;
+	long made_time; /* the game's time it was made at (a game's start is its 0) */
+	float x, y, z, yaw, pitch, roll, scale;
+	uint32_t path_hash;
+} s_forge_decals[FORGE_MAX_LIVE_INSTANCES];
+
+static uint32_t forge_text_hash(char const *text)
+{
+	uint32_t h = 2166136261u;
+
+	while (text && *text)
+		h = (h ^ (uint32_t)(unsigned char)*text++) * 16777619u;
+	return h;
+}
+
+static void forge_decal_take_away(int i, long now)
+{
+	short k;
+
+	/* (none of a game before this one's: those went with its level) */
+	if (s_forge_decals[i].made_time <= now)
+	{
+		for (k = 0; k < s_forge_decals[i].piece_count; k++)
+			decal_delete_made(s_forge_decals[i].pieces[k]);
+	}
+	s_forge_decals[i].piece_count = 0;
+}
+
+/* a decal at a point, down along its up, pointing along its forward (the
+player turns it with the spot), the preview's too: its pieces */
+static short forge_decal_make(long decal_tag, float x, float y, float z,
+	real_vector3d const *up, real_vector3d const *forward, float scale, long *pieces, short maximum)
+{
+	short count;
+
+	real_point3d origin;
+	real_vector3d into;
+
+	origin.x = x + up->i * 0.5f;
+	origin.y = y + up->j * 0.5f;
+	origin.z = z + up->k * 0.5f;
+	into.i = -up->i * 1.5f;
+	into.j = -up->j * 1.5f;
+	into.k = -up->k * 1.5f;
+	decal_capture_begin(pieces, maximum);
+	decal_forced_forward = forward;
+	decal_new(decal_tag, &origin, &into, scale > 0.0f ? scale : 1.0f, TRUE, NONE, NULL);
+	decal_forced_forward = NULL;
+	count = decal_capture_end();
+	return count;
+}
+
+static void forge_decals_update(void)
+{
+	long now = game_time_get();
+	int i;
+
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *inst = &g_forge.live_instances[i];
+		uint32_t hash;
+		int stale;
+		short k;
+
+		if (!inst->active || inst->group_tag != 'deca')
+		{
+			if (s_forge_decals[i].piece_count > 0)
+				forge_decal_take_away(i, now);
+			s_forge_decals[i].tried = 0;
+			continue;
+		}
+		hash = forge_text_hash(inst->tag_path);
+		stale = !s_forge_decals[i].tried || s_forge_decals[i].made_time > now ||
+			s_forge_decals[i].path_hash != hash || s_forge_decals[i].x != inst->x || s_forge_decals[i].y != inst->y ||
+			s_forge_decals[i].z != inst->z || s_forge_decals[i].yaw != inst->yaw ||
+			s_forge_decals[i].pitch != inst->pitch || s_forge_decals[i].roll != inst->roll ||
+			s_forge_decals[i].scale != inst->scale;
+		for (k = 0; !stale && k < s_forge_decals[i].piece_count; k++)
+			stale = !decal_exists(s_forge_decals[i].pieces[k]);
+		if (!stale)
+			continue;
+		/* (one held is made again as it settles, not every frame it moves) */
+		if (i == g_forge.grabbed_live_index && s_forge_decals[i].piece_count > 0 && (now & 7) != 0)
+			continue;
+		forge_decal_take_away(i, now);
+		{
+			long decal_tag = forge_resolve_engine_tag('deca', inst->tag_path, NULL);
+			real_vector3d forward, up;
+
+			s_forge_decals[i].made_time = now;
+			s_forge_decals[i].tried = 1;
+			s_forge_decals[i].path_hash = hash;
+			s_forge_decals[i].x = inst->x;
+			s_forge_decals[i].y = inst->y;
+			s_forge_decals[i].z = inst->z;
+			s_forge_decals[i].yaw = inst->yaw;
+			s_forge_decals[i].pitch = inst->pitch;
+			s_forge_decals[i].roll = inst->roll;
+			s_forge_decals[i].scale = inst->scale;
+			if (decal_tag == NONE)
+			{
+				/* (none to make: a piece count that says it was tried) */
+				s_forge_decals[i].piece_count = 0;
+				continue;
+			}
+			euler_to_forward_up(inst->yaw, inst->pitch, inst->roll, &forward, &up);
+			s_forge_decals[i].piece_count = forge_decal_make(decal_tag, inst->x, inst->y, inst->z, &up, &forward,
+				forge_inst_scale(inst), s_forge_decals[i].pieces, FORGE_DECAL_PIECES);
+		}
+	}
+}
+
+/* ---------- The palette's live preview: EFFECTS' and DECALS' rows shown as
+themselves in the world, this machine's alone, while the row is chosen (the
+model preview, forge_runtime_tags.c's, shows none of them): an effect played
+in front of the camera again and again, an emitter there with its particles,
+a decal on the surface looked at */
+
+static struct
+{
+	int catalog_idx;
+	unsigned long since_ms;
+	long object_index;
+	long next_effect_tick;
+	long pieces[FORGE_DECAL_PIECES];
+	short piece_count;
+	long made_time;
+	real_point3d decal_point;
+} s_live_preview = { -1, 0, NONE, 0 };
+
+static void forge_palette_live_preview_clear(void)
+{
+	long now = game_time_get();
+	short k;
+
+	if (s_live_preview.object_index != NONE &&
+		object_try_and_get_and_verify_type(s_live_preview.object_index, _object_mask_scenery))
+	{
+		object_delete(s_live_preview.object_index);
+	}
+	s_live_preview.object_index = NONE;
+	if (s_live_preview.made_time <= now)
+	{
+		for (k = 0; k < s_live_preview.piece_count; k++)
+			decal_delete_made(s_live_preview.pieces[k]);
+	}
+	s_live_preview.piece_count = 0;
+	s_live_preview.next_effect_tick = 0;
+}
+
+static void forge_palette_live_preview_update(void)
+{
+	int idx = -1;
+	unsigned long now_ms = (unsigned long)system_milliseconds();
+	long now = game_time_get();
+	struct forge_catalog_entry const *entry;
+	real_vector3d forward, up, right;
+	real_point3d point;
+
+	if (g_forge_session_enabled && g_forge.active_modal == _forge_modal_spawn_palette &&
+		(g_forge.current_category == _forge_cat_effects || g_forge.current_category == _forge_cat_decals))
+	{
+		int filtered[512];
+		int count = get_filtered_catalog_indices(filtered, 512);
+
+		if (g_forge.palette_cursor >= 0 && g_forge.palette_cursor < count &&
+			g_forge.catalog[filtered[g_forge.palette_cursor]].group_tag != FORGE_GROUP_FOLDER)
+		{
+			idx = filtered[g_forge.palette_cursor];
+		}
+	}
+	if (idx != s_live_preview.catalog_idx)
+	{
+		forge_palette_live_preview_clear();
+		s_live_preview.catalog_idx = idx;
+		s_live_preview.since_ms = now_ms;
+	}
+	/* (a row passed over while scrolling reads no tag) */
+	if (idx < 0 || now_ms - s_live_preview.since_ms < 250u)
+		return;
+	entry = &g_forge.catalog[idx];
+
+	euler_to_forward_up(g_forge.cam_yaw, g_forge.cam_pitch, g_forge.cam_roll, &forward, &up);
+	cross_product3d(&forward, &up, &right);
+	/* (ahead, and to the side of the palette) */
+	point.x = g_forge.cam_x + forward.i * 3.2f + right.i * 1.0f - up.i * 0.3f;
+	point.y = g_forge.cam_y + forward.j * 3.2f + right.j * 1.0f - up.j * 0.3f;
+	point.z = g_forge.cam_z + forward.k * 3.2f + right.k * 1.0f - up.k * 0.3f;
+
+	if (entry->group_tag == 'effe')
+	{
+		if (now >= s_live_preview.next_effect_tick || s_live_preview.next_effect_tick > now + 2 * TICKS_PER_SECOND)
+		{
+			long effect_tag = forge_resolve_engine_tag('effe', entry->tag_path, NULL);
+			char const *marker_names[1] = { "" };
+			real_vector3d marker_forwards[1];
+
+			s_live_preview.next_effect_tick = now + (long)(TICKS_PER_SECOND * 3 / 2);
+			if (effect_tag != NONE)
+			{
+				marker_forwards[0] = *global_up3d;
+				skulls_effect_harmless = TRUE;
+				effect_new_unattached_from_markers(effect_tag, NONE, NULL, 1, marker_names, &point, marker_forwards,
+					0.0f, 0.0f, NULL, NULL, TRUE);
+				skulls_effect_harmless = FALSE;
+			}
+		}
+	}
+	else if (entry->group_tag == 'scen')
+	{
+		real_vector3d level_forward = forward;
+
+		level_forward.k = 0.0f;
+		if (normalize3d(&level_forward) <= 0.0f)
+			level_forward = *global_forward3d;
+		if (s_live_preview.object_index == NONE)
+		{
+			uint32_t actual = 'scen';
+			long tag = forge_resolve_engine_tag('scen', entry->tag_path, &actual);
+
+			if (tag != NONE)
+			{
+				struct object_placement_data placement;
+
+				object_placement_data_new(&placement, tag, NONE);
+				placement.position = point;
+				placement.forward = level_forward;
+				placement.up = *global_up3d;
+				s_live_preview.object_index = object_new(&placement);
+				if (s_live_preview.object_index != NONE)
+				{
+					SET_FLAG(object_get(s_live_preview.object_index)->object.flags, _object_cannot_be_garbage_bit, TRUE);
+					object_set_automatic_deactivation(s_live_preview.object_index, FALSE);
+				}
+			}
+			if (s_live_preview.object_index == NONE)
+				s_live_preview.catalog_idx = -2; /* (tried: none) */
+		}
+		else if (object_try_and_get_and_verify_type(s_live_preview.object_index, _object_mask_scenery))
+		{
+			/* (it stays in front of the camera) */
+			object_set_position(s_live_preview.object_index, &point, &level_forward, global_up3d);
+		}
+	}
+	else if (entry->group_tag == 'deca')
+	{
+		struct collision_result coll;
+		real_point3d from;
+		real_vector3d along;
+
+		from.x = g_forge.cam_x;
+		from.y = g_forge.cam_y;
+		from.z = g_forge.cam_z;
+		along.i = forward.i * 20.0f;
+		along.j = forward.j * 20.0f;
+		along.k = forward.k * 20.0f;
+		if (collision_test_vector(FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
+				&from, &along, NONE, &coll) &&
+			(s_live_preview.piece_count == 0 || distance3d(&coll.point, &s_live_preview.decal_point) > 0.75f))
+		{
+			long decal_tag = forge_resolve_engine_tag('deca', entry->tag_path, NULL);
+			real_vector3d normal;
+			short k;
+
+			if (s_live_preview.made_time <= now)
+			{
+				for (k = 0; k < s_live_preview.piece_count; k++)
+					decal_delete_made(s_live_preview.pieces[k]);
+			}
+			s_live_preview.piece_count = 0;
+			s_live_preview.decal_point = coll.point;
+			s_live_preview.made_time = now;
+			normal.i = coll.plane.n.i;
+			normal.j = coll.plane.n.j;
+			normal.k = coll.plane.n.k;
+			if (decal_tag != NONE)
+			{
+				s_live_preview.piece_count = forge_decal_make(decal_tag, coll.point.x, coll.point.y, coll.point.z,
+					&normal, &forward, 1.0f, s_live_preview.pieces, FORGE_DECAL_PIECES);
+			}
+		}
+	}
 }
 
 static int forge_ff_route_free_id(void)
@@ -4677,10 +5105,82 @@ static int get_filtered_catalog_indices_for_cat(enum forge_palette_category cat,
 /* the Actors tab's level: its groups (NONE), or a group's ranks and RANDOM */
 static int s_palette_ai_group = NONE;
 
+/* a split tab's level (forge_catalog_category_split): its origins' folders
+(origin NONE), an origin's keyword folders and the tags in none, or a keyword
+folder's tags */
+static int s_palette_origin = NONE;
+static int s_palette_keyword = 0;
+
+static void forge_palette_folders_reset(void)
+{
+	s_palette_ai_group = NONE;
+	s_palette_origin = NONE;
+	s_palette_keyword = 0;
+}
+
+static int forge_palette_keyword_has_folder(int category, int origin, int keyword)
+{
+	int i;
+
+	for (i = 0; keyword != 0 && i < g_forge.catalog_count; i++)
+	{
+		struct forge_catalog_entry const *row = &g_forge.catalog[i];
+
+		if (row->group_tag == FORGE_GROUP_FOLDER && row->category == category &&
+			row->origin == origin && row->keyword == keyword)
+		{
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int get_filtered_split_indices(int category, int *out_indices, int max_out)
+{
+	int i, pass, count = 0;
+
+	/* (an origin's keyword folders first, then its tags in none) */
+	for (pass = 0; pass < 2; pass++)
+	{
+		for (i = 0; i < g_forge.catalog_count && count < max_out; i++)
+		{
+			struct forge_catalog_entry const *row = &g_forge.catalog[i];
+			int folder = row->group_tag == FORGE_GROUP_FOLDER;
+
+			if (row->category != category)
+				continue;
+			if (s_palette_origin == NONE)
+			{
+				if (pass == 0 && folder && row->keyword == 0)
+					out_indices[count++] = i;
+				continue;
+			}
+			if (row->origin != s_palette_origin)
+				continue;
+			if (s_palette_keyword != 0)
+			{
+				if (pass == 1 && !folder && row->keyword == s_palette_keyword && forge_catalog_entry_allowed(row))
+					out_indices[count++] = i;
+				continue;
+			}
+			if (pass == 0 && folder && row->keyword != 0)
+				out_indices[count++] = i;
+			else if (pass == 1 && !folder && forge_catalog_entry_allowed(row) &&
+				!forge_palette_keyword_has_folder(category, row->origin, row->keyword))
+			{
+				out_indices[count++] = i;
+			}
+		}
+	}
+	return count;
+}
+
 static int get_filtered_catalog_indices(int *out_indices, int max_out)
 {
 	int i, group, count = 0;
 
+	if (forge_catalog_category_split(g_forge.current_category))
+		return get_filtered_split_indices(g_forge.current_category, out_indices, max_out);
 	if (g_forge.current_category != _forge_cat_ai_squads)
 		return get_filtered_catalog_indices_for_cat(g_forge.current_category, out_indices, max_out);
 	if (s_palette_ai_group == NONE)
@@ -5294,6 +5794,8 @@ static enum forge_palette_category forge_palette_category_step(enum forge_palett
 		_forge_cat_vehicles,
 		_forge_cat_bipeds,
 		_forge_cat_scenery,
+		_forge_cat_effects,
+		_forge_cat_decals,
 		_forge_cat_barriers_devices,
 		_forge_cat_lights,
 		_forge_cat_spawns,
@@ -5325,6 +5827,63 @@ static int forge_props_always_spawn_row(struct forge_live_instance const *inst, 
 	return inst->group_tag == 'vehi' && !inst->is_default_scenario_object && !inst->is_ai_unit &&
 		!snap_row && test_drop_row < 0 && !forge_tele_is(inst) && !forge_ff_is_dropship_zone(inst) &&
 		!forge_ff_is_route_point(inst) ? 5 : -1;
+}
+
+/* a placed scenery's or effect's SCALE row, after its other rows (-1: none) */
+static int forge_props_scale_row(struct forge_live_instance const *inst, int snap_row, int test_drop_row)
+{
+	if ((inst->group_tag != 'scen' && inst->group_tag != 'deca') || inst->is_default_scenario_object ||
+		inst->is_ai_unit || inst->edit_entry_index < 0 || forge_tele_is(inst))
+	{
+		return -1;
+	}
+	return test_drop_row >= 0 ? test_drop_row + 1 : snap_row ? 6 : 5;
+}
+
+static float forge_inst_scale(struct forge_live_instance const *inst)
+{
+	return inst->scale > 0.0f ? inst->scale : 1.0f;
+}
+
+/* SCALE's next size: tenths up to 2, halves to 5, wholes past */
+static float forge_scale_step(float scale, int dir)
+{
+	float step = scale < 2.0f - 0.001f || (dir < 0 && scale <= 2.0f + 0.001f) ? 0.1f :
+		scale < 5.0f - 0.001f || (dir < 0 && scale <= 5.0f + 0.001f) ? 0.5f : 1.0f;
+	float next = scale + step * (float)dir;
+
+	/* (back onto its step's grid) */
+	next = (float)floor((double)(next / step) + 0.5) * step;
+	return next < FORGE_SCALE_MIN ? FORGE_SCALE_MIN : next > FORGE_SCALE_MAX ? FORGE_SCALE_MAX : next;
+}
+
+/* a placed scenery's or effect's SCALE set (the Object Settings row, a peer's
+!FZ:, a saved map's OBJECT_SCALE): kept in the map's record for the save */
+void forge_3d_scale_apply(int32_t live_idx, float scale)
+{
+	struct forge_live_instance *inst;
+	struct object_datum *obj;
+
+	if (live_idx < 0 || live_idx >= g_forge.live_instance_count)
+		return;
+	inst = &g_forge.live_instances[live_idx];
+	/* (a decal's: the size it is made again at, forge_decals_update) */
+	if (!inst->active || (inst->group_tag != 'scen' && inst->group_tag != 'deca'))
+		return;
+	scale = scale < FORGE_SCALE_MIN ? FORGE_SCALE_MIN : scale > FORGE_SCALE_MAX ? FORGE_SCALE_MAX : scale;
+	inst->scale = fabs((double)scale - 1.0) > 0.001 ? scale : 0.0f;
+	if (inst->edit_entry_index >= 0 && inst->edit_entry_index < g_forge.edit_state.placed_object_count)
+		g_forge.edit_state.placed_objects[inst->edit_entry_index].scale = inst->scale;
+	obj = forge_valid_object_get(inst->object_index);
+	if (obj)
+	{
+		union real_point3d position = obj->object.position;
+		union real_vector3d forward = obj->object.forward;
+		union real_vector3d up = obj->object.up;
+
+		obj->object.scale = forge_inst_scale(inst);
+		object_set_position(inst->object_index, &position, &forward, &up);
+	}
 }
 
 /* a placed vehicle's ALWAYS SPAWN set (the Object Settings row, a peer's
@@ -5607,7 +6166,7 @@ static void forge_origins_reset(void)
 			if (inst->object_index == NONE)
 			{
 				inst->object_index = forge_create_configured_engine_object(definition_index, inst->group_tag,
-					inst->x, inst->y, inst->z, inst->yaw, inst->pitch, inst->roll, inst->always_spawn);
+					inst->x, inst->y, inst->z, inst->yaw, inst->pitch, inst->roll, inst->always_spawn, inst->scale);
 			}
 			if (inst->object_index == NONE)
 				continue;
@@ -6391,7 +6950,8 @@ static void forge_reconcile_live_instances(void)
 					inst->group_tag,
 					inst->x, inst->y, inst->z,
 					inst->yaw, inst->pitch, inst->roll,
-					inst->always_spawn);
+					inst->always_spawn,
+					inst->scale);
 				obj = forge_valid_object_get(inst->object_index);
 				if (obj && i == g_forge.grabbed_live_index)
 					g_forge.grabbed_object_index = inst->object_index;
@@ -6692,6 +7252,11 @@ static void forge_props_undo(void)
 			forge_3d_always_spawn_apply(live_idx, was->always_spawn);
 			forge_network_send_always_spawn(live_idx, was->always_spawn);
 		}
+		if (inst->scale != was->scale)
+		{
+			forge_3d_scale_apply(live_idx, forge_inst_scale(was));
+			forge_network_send_scale(live_idx, forge_inst_scale(was));
+		}
 		if (inst->group_tag == 'spwn')
 		{
 			sync_live_player_spawns_to_scenario();
@@ -6812,6 +7377,9 @@ void forge_3d_update(float dt)
 
 	if (!s_player_last_unit_init)
 		forge_3d_reset_session_tracking();
+	forge_effect_spots_update();
+	forge_decals_update();
+	forge_palette_live_preview_update();
 
 	if (g_forge_session_enabled)
 	{
@@ -7357,6 +7925,17 @@ void forge_3d_update(float dt)
 				g_forge.palette_cursor = 0;
 				g_forge.palette_scroll = 0;
 			}
+			/* (out of a keyword's folder to its origin's, out of that to the origins) */
+			else if (modal_before_hotkeys == _forge_modal_spawn_palette &&
+				forge_catalog_category_split(g_forge.current_category) && s_palette_origin != NONE)
+			{
+				if (s_palette_keyword != 0)
+					s_palette_keyword = 0;
+				else
+					s_palette_origin = NONE;
+				g_forge.palette_cursor = 0;
+				g_forge.palette_scroll = 0;
+			}
 			else
 			{
 				g_forge.active_modal = _forge_modal_none;
@@ -7493,7 +8072,7 @@ void forge_3d_update(float dt)
 		}
 
 		if ((cur_left && !prev_left) || (cur_right && !prev_right))
-			s_palette_ai_group = NONE;
+			forge_palette_folders_reset();
 		if (cur_left && !prev_left)
 		{
 			do {
@@ -7553,6 +8132,18 @@ void forge_3d_update(float dt)
 			if (ce->group_tag == FORGE_GROUP_AI_MENU)
 			{
 				s_palette_ai_group = forge_ai_row_group(ce);
+				g_forge.palette_cursor = 0;
+				g_forge.palette_scroll = 0;
+				prev_enter = 1;
+				goto update_prev_keys;
+			}
+			/* (an origin's or a keyword's folder opens) */
+			if (ce->group_tag == FORGE_GROUP_FOLDER)
+			{
+				if (s_palette_origin == NONE)
+					s_palette_origin = ce->origin;
+				else
+					s_palette_keyword = ce->keyword;
 				g_forge.palette_cursor = 0;
 				g_forge.palette_scroll = 0;
 				prev_enter = 1;
@@ -7713,11 +8304,13 @@ void forge_3d_update(float dt)
 		int test_drop_row = forge_is_drop_area(inst) ? (snap_row ? 6 : 5) : -1;
 		/* (a placed vehicle's ALWAYS SPAWN, after DELETE OBJECT) */
 		int always_row = forge_props_always_spawn_row(inst, snap_row, test_drop_row);
+		/* (a placed scenery's or effect's SCALE, after the rest) */
+		int scale_row = forge_props_scale_row(inst, snap_row, test_drop_row);
 		int zone_rows[FORGE_FF_ZONE_MAX_ROWS];
 		int zone_row_count = is_zone ? forge_ff_zone_rows(inst, zone_rows) : 0;
 		int max_props_row = is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS - 1 : is_tele ? (snap_row ? 6 : 5) :
 			(is_zone ? FORGE_FF_ZONE_FIRST_ROW - 1 + zone_row_count :
-				(is_route_point ? 6 : (always_row >= 0 ? always_row :
+				(is_route_point ? 6 : (always_row >= 0 ? always_row : scale_row >= 0 ? scale_row :
 					(test_drop_row >= 0 ? test_drop_row : ((is_ff_spawn || snap_row) ? 5 : 4)))));
 		/* (DONE and UNDO, side by side under the rows) */
 		int props_done = max_props_row + 1;
@@ -8003,6 +8596,14 @@ void forge_3d_update(float dt)
 					inst->team_designator = (int16_t)((inst->team_designator + 32 + dir) % 32);
 					sync_live_netgame_flags_to_scenario();
 				}
+				else if (inst->group_tag == 'effe')
+				{
+					/* (an effect spot's REPEAT, which the other machines hear of: !FU:) */
+					int16_t usage = (int16_t)forge_effect_spot_seconds_step(forge_effect_spot_seconds(inst), dir);
+
+					forge_3d_marker_usage_apply(g_forge.grabbed_live_index, usage);
+					forge_network_send_marker_usage(g_forge.grabbed_live_index, usage);
+				}
 				else
 				{
 					/* Reference / Teleporter Channel / KOTH Hill / Oddball ID (0..15) */
@@ -8064,6 +8665,13 @@ void forge_3d_update(float dt)
 			else if (g_forge.props_cursor == test_drop_row && cur_enter && !prev_enter)
 			{
 				forge_drop_area_test_drop(g_forge.grabbed_live_index);
+			}
+			else if (g_forge.props_cursor == scale_row && scale_row >= 0)
+			{
+				float scale = forge_scale_step(forge_inst_scale(inst), dir);
+
+				forge_3d_scale_apply(g_forge.grabbed_live_index, scale);
+				forge_network_send_scale(g_forge.grabbed_live_index, forge_inst_scale(inst));
 			}
 			else if (g_forge.props_cursor == always_row)
 			{
@@ -8780,6 +9388,7 @@ void forge_3d_update(float dt)
 				if (dup_allowed)
 				{
 					g_forge_next_spawn_always = src_copy.always_spawn;
+					g_forge_next_spawn_scale = src_copy.scale;
 					dup_idx = forge_3d_spawn_object_at(
 						src_copy.group_tag,
 						src_copy.tag_path,
@@ -8790,6 +9399,8 @@ void forge_3d_update(float dt)
 						1);
 					if (dup_idx >= 0 && g_forge.live_instances[dup_idx].always_spawn)
 						forge_network_send_always_spawn(dup_idx, 1);
+					if (dup_idx >= 0 && g_forge.live_instances[dup_idx].scale > 0.0f)
+						forge_network_send_scale(dup_idx, g_forge.live_instances[dup_idx].scale);
 				}
 				if (dup_idx >= 0)
 				{
@@ -9686,7 +10297,9 @@ void forge_3d_draw_hud(
 		"OBJECTIVES",
 		"ACTORS",
 		"FIREFIGHT",
-		"TELEPORTERS"
+		"TELEPORTERS",
+		"EFFECTS",
+		"DECALS"
 	};
 	static char const *const snap_names[4] = { "OFF", "15 DEG", "45 DEG", "90 DEG" };
 	char buf[256];
@@ -9880,11 +10493,25 @@ void forge_3d_draw_hud(
 			draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_left", 0, (short)(spin_x0 + 6), (short)(spin_y0 + 7), (short)(spin_x0 + 12), (short)(spin_y0 + 19), 6, 12, 0xFFFFFFFFu);
 			draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_right", 0, (short)(spin_x1 - 12), (short)(spin_y0 + 7), (short)(spin_x1 - 6), (short)(spin_y0 + 19), 6, 12, 0xFFFFFFFFu);
 
-			snprintf(buf, sizeof(buf), "%s (%d/%d)",
-				(g_forge.current_category == _forge_cat_ai_squads && s_palette_ai_group != NONE) ?
-					forge_ai_group_name(s_palette_ai_group) : cat_names[g_forge.current_category],
-				fcount > 0 ? (g_forge.palette_cursor + 1) : 0,
-				fcount);
+			if (forge_catalog_category_split(g_forge.current_category) && s_palette_origin != NONE)
+			{
+				/* (where the list is: the tab's origin, and its keyword's folder) */
+				snprintf(buf, sizeof(buf), "%s / %s (%d/%d)",
+					s_palette_keyword != 0 ? forge_catalog_origin_name(s_palette_origin) : cat_names[g_forge.current_category],
+					s_palette_keyword != 0 ? forge_catalog_keyword_name(s_palette_keyword) :
+						forge_catalog_origin_name(s_palette_origin),
+					fcount > 0 ? (g_forge.palette_cursor + 1) : 0,
+					fcount);
+			}
+			else
+			{
+				snprintf(buf, sizeof(buf), "%s (%d/%d)",
+					(g_forge.current_category == _forge_cat_ai_squads && s_palette_ai_group != NONE) ?
+						forge_ai_group_name(s_palette_ai_group) : cat_names[g_forge.current_category],
+					fcount > 0 ? (g_forge.palette_cursor + 1) : 0,
+					fcount);
+			}
+			forge_text_fit(1, font_index, buf, (short)(spin_x1 - 16 - (spin_x0 + 16)));
 			forge_hit_add(_forge_hit_palette_previous, 0, spin_x0, spin_y0, (short)(spin_x0 + 40), spin_y1);
 			forge_hit_add(_forge_hit_palette_next, 0, (short)(spin_x1 - 40), spin_y0, spin_x1, spin_y1);
 			draw_ce_menu_str_box(1, font_index, (short)(spin_x0 + 16), (short)(spin_y0 + 2), (short)(spin_x1 - 16), spin_y1, 2 /* center */,
@@ -9917,7 +10544,8 @@ void forge_3d_draw_hud(
 					clean_name, row_col);
 
 				/* (a group opens; its count means nothing) */
-				snprintf(buf, sizeof(buf), ce->group_tag == FORGE_GROUP_AI_MENU ? ">" : "%d", placed_cnt);
+				snprintf(buf, sizeof(buf),
+					ce->group_tag == FORGE_GROUP_AI_MENU || ce->group_tag == FORGE_GROUP_FOLDER ? ">" : "%d", placed_cnt);
 				draw_ce_menu_str_box(0, font_index, (short)(rx1 - 56), (short)(ry0 + 1), (short)(rx1 - 10), ry1, 1 /* right */,
 					buf, row_col);
 
@@ -9963,13 +10591,14 @@ void forge_3d_draw_hud(
 			int is_tele = forge_tele_is(inst);
 			int test_drop_row = forge_is_drop_area(inst) ? (snap_row ? 6 : 5) : -1;
 			int always_row = forge_props_always_spawn_row(inst, snap_row, test_drop_row);
+			int scale_row = forge_props_scale_row(inst, snap_row, test_drop_row);
 			int zone_rows[FORGE_FF_ZONE_MAX_ROWS];
 			int zone_row_count = is_zone ? forge_ff_zone_rows(inst, zone_rows) : 0;
 			/* (a drop point's FACTIONS TO SPAWN page: its three, then BACK alone) */
 			int factions_page = is_zone && s_props_factions_open;
 			int row_count = factions_page ? 3 : is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS : is_tele ? (snap_row ? 7 : 6) :
 				(is_zone ? FORGE_FF_ZONE_FIRST_ROW + zone_row_count :
-					(is_route_point ? 7 : (always_row >= 0 ? always_row + 1 :
+					(is_route_point ? 7 : (always_row >= 0 ? always_row + 1 : scale_row >= 0 ? scale_row + 1 :
 						(test_drop_row >= 0 ? test_drop_row + 1 : ((is_ff_spawn || snap_row) ? 6 : 5)))));
 			short box_w = (short)(is_ai_spawn ? 372 : 312);
 			short box_h = (short)(34 + row_count * 28 + 50);
@@ -10145,6 +10774,11 @@ void forge_3d_draw_hud(
 					snprintf(labels[0], sizeof(labels[0]), "ORDER:");
 					snprintf(values[0], sizeof(values[0]), "#%d", (int)inst->team_designator);
 				}
+				else if (inst->group_tag == 'effe')
+				{
+					snprintf(labels[0], sizeof(labels[0]), "REPEAT:");
+					snprintf(values[0], sizeof(values[0]), "EVERY %d S", forge_effect_spot_seconds(inst));
+				}
 				else
 				{
 					snprintf(labels[0], sizeof(labels[0]), "CHANNEL:");
@@ -10171,6 +10805,11 @@ void forge_3d_draw_hud(
 				{
 					snprintf(labels[always_row], sizeof(labels[0]), "ALWAYS SPAWN:");
 					snprintf(values[always_row], sizeof(values[0]), "%s", inst->always_spawn ? "ON" : "OFF");
+				}
+				if (scale_row >= 0)
+				{
+					snprintf(labels[scale_row], sizeof(labels[0]), "SCALE:");
+					snprintf(values[scale_row], sizeof(values[0]), "%.1fX", (double)forge_inst_scale(inst));
 				}
 			}
 

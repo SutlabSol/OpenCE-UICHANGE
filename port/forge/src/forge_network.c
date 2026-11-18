@@ -2,7 +2,7 @@
  * OpenCE : Faber ("OpenCE - Faber.exe")
  * Collaborative P2P Forge Network Synchronization:
  * - Bidirectional Spawn (!FS: / !FH:), Transform (!FM:), Delete (!FD:) and Firefight marker usage (!FU:) replication
- * - AI spawn settings (!FA:)
+ * - AI spawn settings (!FA:), a placed scenery's SCALE (!FZ:)
  * - Per-Player Monitor vs. Spartan mode & 3D Monitor flight state synchronization (!FT:)
  * - Late-join / full-session state synchronization (!FQ)
  * - Automatic client-side external tag & .ocetags faulting on object creation
@@ -551,6 +551,13 @@ void forge_network_sync_tick(void)
 						(tele_usage >= 0 && inst->group_tag != 'tele') ? (int16_t)tele_usage : inst->team_designator);
 					forge_send_packet_to_machine(m, msg);
 					packets_sent++;
+					/* (and its SCALE: the joiner makes the scenery itself) */
+					if (inst->scale > 0.0f)
+					{
+						snprintf(msg, sizeof(msg), "!FZ:%d:%d", (int)idx, (int)(inst->scale * 1000.0f + 0.5f));
+						forge_send_packet_to_machine(m, msg);
+						packets_sent++;
+					}
 				}
 				else if (inst->edit_entry_index >= 0)
 				{
@@ -780,6 +787,25 @@ void forge_network_send_always_spawn(int32_t live_idx, int on)
 		return;
 
 	snprintf(msg, sizeof(msg), "!FV:%d:%d", (int)live_idx, on ? 1 : 0);
+	if (game_connection() == _game_connection_network_client)
+	{
+		forge_send_packet_to_host(msg);
+	}
+	else if (game_connection() == _game_connection_network_server)
+	{
+		forge_broadcast_packet_to_clients(msg, -1);
+	}
+}
+
+/* a placed scenery's or effect's SCALE, in thousandths */
+void forge_network_send_scale(int32_t live_idx, float scale)
+{
+	char msg[64];
+
+	if (!forge_is_multiplayer_session())
+		return;
+
+	snprintf(msg, sizeof(msg), "!FZ:%d:%d", (int)live_idx, (int)(scale * 1000.0f + 0.5f));
 	if (game_connection() == _game_connection_network_client)
 	{
 		forge_send_packet_to_host(msg);
@@ -1435,6 +1461,22 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 			}
 			return 1;
 		}
+		else if (strncmp(text, "!FZ:", 4) == 0)
+		{
+			int live_idx = -1, thousandths = 1000;
+			if (sscanf(text + 4, "%d:%d", &live_idx, &thousandths) == 2)
+			{
+				int32_t target_idx = forge_resolve_target_live_idx(live_idx, -1);
+				if (target_idx >= 0)
+				{
+					char relay[64];
+					forge_3d_scale_apply(target_idx, (float)thousandths / 1000.0f);
+					snprintf(relay, sizeof(relay), "!FZ:%d:%d", (int)target_idx, thousandths);
+					forge_broadcast_packet_to_clients(relay, machine_index);
+				}
+			}
+			return 1;
+		}
 		else if (strncmp(text, "!FU:", 4) == 0)
 		{
 			int live_idx = -1, usage = 0;
@@ -1587,6 +1629,17 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 				int32_t target_idx = forge_resolve_target_live_idx(live_idx, -1);
 				if (target_idx >= 0)
 					forge_3d_always_spawn_apply(target_idx, on);
+			}
+			return 1;
+		}
+		else if (strncmp(text, "!FZ:", 4) == 0)
+		{
+			int live_idx = -1, thousandths = 1000;
+			if (sscanf(text + 4, "%d:%d", &live_idx, &thousandths) == 2)
+			{
+				int32_t target_idx = forge_resolve_target_live_idx(live_idx, -1);
+				if (target_idx >= 0)
+					forge_3d_scale_apply(target_idx, (float)thousandths / 1000.0f);
 			}
 			return 1;
 		}

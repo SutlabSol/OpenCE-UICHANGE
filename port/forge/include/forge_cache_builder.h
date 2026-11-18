@@ -68,6 +68,9 @@ struct forge_placed_object_entry
 	/* (a vehicle's ALWAYS SPAWN: forge_live_instance's, saved as the
 	OBJECT_ALWAYS_SPAWN line before its OBJECT line) */
 	uint8_t always_spawn;
+	/* (its SCALE, 0 for none: forge_live_instance's, saved as the
+	OBJECT_SCALE line before its OBJECT line) */
+	float scale;
 };
 
 struct forge_default_object_edit

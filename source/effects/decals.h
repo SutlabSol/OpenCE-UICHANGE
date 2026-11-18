@@ -53,6 +53,12 @@ void decal_new_from_collision(
 	boolean permanent,
 	short forced_sequence_index,
 	struct decal_editor_geometry *editor_geometry);
+/* port: Forge's placed decals (decals.c) */
+void decal_capture_begin(long *indices, short maximum);
+short decal_capture_end(void);
+boolean decal_exists(long decal_index);
+void decal_delete_made(long decal_index);
+extern union real_vector3d const *decal_forced_forward;
 void decal_new(
 	long decal_definition_index,
 	real_point3d const *origin,

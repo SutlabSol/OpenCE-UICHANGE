@@ -5374,7 +5374,7 @@ static int append_forge_map_metadata_and_preview_trailer(
 			int baked = 0;
 			if (!po->tag_path[0] || po->x < -90000.0f)
 				continue;
-			if (ce_base_map)
+			if (ce_base_map && po->group_tag != 'effe' && po->group_tag != 'deca')
 			{
 				uint32_t g = po->group_tag;
 				if (g == 'mach' || g == 'lifi' || g == 'ctrl')
@@ -5408,6 +5408,18 @@ static int append_forge_map_metadata_and_preview_trailer(
 				static char const always_line[] = "OBJECT_ALWAYS_SPAWN\r\n";
 				uint32_t o = buf_alloc(&state_buf, (uint32_t)(sizeof(always_line) - 1u), 1);
 				if (state_buf.data) memcpy(state_buf.data + o, always_line, sizeof(always_line) - 1u);
+			}
+			/* (and a scenery's SCALE, the same way) */
+			if (po->scale > 0.0f && state_buf.data)
+			{
+				char scale_line[48];
+				int scale_len = snprintf(scale_line, sizeof(scale_line), "OBJECT_SCALE|%.3f\r\n", (double)po->scale);
+
+				if (scale_len > 0)
+				{
+					uint32_t o = buf_alloc(&state_buf, (uint32_t)scale_len, 1);
+					if (state_buf.data) memcpy(state_buf.data + o, scale_line, (size_t)scale_len);
+				}
 			}
 			line_len = snprintf(line, sizeof(line),
 				"OBJECT|%u|%d|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%d|%s\r\n",
@@ -6156,6 +6168,9 @@ int forge_export_scenario_map(
 				else if (g == 'weap' || po->category == _forge_object_weapon) g = 'weap';
 				else if (g == 'eqip' || po->category == _forge_object_equipment) g = 'eqip';
 				else continue;
+				/* (an effect spot, a decal, is no object to bake: the level makes it from its OBJECT line) */
+				if (po->group_tag == 'effe' || po->group_tag == 'deca')
+					continue;
 
 				for (j = 0; j < pending_count; j++)
 				{

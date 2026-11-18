@@ -1741,7 +1741,7 @@ d3d8_gl.c's ui_point_from_window: the back buffer is letterboxed into the
 window as host_vk_present.c blits it (the window's width, or its height,
 whichever the picture's shape fits), and the menus are centred in the
 screen's width */
-static void ui_point_from_window(float window_x, float window_y, short *x, short *y)
+static void ui_point_from_window_on(float window_x, float window_y, int centered, short *x, short *y)
 {
 	int window_width, window_height, pixel_width, pixel_height, width, height, left, top;
 	float buffer_width, buffer_height, screen_x, screen_y;
@@ -1767,8 +1767,13 @@ static void ui_point_from_window(float window_x, float window_y, short *x, short
 	top = (pixel_height - height) / 2;
 	screen_x = (window_x * pixel_width / window_width - left) * (float)screen_width / (float)width;
 	screen_y = (window_y * pixel_height / window_height - top) * (float)SCREEN_HEIGHT / (float)height;
-	*x = (short)floorf(screen_x - (float)(screen_width - 640) / 2.0f);
+	*x = (short)floorf(screen_x - (centered ? (float)(screen_width - 640) / 2.0f : 0.0f));
 	*y = (short)floorf(screen_y);
+}
+
+static void ui_point_from_window(float window_x, float window_y, short *x, short *y)
+{
+	ui_point_from_window_on(window_x, window_y, TRUE, x, y);
 }
 
 /* the menus' pointer: on Android, the touchscreen's taps and drags
@@ -1803,6 +1808,7 @@ void xgpu_gl_texture_deleted(unsigned int texture)
 	(void)texture;
 }
 
+#ifdef HALO_ANDROID
 /* the scoreboard's: none, as on Android's OpenGL ES (d3d8_gl.c); a vote to
 kick starts from the console (votekick) */
 int halo_forge_pointer_update(int wanted, struct halo_ui_pointer *pointer)
@@ -1818,6 +1824,40 @@ int halo_scoreboard_pointer_update(int offered, struct halo_ui_pointer *pointer)
 	(void)pointer;
 	return -1;
 }
+#else
+/* a desktop's (macOS's) Forge menus and scoreboard: the mouse freed while one
+is open, in the screen's columns, as d3d8_gl.c's. These were the Android
+stubs, so on a Mac the mouse stayed locked in Forge's menus */
+int halo_forge_pointer_update(int wanted, struct halo_ui_pointer *pointer)
+{
+	struct platform_ui_pointer state;
+
+	memset(pointer, 0, sizeof(*pointer));
+	if (!platform_forge_pointer(wanted != 0, &state))
+		return 0;
+	ui_point_from_window_on(state.x, state.y, FALSE, &pointer->x, &pointer->y);
+	ui_point_from_window_on(state.click_x, state.click_y, FALSE, &pointer->click_x, &pointer->click_y);
+	pointer->moved = state.moved != FALSE;
+	pointer->left_clicks = (unsigned char)(state.left_clicks < 255 ? state.left_clicks : 255);
+	pointer->right_clicks = (unsigned char)(state.right_clicks < 255 ? state.right_clicks : 255);
+	pointer->wheel_steps = (signed char)(state.wheel_steps < -8 ? -8 : state.wheel_steps > 8 ? 8 : state.wheel_steps);
+	return 1;
+}
+
+int halo_scoreboard_pointer_update(int offered, struct halo_ui_pointer *pointer)
+{
+	struct platform_ui_pointer state;
+
+	memset(pointer, 0, sizeof(*pointer));
+	if (!platform_scoreboard_pointer(offered != 0, &state))
+		return 0;
+	ui_point_from_window_on(state.x, state.y, FALSE, &pointer->x, &pointer->y);
+	ui_point_from_window_on(state.click_x, state.click_y, FALSE, &pointer->click_x, &pointer->click_y);
+	pointer->moved = state.moved != FALSE;
+	pointer->left_clicks = (unsigned char)(state.left_clicks < 255 ? state.left_clicks : 255);
+	return 1;
+}
+#endif
 
 /* takes up the display's shape and resolution, or the window's, if they
 have changed; between frames, since the game's layout and the targets must

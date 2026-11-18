@@ -157,7 +157,24 @@ enum forge_palette_category
 	/* the teleporter nodes and every teleporter scenery (after Firefight for
 	the same reason; the palette shows it after SPAWNS: forge_3d_mode.c) */
 	_forge_cat_teleporters,
+	/* particle emitters (scenery\emitters\ and the like: fire, sparks, steam),
+	once left out; after the rest for the same reason */
+	_forge_cat_effects,
+	/* decals placed on the map's surfaces: blood, burns, bullet holes, signs */
+	_forge_cat_decals,
 	NUMBER_OF_FORGE_PALETTE_CATEGORIES
+};
+
+/* where a palette tag comes from: the tabs that are split by it show a folder
+of each (forge_catalog_category_split) */
+enum forge_catalog_origin
+{
+	_forge_origin_builtin = 0,  /* Forge's own markers: spawns, objectives */
+	_forge_origin_custom,       /* the game's props (tag_props.bin): the drop capsule, the ammo crate */
+	_forge_origin_campaign,     /* the Forge pack's: every campaign map's and the stock multiplayer maps' */
+	_forge_origin_map,          /* the map's own tags, baked in it */
+	_forge_origin_profile,      /* the chosen Tag Injector profile's, and a saved map's bake */
+	NUMBER_OF_FORGE_CATALOG_ORIGINS
 };
 
 #define _forge_cat_count NUMBER_OF_FORGE_PALETTE_CATEGORIES
@@ -240,11 +257,26 @@ struct forge_catalog_entry
 	uint8_t category;
 	uint8_t source_cache_id; /* 0 = forgeasset.map (universal), 1 = customforgeasset.map (SP only) */
 	uint16_t pad;
+	/* (enum forge_catalog_origin) where it comes from; and its keyword folder
+	(forge_catalog_keyword_name, 0: none). A folder row (FORGE_GROUP_FOLDER)
+	has the origin and keyword it opens */
+	uint8_t origin;
+	uint8_t keyword;
+	uint16_t pad2;
 	char tag_path[FORGE_TAG_PATH_MAX];
 	char display_name[64];
 };
 
-#define FORGE_MAX_CATALOG_ENTRIES 2048
+/* a palette folder's row: an origin's (keyword 0) or a keyword's within it */
+#define FORGE_GROUP_FOLDER 'fold'
+#define FORGE_FOLDER_PATH "forge_folder\\"
+
+/* whether a tab is split into origins and keyword folders */
+int forge_catalog_category_split(int category);
+char const *forge_catalog_origin_name(int origin);
+char const *forge_catalog_keyword_name(int keyword);
+
+#define FORGE_MAX_CATALOG_ENTRIES 3072
 
 /* ---------- Live Placed Instance Tracking */
 
@@ -271,6 +303,10 @@ struct forge_live_instance
 	float orig_x, orig_y, orig_z; /* Original scenario position if is_default_scenario_object == 1 */
 	float x, y, z;
 	float yaw, pitch, roll;
+	/* its size (0: as made, 1): a scenery's or an effect's, Object Settings'
+	SCALE (forge_3d_scale_apply), saved as the OBJECT_SCALE line before its
+	OBJECT line and sent as !FZ: */
+	float scale;
 	char tag_path[FORGE_TAG_PATH_MAX];
 	char label[64];
 };
@@ -694,6 +730,15 @@ void forge_network_send_marker_usage(int32_t live_idx, int16_t usage);
 (forge_3d_mode.c's Object Settings row) */
 void forge_network_send_always_spawn(int32_t live_idx, int on);
 void forge_3d_always_spawn_apply(int32_t live_idx, int on);
+/* a placed scenery's or effect's size (SCALE): its object, its record, and
+the other machines' (!FZ:) */
+#define FORGE_SCALE_MIN 0.1f
+#define FORGE_SCALE_MAX 10.0f
+void forge_network_send_scale(int32_t live_idx, float scale);
+void forge_3d_scale_apply(int32_t live_idx, float scale);
+/* the size the next object spawned is made at (0: as made): a saved map's
+OBJECT_SCALE line, a copy's */
+extern float g_forge_next_spawn_scale;
 /* the next object spawned is a vehicle set to ALWAYS SPAWN (read and cleared
 by forge_3d_spawn_object_at_slot) */
 extern int g_forge_next_spawn_always;

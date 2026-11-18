@@ -2068,6 +2068,9 @@ static void effect_generate_particles(
 				real_point3d world_point;
 				real_vector3d world_direction;
 				real_vector3d world_velocity;
+				/* port: the size of the object it's on (a Forge emitter's SCALE):
+				its node matrix grows where particles go, and this their size */
+				real object_size = 1.0f;
 				real emission_radius = effect_real_random_range(
 					get_global_local_random_seed_address(),
 					effect,
@@ -2130,6 +2133,8 @@ static void effect_generate_particles(
 						node_matrix,
 						&data.velocity,
 						&world_velocity);
+					if (node_matrix->scale > 0.0f)
+						object_size = node_matrix->scale;
 				}
 				else
 				{
@@ -2185,7 +2190,7 @@ static void effect_generate_particles(
 						particles->radius_upper_bound,
 						particles->scale_a_flags,
 						particles->scale_b_flags,
-						_effect_particle_radius_bit) * skulls_effect_size;
+						_effect_particle_radius_bit) * skulls_effect_size * object_size;
 					data.angular_velocity = effect_real_random_range(
 						get_global_local_random_seed_address(),
 						effect,

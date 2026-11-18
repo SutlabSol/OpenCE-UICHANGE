@@ -2742,6 +2742,12 @@ void menu_tags_loaded(char const *map_name)
 	{
 		forge_reset_transient_session_state(0);
 		g_forge_session_enabled = 0;
+		/* (back at the menus from a Forge game: the gametype from before it,
+		else the next game started without one chosen through the menus that
+		give it back - a LOCAL game, the PLAY menu's - loaded as Forge again.
+		A Forge lobby still hosted between its rounds keeps its own) */
+		if (!network_game_is_active())
+			forge_variant_give_back();
 		g_forge.mode = _forge_mode_play;
 		g_forge.active_modal = _forge_modal_none;
 		forge_menu_custom_edition_maps_look_again();

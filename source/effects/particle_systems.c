@@ -799,6 +799,26 @@ static void particle_system_new_particles(
 						particle,
 						&markers[marker_index]);
 
+					/* port: a system on a scaled object (a Forge emitter's SCALE)
+					throws its particles as far and as fast as it is big */
+					if (system->object_index != NONE)
+					{
+						struct object_datum *owner = object_try_and_get(system->object_index);
+
+						if (owner && owner->object.scale > 0.0f && owner->object.scale != 1.0f)
+						{
+							real size = owner->object.scale;
+							real_point3d const *from = &markers[marker_index].matrix.position;
+
+							particle->position.x = from->x + (particle->position.x - from->x) * size;
+							particle->position.y = from->y + (particle->position.y - from->y) * size;
+							particle->position.z = from->z + (particle->position.z - from->z) * size;
+							particle->velocity.i = system->velocity.i + (particle->velocity.i - system->velocity.i) * size;
+							particle->velocity.j = system->velocity.j + (particle->velocity.j - system->velocity.j) * size;
+							particle->velocity.k = system->velocity.k + (particle->velocity.k - system->velocity.k) * size;
+						}
+					}
+
 					scenario_location_from_point(&particle->location, &particle->position);
 
 					if (particle->location.cluster_index != NONE)
@@ -1236,6 +1256,18 @@ static void particle_system_update(
 					type->variables.particle_state_randomized_multipliers.animation_rate *= system->scale;
 				if (TEST_FLAG(type_definition->flags, _particle_system_type_rotation_rate_scales_bit))
 					type->variables.particle_state_randomized_multipliers.rotation_rate *= system->scale;
+				/* port: and the size of the object it's attached to (a Forge
+				emitter's SCALE), its particles as big */
+				if (system->object_index != NONE)
+				{
+					struct object_datum *owner = object_try_and_get(system->object_index);
+
+					if (owner && owner->object.scale > 0.0f && owner->object.scale != 1.0f)
+					{
+						type->variables.particle_state_randomized_multipliers.scale *= owner->object.scale;
+						type->variables.particle_state_multipliers.radius *= owner->object.scale;
+					}
+				}
 
 				break;
 			}
