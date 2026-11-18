@@ -4320,9 +4320,22 @@ static void refresh_listener(
 			or, with none, the focus's motion measured
 			(listener_measure_velocity) */
 			{
-				long followed_unit_index = director_get_followed_unit(local_player_index);
+				/* port: a replay's playback's view is no director's: the unit
+				it follows, or with none (a free or cinematic camera) its own
+				motion measured. Local player 0's observer stands still in a
+				replay, and what the view followed was heard as passing a
+				still listener: its engine fell in pitch as the view chased it */
+				long followed_unit_index = replay_camera ? network_replay_followed_unit() :
+					director_get_followed_unit(local_player_index);
 
-				if (followed_unit_index != NONE && object_try_and_get(followed_unit_index))
+				if (replay_camera && followed_unit_index == NONE)
+				{
+					listener_measure_velocity(
+						local_player_index,
+						&replay_camera->position,
+						&velocity);
+				}
+				else if (followed_unit_index != NONE && object_try_and_get(followed_unit_index))
 				{
 					object_get_point_velocity(
 						followed_unit_index,

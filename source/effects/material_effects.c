@@ -25,6 +25,7 @@ symbols in this file:
 #include "render/render_debug.h"
 #include "scenario/scenario.h"
 #include "sound/game_sound.h"
+#include "network_replay.h" /* port: port/linux/game/network_replay_playback.c */
 
 /* ---------- constants */
 
@@ -69,14 +70,14 @@ boolean material_effect_visible(
 	{
 		for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
 		{
-			if (local_player_get_player_index(local_player_index) != NONE)
+			/* port: and a replay's playback's view, which has no player: its
+			footsteps and clinks were never made (network_replay_local_camera) */
+			struct observer_result const *camera = network_replay_local_camera(local_player_index);
+
+			if (camera && distance_squared3d(&camera->position, position) < 100.0f)
 			{
-				struct observer_result const *camera = observer_get_camera(local_player_index);
-				if (distance_squared3d(&camera->position, position) < 100.0f)
-				{
-					visible = TRUE;
-					break;
-				}
+				visible = TRUE;
+				break;
 			}
 		}
 	}

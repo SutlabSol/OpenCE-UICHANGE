@@ -166,6 +166,9 @@ symbols in this file:
 #include "units/unit_definitions.h"
 #include "units/vehicle_definitions.h"
 
+/* port: port/linux/game/network_objects.c */
+boolean network_objects_vehicle_corrected(long vehicle_index);
+
 /* ---------- constants */
 
 enum
@@ -1726,7 +1729,10 @@ static boolean update_suspension(
 					}
 				}
 
-				if (definition->suspension_sound.index!=NONE && maximum_shift>0.3f)
+				/* port: not where a client's netcode just put it
+				(network_objects_vehicle_corrected) */
+				if (definition->suspension_sound.index!=NONE && maximum_shift>0.3f &&
+					!network_objects_vehicle_corrected(vehicle_index))
 				{
 					object_impulse_sound_new(vehicle_index, definition->suspension_sound.index, NONE,
 						global_origin3d, global_forward3d,
@@ -1756,8 +1762,11 @@ static void create_crashing_effects(
 	real_vector3d delta;
 	real speed;
 
-	if (falling_damage->vehicle_hit_environment_damage_effect.index!=NONE ||
-		definition->crash_sound.index!=NONE)
+	/* port: a client's vehicle its netcode just moved has its physics kick
+	it out of where it was put: that is no crash (network_objects_vehicle_corrected) */
+	if ((falling_damage->vehicle_hit_environment_damage_effect.index!=NONE ||
+		definition->crash_sound.index!=NONE) &&
+		!network_objects_vehicle_corrected(vehicle_index))
 	{
 		short mass_point_index;
 

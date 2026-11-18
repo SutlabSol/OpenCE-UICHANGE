@@ -287,6 +287,19 @@ void network_replay_playback_frame(void);
 before it has one */
 struct observer_result const *network_replay_camera(void);
 
+/* where a local player sees and hears the world from: the view above for
+local player 0 while one is up (who has no player then), else the player's
+own camera; NULL for a local player with neither. What the game makes only
+near a local player (footsteps, a bounce's or a casing's clink:
+material_effects.c; a bullet's flyby: projectiles.c) and what it hears
+around one (the ambience and the reverb: scenario.c) are made near it */
+struct observer_result const *network_replay_local_camera(short local_player_index);
+
+/* the unit the view follows (behind it, through its eyes), NONE for a free,
+cinematic or cutscene one: the sound's listener moves with it, as with the
+unit a player's camera follows (sound_manager.c, its Doppler effect) */
+long network_replay_followed_unit(void);
+
 /* the player watched in a replay's playback (a datum index), NONE when no
 replay plays: the announcer speaks to them (game_engine.c), and the view
 through their eyes draws them as a player's own (render_objects.c) */

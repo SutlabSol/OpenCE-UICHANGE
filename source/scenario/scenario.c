@@ -196,6 +196,7 @@ symbols in this file:
 #include "structures/structure_bsp_definitions.h"
 #include "units/units.h"
 #include "structure_culling.h" /* port: port/linux/game/structure_culling.c */
+#include "network_replay.h" /* port: port/linux/game/network_replay_playback.c */
 
 /* ---------- constants */
 
@@ -1283,7 +1284,6 @@ void scenario_get_sound_environment(
 {
 	struct structure_bsp *structure_bsp;
 	long local_player_index;
-	long player_index;
 	long fog_index;
 	long sound_environment_index;
 	long selected_sound_environment_index;
@@ -1310,10 +1310,11 @@ void scenario_get_sound_environment(
 	for (local_player_index = 0; (short)local_player_index < 4; local_player_index++)
 	{
 		fog_index = NONE;
-		player_index = local_player_get_player_index((short)local_player_index);
-		if (player_index != NONE)
+		/* port: and a replay's playback's view, which has no player: its
+		level's ambience and reverb were never heard (network_replay_local_camera) */
+		camera = network_replay_local_camera((short)local_player_index);
+		if (camera)
 		{
-			camera = observer_get_camera((short)local_player_index);
 			if (camera->location.cluster_index != NONE)
 			{
 				match_assert(

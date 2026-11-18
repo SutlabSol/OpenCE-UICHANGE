@@ -445,6 +445,13 @@ static struct
 } objects_host_vehicle_predictions[MAXIMUM_TRACKED_PLAYERS];
 /* a client: the host's objects it has, by absolute index */
 static long objects_client_has[MAXIMUM_TRACKED_OBJECTS];
+/* a client: the vehicle (its datum index) whose pose the netcode last wrote,
+and at which tick, by absolute index (network_objects_vehicle_corrected) */
+static struct
+{
+	long vehicle_index;
+	long time;
+} objects_client_vehicle_written[MAXIMUM_TRACKED_OBJECTS];
 /* Only the first validated description in a checkpoint world may replace a
 same-handle corpse. A later snapshot can precede a death already received. */
 static boolean objects_client_checkpoint_pending[MAXIMUM_TRACKED_OBJECTS];
@@ -978,12 +985,44 @@ void network_objects_vehicle_written(
 
 	if (object->object.type == _object_type_vehicle)
 	{
+		long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+
+		if (game_connection() == _game_connection_network_client && absolute_index >= 0 &&
+			absolute_index < MAXIMUM_TRACKED_OBJECTS)
+		{
+			objects_client_vehicle_written[absolute_index].vehicle_index = object_index;
+			objects_client_vehicle_written[absolute_index].time = game_time_get();
+		}
 		if (!network_objects_vehicle_followed(object_index))
 			vehicle_riding_vehicle_corrected(object_index, before_position, before_forward, before_up,
 				&object->object.position, &object->object.forward, &object->object.up);
 		if (network_objects_vehicle_carries(object_index, kind))
 			biped_riding_vehicle_written(object_index, before_position, before_forward, before_up);
 	}
+}
+
+/* vehicles.c: whether a client's netcode wrote the vehicle's pose this
+tick or the last (the host's correction of it, a seat's carry). Its physics
+then pushes it out of the ground it was put a little into, or turns its
+velocity to the host's: no crash of its own, but the game took it for one
+and played its crash and suspension sounds at full strength, a vehicle far
+off corrected every few ticks clattering over all else (a replay's most of
+all, whose recording has the vehicles further off corrected less often and
+further). FALSE on the host and in a game of one machine */
+boolean network_objects_vehicle_corrected(
+	long vehicle_index)
+{
+	long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(vehicle_index);
+	long elapsed;
+
+	if (game_connection() != _game_connection_network_client || absolute_index < 0 ||
+		absolute_index >= MAXIMUM_TRACKED_OBJECTS ||
+		objects_client_vehicle_written[absolute_index].vehicle_index != vehicle_index)
+	{
+		return FALSE;
+	}
+	elapsed = game_time_get() - objects_client_vehicle_written[absolute_index].time;
+	return elapsed >= 0 && elapsed <= 1;
 }
 
 /* an object's state as the host sent it, in full */

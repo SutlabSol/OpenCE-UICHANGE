@@ -733,6 +733,10 @@ static struct
 	real free_move_y;
 	real free_rise;
 	struct observer_result camera;
+	/* the unit the camera follows (behind it, through its eyes), whose
+	motion the sound's listener moves with (network_replay_followed_unit);
+	NONE for a free, cinematic or cutscene one */
+	long followed_unit;
 	/* the touch controls' view swipe this frame (radians: the free camera's
 	aim, behind's orbit) */
 	real touch_yaw;
@@ -1014,6 +1018,7 @@ static void playback_free(
 	playback.hidden = FALSE;
 	playback.paused = FALSE;
 	playback.camera_valid = FALSE;
+	playback.followed_unit = NONE;
 	playback.cutscene = FALSE;
 	playback.threat_tick = NONE;
 	playback.threat_field_of_view = 0.0f;
@@ -4102,6 +4107,7 @@ void network_replay_playback_frame(
 	/* (paused: the camera where it was, its sticks let be) */
 	if (playback.paused && playback.camera_valid)
 		return;
+	playback.followed_unit = NONE;
 	/* (the touch controls' view swipe, which no player reads in a replay:
 	the cameras', as the right stick's) */
 	playback.touch_yaw = playback.touch_pitch = 0.0f;
@@ -4133,9 +4139,15 @@ void network_replay_playback_frame(
 	else if (unit_index == NONE)
 		return;
 	else if (playback.view == _replay_view_eyes)
+	{
 		playback_eyes_view(unit_index);
+		playback.followed_unit = unit_index;
+	}
 	else
+	{
 		playback_behind_camera(unit_index, main_get_seconds_elapsed());
+		playback.followed_unit = unit_index;
+	}
 }
 
 long network_replay_watched_player(
@@ -4154,6 +4166,28 @@ struct observer_result const *network_replay_camera(
 	void)
 {
 	return playback_viewing() && playback.camera_valid ? &playback.camera : NULL;
+}
+
+long network_replay_followed_unit(
+	void)
+{
+	return network_replay_camera() && playback.followed_unit != NONE && object_try_and_get(playback.followed_unit) ?
+		playback.followed_unit : NONE;
+}
+
+struct observer_result const *network_replay_local_camera(
+	short local_player_index)
+{
+	struct observer_result const *camera = local_player_index == 0 ? network_replay_camera() : NULL;
+
+	if (camera)
+		return camera;
+	if (local_player_index >= 0 && local_player_index < MAXIMUM_LOCAL_PLAYERS &&
+		local_player_get_player_index(local_player_index) != NONE)
+	{
+		return observer_get_camera(local_player_index);
+	}
+	return NULL;
 }
 
 /* ---------- the host watching its game live */
@@ -4189,6 +4223,7 @@ boolean network_replay_live_begin(
 	playback.watched = player_index != NONE && player_try_and_get(player_index) ? player_index : NONE;
 	playback.view = _replay_view_behind;
 	playback.camera_valid = FALSE;
+	playback.followed_unit = NONE;
 	playback.cutscene = FALSE;
 	playback.first_person = FALSE;
 	playback.behind_orbiting = FALSE;
@@ -4264,6 +4299,7 @@ void network_replay_live_end(
 		return;
 	playback.live = FALSE;
 	playback.camera_valid = FALSE;
+	playback.followed_unit = NONE;
 	playback.cutscene = FALSE;
 	playback.first_person = FALSE;
 	playback.scores = FALSE;

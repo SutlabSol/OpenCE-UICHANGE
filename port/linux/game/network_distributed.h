@@ -611,6 +611,9 @@ enum network_vehicle_write
 };
 void network_objects_vehicle_written(long object_index, real_point3d const *before_position,
 	real_vector3d const *before_forward, real_vector3d const *before_up, short kind);
+/* (a client) whether the netcode wrote the vehicle's pose this tick or the
+last: its physics' kick then is no crash (vehicles.c) */
+boolean network_objects_vehicle_corrected(long vehicle_index);
 /* a unit in the vehicle's seat as the host has it (NONE: in none) */
 void network_objects_set_seat(long unit_index, long vehicle_index, short seat_index);
 /* (the host) the ticks between sends to a machine of a unit at position, by

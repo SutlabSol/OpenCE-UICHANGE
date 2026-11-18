@@ -141,6 +141,8 @@ symbols in this file:
 #include "sound/sound_definitions.h"
 #include "units/bipeds.h"
 #include "units/units.h"
+#include "camera/observer.h"
+#include "network_replay.h" /* port: port/linux/game/network_replay_playback.c */
 /* port: port/linux/game/overshield_effect.c */
 boolean overshield_effect_active(long object_index);
 /* port: port/linux/game/infection.c */
@@ -996,13 +998,21 @@ boolean projectile_update(
 
 				for (local_player_index = 0; local_player_index < MAXIMUM_LOCAL_PLAYERS; local_player_index++)
 				{
-					if (local_player_get_player_index(local_player_index) != NONE)
-					{
-						long unit_index = player_get(local_player_get_player_index(local_player_index))->unit_index;
+					/* port: and a replay's playback's view, which has no player:
+					the shots past it whizz by it (network_replay_local_camera),
+					but the watched player's own shots, as a player's */
+					struct observer_result const *replay_camera = local_player_index == 0 ?
+						network_replay_camera() : NULL;
 
-						if (unit_index != NONE && unit_index != ignore_object_index)
+					if (replay_camera || local_player_get_player_index(local_player_index) != NONE)
+					{
+						long unit_index = replay_camera ? network_replay_followed_unit() :
+							player_get(local_player_get_player_index(local_player_index))->unit_index;
+
+						if ((replay_camera || unit_index != NONE) && (unit_index == NONE || unit_index != ignore_object_index))
 						{
-							real_point3d const *listener_position = &object_get(unit_index)->object.bounding_sphere_center;
+							real_point3d const *listener_position = replay_camera ? &replay_camera->position :
+								&object_get(unit_index)->object.bounding_sphere_center;
 							real maximum_distance = sound_definition_get_maximum_distance(definition->projectile.flyby_sound.index);
 							real_vector3d listener_vector;
 							real_vector3d parallel;
