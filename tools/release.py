@@ -139,7 +139,9 @@ def configure(number: int, xwin: Path) -> bool:
 
 def describe(path: Path) -> str:
     stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime))
-    return f"{path.relative_to(ROOT)} ({stamp})"
+    # (a file staged under another name sits outside the tree: its name only)
+    shown = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path.name
+    return f"{shown} ({stamp})"
 
 
 def write_zip(archive: Path, folder: Path, compression: int) -> None:
