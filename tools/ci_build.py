@@ -76,6 +76,16 @@ APKS = {
     "debug": "port/android/app/build/outputs/apk/debug/app-debug.apk",
     "release": "port/android/app/build/outputs/apk/release/app-release.apk",
 }
+# the bridge (port/android/bridge/build.gradle): the old app's, com.halo.decomp's, last update, which moves its
+# players to the game's new id, com.halo.contentevolved
+BRIDGE_APKS = {
+    "debug": "port/android/bridge/build/outputs/apk/debug/bridge-debug.apk",
+    "release": "port/android/bridge/build/outputs/apk/release/bridge-release.apk",
+}
+# the Android game's files' name (dist/, the release's assets, its updater's
+# Updater.java): halo-android- is the bridge's, the name the apps up to build
+# 141 ask for
+ANDROID_GAME_NAME = "halo-contentevolved"
 
 
 def run(command, cwd=ROOT):
@@ -243,12 +253,25 @@ def main() -> int:
         return 0
     if args.platform == "android":
         # the native part, then the app around it (Gradle's variant of the
-        # same name: release is signed with the debug key, not debuggable)
+        # same name: release is signed with the debug key, not debuggable),
+        # and the bridge: dist/halo-contentevolved-<config> the game,
+        # dist/halo-android-<config> the bridge
         run(["ninja", "android"])
         gradlew = "gradlew.bat" if os.name == "nt" else "./gradlew"
         variant = "release" if args.config == "release" else "debug"
-        run([gradlew, "--console=plain", "-q", f"assemble{variant.capitalize()}"], cwd=ROOT / "port/android")
-        outputs = [APKS[variant]]
+        task = f"assemble{variant.capitalize()}"
+        run([gradlew, "--console=plain", "-q", f":app:{task}", f":bridge:{task}"], cwd=ROOT / "port/android")
+        for name, apk in ((ANDROID_GAME_NAME, APKS[variant]), ("halo-android", BRIDGE_APKS[variant])):
+            dist = ROOT / "dist" / f"{name}-{args.config}"
+            if dist.exists():
+                shutil.rmtree(dist)
+            dist.mkdir(parents=True)
+            shutil.copy2(ROOT / apk, dist)
+            print(f"{apk} -> {dist.relative_to(ROOT)}", flush=True)
+            # (the bridge has none of the game's code: its APK only)
+            if name == ANDROID_GAME_NAME:
+                copy_notices(args.platform, dist)
+        return 0
     else:
         run(["ninja", args.platform])
         outputs = OUTPUTS[args.platform]

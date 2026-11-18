@@ -1055,11 +1055,30 @@ def generate_android_build(n: Writer, sln: Any) -> None:
     n.rule(
         name="android_gradle",
         # Gradle leaves the APK alone when its contents would not change
-        command=(f"cd {PORT_DIR} && {gradle_environment}./gradlew --console=plain -q assembleDebug && "
+        command=(f"cd {PORT_DIR} && {gradle_environment}./gradlew --console=plain -q :app:assembleDebug && "
                  "touch app/build/outputs/apk/debug/app-debug.apk"),
         description="ANDROID GRADLE $out",
         pool="console",
     )
     n.build(outputs=apk, rule="android_gradle", inputs=staged_all, implicit=[stamp, sdl_android_mouse_listener])
     n.build(outputs="android_apk", rule="phony", inputs=apk)
+    n.newline()
+
+    # the bridge (port/android/bridge/build.gradle): the old app's (com.halo.decomp's) last update, which moves its
+    # players to the game's new id; a release carries it under the old app's zip names (tools/release.py). Java
+    # only: none of the native build is in it
+    bridge_dir = PORT_DIR / "bridge"
+    bridge_apk = bridge_dir / "build" / "outputs" / "apk" / "debug" / "bridge-debug.apk"
+    bridge_sources = sorted(path for path in bridge_dir.rglob("*")
+                            if path.is_file() and "build" not in path.relative_to(bridge_dir).parts)
+    n.rule(
+        name="android_gradle_bridge",
+        command=(f"cd {PORT_DIR} && {gradle_environment}./gradlew --console=plain -q :bridge:assembleDebug && "
+                 "touch bridge/build/outputs/apk/debug/bridge-debug.apk"),
+        description="ANDROID GRADLE $out",
+        pool="console",
+    )
+    n.build(outputs=bridge_apk, rule="android_gradle_bridge", inputs=bridge_sources,
+            implicit=[PORT_DIR / "settings.gradle"])
+    n.build(outputs="android_bridge_apk", rule="phony", inputs=bridge_apk)
     n.newline()

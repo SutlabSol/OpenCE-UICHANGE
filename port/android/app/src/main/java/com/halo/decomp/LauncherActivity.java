@@ -2,6 +2,7 @@ package com.halo.decomp;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -52,16 +53,24 @@ import java.util.Locale;
  * phone in run.txt and the settings in config.toml, and names it in
  * profile_folder.txt for the game (port/android/host/host_main.c), which
  * writes its log and profiles there.
+ *
+ * First of all, with the old app (com.halo.decomp, this app's id up to build
+ * 141) on the phone, its files are moved here (Migration), and the player is
+ * offered its uninstall.
  */
 public class LauncherActivity extends Activity {
     private static final int PICK_IMAGE = 1;
     private static final int PROFILE_STORAGE = 2;
+    private static final int UNINSTALL_OLD = 3;
 
     private File dataRoot;
     private TextView status;
     private ProgressBar progress;
     private Button pick;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private boolean proceeded;
+    /** waiting for the player to update the old app to the bridge (Migration.State.OLD_VERSION) */
+    private boolean waitingForBridge;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -73,6 +82,16 @@ public class LauncherActivity extends Activity {
             new File(dataRoot, "maps").mkdirs();
             new File(dataRoot, "custom_maps").mkdirs();
         }
+        if (offerMove())
+            return;
+        proceed();
+    }
+
+    /** what the launcher does once the old app's files are moved (or there were none) */
+    private void proceed() {
+        if (proceeded)
+            return;
+        proceeded = true;
         passOnHardwareId();
         passOnInvite(getIntent());
         Updater.moveToVulkanDefault(dataRoot);
@@ -374,9 +393,199 @@ public class LauncherActivity extends Activity {
         pick.requestFocus();
     }
 
+    /* ---------- the old app's files (Migration) */
+
+    /** true when the old app's files are being offered or moved: proceed() follows */
+    private boolean offerMove() {
+        Migration.State state = Migration.state(this, dataRoot);
+
+        if (state == Migration.State.OLD_VERSION) {
+            showOldVersion();
+            return true;
+        }
+        if (state != Migration.State.READY)
+            return false;
+        if (!Migration.hasOwnData(dataRoot)) {
+            startMove(true);
+            return true;
+        }
+        new AlertDialog.Builder(this)
+            .setTitle("The old Halo app's files")
+            .setMessage("The old Halo app is on this phone too. Bring its settings, saves, profiles, mods and maps "
+                + "over to this one? Where both have the same file, this app's is replaced.")
+            .setCancelable(false)
+            .setPositiveButton("Bring them over", (dialog, which) -> startMove(true))
+            .setNegativeButton("No", (dialog, which) -> {
+                Migration.markDone(dataRoot, "declined");
+                proceed();
+            })
+            .show();
+        return true;
+    }
+
+    /** a screen of the move: a title, a message and a row of buttons, which the caller fills */
+    private LinearLayout buildMoveInterface(String titleText, String messageText, boolean withProgress) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setGravity(Gravity.CENTER);
+        layout.setPadding(dp(48), dp(24), dp(48), dp(24));
+        layout.setBackgroundColor(Color.rgb(12, 16, 20));
+
+        TextView title = new TextView(this);
+        title.setText(titleText);
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        title.setGravity(Gravity.CENTER);
+        layout.addView(title);
+
+        TextView message = new TextView(this);
+        message.setText(messageText);
+        message.setTextColor(Color.rgb(200, 205, 210));
+        message.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        message.setGravity(Gravity.CENTER);
+        message.setPadding(0, dp(16), 0, dp(16));
+        layout.addView(message);
+
+        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setMax(1000);
+        progress.setVisibility(withProgress ? View.VISIBLE : View.GONE);
+        LinearLayout.LayoutParams progressLayout = new LinearLayout.LayoutParams(dp(480),
+            LinearLayout.LayoutParams.WRAP_CONTENT);
+        progressLayout.topMargin = dp(16);
+        layout.addView(progress, progressLayout);
+
+        status = new TextView(this);
+        status.setTextColor(Color.rgb(160, 200, 160));
+        status.setGravity(Gravity.CENTER);
+        status.setPadding(0, dp(8), 0, dp(16));
+        layout.addView(status);
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        buttons.setGravity(Gravity.CENTER);
+        layout.addView(buttons);
+
+        setContentView(layout);
+        return buttons;
+    }
+
+    private Button addButton(LinearLayout buttons, String text, View.OnClickListener listener) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setOnClickListener(listener);
+        buttons.addView(button, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT));
+        return button;
+    }
+
+    /** the old app is older than the bridge: it updates itself once opened, then sends the player back */
+    private void showOldVersion() {
+        waitingForBridge = true;
+        LinearLayout buttons = buildMoveInterface("Bring over your files from the old app",
+            "The old Halo app is on this phone. To bring its settings, saves, profiles, mods and maps over to this "
+                + "one, open it once and say Yes to the update it offers: it updates itself, then sends you back "
+                + "here.\n\n(If it offers no update, its updates are turned off: set auto = true in the [update] "
+                + "section of its config.toml.)", false);
+        Button open = addButton(buttons, "Open the old app", v -> {
+            Intent intent = getPackageManager().getLaunchIntentForPackage(Migration.LEGACY_PACKAGE);
+
+            if (intent != null)
+                startActivity(intent);
+        });
+        addButton(buttons, "Start without them", v -> {
+            waitingForBridge = false;
+            Migration.markDone(dataRoot, "skipped");
+            proceed();
+        });
+        open.requestFocus();
+    }
+
+    private void startMove(boolean withGameData) {
+        buildMoveInterface("Moving your files", "Your settings, saves, profiles, mods and maps are being brought "
+            + "over from the old Halo app.", true);
+        status.setText("Looking at the old app's files...");
+        new Thread(() -> {
+            try {
+                Migration.Listing listing = Migration.list(this);
+                long free = dataRoot.getUsableSpace();
+
+                if (free < Migration.needed(listing, withGameData)) {
+                    handler.post(() -> showNoSpace(listing, free, withGameData));
+                    return;
+                }
+                Migration.copy(this, dataRoot, listing, withGameData, (done, total) -> report(
+                    "Moving files... (" + (done >> 20) + " of " + (total >> 20) + " MB)",
+                    total > 0 ? (int) (done * 1000 / total) : 0));
+                handler.post(this::moved);
+            } catch (Exception exception) {
+                android.util.Log.i("halo", "move: failed: " + exception);
+                handler.post(() -> showMoveFailed(exception.getMessage(), withGameData));
+            }
+        }, "move from the old app").start();
+    }
+
+    private static String gigabytes(long bytes) {
+        return String.format(Locale.ROOT, "%.1f GB", bytes / (1024.0 * 1024 * 1024));
+    }
+
+    private void showNoSpace(Migration.Listing listing, long free, boolean withGameData) {
+        boolean fitsWithout = withGameData && free >= Migration.needed(listing, false);
+        String text = "Moving the old app's files needs about " + gigabytes(Migration.needed(listing, withGameData))
+            + ", and " + gigabytes(free) + " are free.";
+
+        if (fitsWithout)
+            text += "\n\nWithout the game data (its maps folder, " + gigabytes(listing.gameDataBytes) + "), which you "
+                + "then extract again from your disc image, it fits.";
+        else
+            text += "\n\nFree some space, then try again.";
+        LinearLayout buttons = buildMoveInterface("Not enough space", text, false);
+        Button first;
+
+        if (fitsWithout)
+            first = addButton(buttons, "Move without the game data", v -> startMove(false));
+        else
+            first = addButton(buttons, "Try again", v -> startMove(withGameData));
+        addButton(buttons, "Start without them", v -> proceed());
+        first.requestFocus();
+    }
+
+    private void showMoveFailed(String why, boolean withGameData) {
+        LinearLayout buttons = buildMoveInterface("The move failed",
+            "The old app's files could not be brought over:\n\n" + why + "\n\nThe old app keeps them.", false);
+        Button again = addButton(buttons, "Try again", v -> startMove(withGameData));
+        addButton(buttons, "Start without them", v -> proceed());
+        again.requestFocus();
+    }
+
+    private void moved() {
+        Migration.markDone(dataRoot, "moved");
+        new AlertDialog.Builder(this)
+            .setTitle("Your files are here")
+            .setMessage("The old Halo app's settings, saves, profiles, mods and maps are in this app now. The old "
+                + "app is not needed any more: uninstall it?")
+            .setCancelable(false)
+            .setPositiveButton("Uninstall it", (dialog, which) -> {
+                try {
+                    Intent intent = new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + Migration.LEGACY_PACKAGE));
+                    intent.putExtra(Intent.EXTRA_RETURN_RESULT, true);
+                    startActivityForResult(intent, UNINSTALL_OLD);
+                } catch (RuntimeException e) {
+                    proceed();
+                }
+            })
+            .setNegativeButton("Keep it", (dialog, which) -> proceed())
+            .show();
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
+        // the old app updated to the bridge while the player was away (showOldVersion)
+        if (waitingForBridge && !proceeded && Migration.state(this, dataRoot) == Migration.State.READY) {
+            waitingForBridge = false;
+            offerMove();
+            return;
+        }
         // data pushed with adb while this screen was open
         if (pick != null && pick.isEnabled() && haveData())
             startGameAfterDriver();
@@ -385,6 +594,10 @@ public class LauncherActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == UNINSTALL_OLD) {
+            proceed();
+            return;
+        }
         if (requestCode != PICK_IMAGE || resultCode != RESULT_OK || data == null || data.getData() == null)
             return;
         Uri image = data.getData();

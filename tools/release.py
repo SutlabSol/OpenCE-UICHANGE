@@ -14,9 +14,15 @@ newest VC/Tools/MSVC version).
     release/halo-switch-<flavor>.zip    halo.nro and halo_guest.elf
     release/halo-windows-<flavor>.zip   halo.exe and SDL3.dll
     release/halo-web-<flavor>.zip       build/web/site, whole
-    release/halo-android-<flavor>.apk   what ninja android_apk assembled
-    release/halo-android-<flavor>.zip   the same APK, for the app's updater
-    release/halo-android-debug.zip      the same zip, for the apps up to build 108
+    release/halo-contentevolved-<flavor>.apk   the Android game, what ninja
+                                        android_apk assembled (com.halo.contentevolved)
+    release/halo-contentevolved-<flavor>.zip   the same APK, for the game's updater
+    release/halo-android-<flavor>.zip   the bridge (ninja android_bridge_apk), for
+                                        the old app's updater, com.halo.decomp's
+                                        up to build 141: it installs the game
+                                        and hands it the old app's files
+                                        (port/android/bridge/build.gradle)
+    release/halo-android-debug.zip      the same bridge zip, for the apps up to build 108
     release/halo-linux-<flavor>.zip     halo, libSDL3.so.0 and the server's files,
                                         when build.ninja's `all` has the Linux
                                         build (on macOS: a wayland-scanner,
@@ -49,12 +55,12 @@ import time
 import zipfile
 from pathlib import Path
 
-from ci_build import APKS, GAME_DATA_FILES, OUTPUTS, ROOT, copy_notices
+from ci_build import ANDROID_GAME_NAME, APKS, BRIDGE_APKS, GAME_DATA_FILES, OUTPUTS, ROOT, copy_notices
 
 RELEASE = ROOT / "release"
 MACOS_APP = ROOT / "build/macos/Halo Content Evolved.app"
 SITE = ROOT / "build/web/site"
-TARGETS = ["switch", "windows", "web", "android_apk"]
+TARGETS = ["switch", "windows", "web", "android_apk", "android_bridge_apk"]
 
 
 def builds_linux() -> bool:
@@ -143,15 +149,17 @@ def write_zip(archive: Path, folder: Path, compression: int) -> None:
                 zip_file.write(path, path.relative_to(folder).as_posix())
 
 
-def zip_port(platform: str, flavor: str, compression: int, outputs=None) -> None:
+def zip_port(platform: str, flavor: str, compression: int, outputs=None, name=None,
+             notices=True) -> None:
     outputs = outputs or [ROOT / output for output in OUTPUTS[platform]]
     with tempfile.TemporaryDirectory() as staging:
         staging = Path(staging)
         for output in outputs:
             shutil.copy2(output, staging)
             print(f"  {describe(output)}")
-        copy_notices(platform, staging)
-        archive = RELEASE / f"halo-{platform}-{flavor}.zip"
+        if notices:
+            copy_notices(platform, staging)
+        archive = RELEASE / f"{name or 'halo-' + platform}-{flavor}.zip"
         write_zip(archive, staging, compression)
     print(f"-> {archive.relative_to(ROOT)}")
 
@@ -197,7 +205,8 @@ def main() -> int:
 
     apk = ROOT / APKS["debug"]  # (ninja android_apk's, release or not)
     needed = [ROOT / output for platform in ("switch", "windows") for output in OUTPUTS[platform]]
-    needed += [SITE / "index.html", apk]
+    bridge = ROOT / BRIDGE_APKS["debug"]  # (ninja android_bridge_apk's)
+    needed += [SITE / "index.html", apk, bridge]
     if linux:
         needed += [ROOT / output for output in OUTPUTS["linux"]]
     if macos:
@@ -226,12 +235,23 @@ def main() -> int:
     write_zip(archive, SITE, zipfile.ZIP_DEFLATED)
     print(f"-> {archive.relative_to(ROOT)}")
 
+    # the game, com.halo.contentevolved: the APK players download by hand,
+    # and its zip, which its updater downloads
     print(f"  {describe(apk)}")
-    target = RELEASE / f"halo-android-{flavor}.apk"
+    target = RELEASE / f"{ANDROID_GAME_NAME}-{flavor}.apk"
     shutil.copy2(apk, target)
     print(f"-> {target.relative_to(ROOT)}")
     # (the APK is compressed already)
-    zip_port("android", flavor, zipfile.ZIP_STORED, [target])
+    zip_port("android", flavor, zipfile.ZIP_STORED, [target], name=ANDROID_GAME_NAME)
+    # the bridge under the old app's names, every release (the old apps look
+    # at the latest release only): zipped only, as a player downloading by
+    # hand wants the game. Its APK goes into the zip as halo.apk, never the
+    # game's name
+    print(f"  {describe(bridge)}")
+    with tempfile.TemporaryDirectory() as staging:
+        staged = Path(staging) / "halo.apk"
+        shutil.copy2(bridge, staged)
+        zip_port("android", flavor, zipfile.ZIP_STORED, [staged], notices=False)
     # (the APK is Gradle's debug build, and the apps up to build 108 ask for
     # the zip of their own kind, halo-android-debug.zip, by name: it too, so
     # that they find the update)

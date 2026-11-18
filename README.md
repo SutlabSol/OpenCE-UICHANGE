@@ -882,7 +882,7 @@ folder the first time the overlay opens.
 | --- | --- |
 | Switch | `sdmc:/switch/halo/overlay/` |
 | PS5 | `/data/halo/overlay/` |
-| Android | `/sdcard/Android/data/com.halo.decomp/files/overlay/` (copy files with `adb push`) |
+| Android | `/sdcard/Android/data/com.halo.contentevolved/files/overlay/` (copy files with `adb push`) |
 | Linux and Windows | `overlay/` beside `maps/` |
 
 Each folder in it is a folder of the overlay, and each folder in one of
@@ -1087,7 +1087,7 @@ from 4 to 1024). A recording has no length limit:
 the game writes a part each time the memory is full. Refer to "Settings" in
 [port/linux/README.md](port/linux/README.md).
 
-On Android, the files are in `/sdcard/Android/data/com.halo.decomp/files/profiles/`.
+On Android, the files are in `/sdcard/Android/data/com.halo.contentevolved/files/profiles/`.
 Enter `adb pull` to copy the recording parts to a computer.
 
 A profiling build plays with normal builds. It does not use

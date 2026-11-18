@@ -4,7 +4,7 @@ The game's settings are in `config.toml`, in its data folder:
 
 | Platform | File |
 | --- | --- |
-| Android | `/sdcard/Android/data/com.halo.decomp/files/config.toml` |
+| Android | `/sdcard/Android/data/com.halo.contentevolved/files/config.toml` |
 | Nintendo Switch | `sdmc:/switch/halo/config.toml` |
 | PlayStation 5 | `/data/halo/config.toml` |
 
