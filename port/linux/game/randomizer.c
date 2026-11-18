@@ -2460,6 +2460,19 @@ static void gather_firefight(char const *leaf)
 
 		tag_import_roots(GAME_MODES_PACK, "c40", &pod_root, 1);
 	}
+	/* (and Keyes' Flood form, which the Flood's drops grow out of the floor
+	as, and the gore it throws: from Keyes, firefight_spawner.c's Flood drop) */
+	if (tag_loaded('scen', "characters\\flood_captain\\flood_captain") == NONE)
+	{
+		static struct tag_import_root const flood_drop_roots[] =
+		{
+			{ 'scen', "characters\\flood_captain\\flood_captain" },
+			{ 'effe', "characters\\flood_captain\\punchspray" },
+			{ 'effe', "effects\\flood bit death" },
+		};
+
+		tag_import_roots(RANDOMIZER_PACK, "d20", flood_drop_roots, (int)NUMBEROF(flood_drop_roots));
+	}
 }
 
 /* a multiplayer game's mode's tags (Floodfection's burst and forms) */

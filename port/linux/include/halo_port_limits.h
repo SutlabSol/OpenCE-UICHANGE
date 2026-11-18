@@ -191,9 +191,13 @@ pod's capsule, Forge's weapon rack and their Firefight copies) added to
 Firefight's and Forge's levels, which moves the tags after them, and a
 weapon an ordnance pod (48 pods' places in Firefight's state); 105 the pods
 let go in groups, each player's own, a pod an ammo crate, a health pack or an
-overshield (each pod's player, kind and use in Firefight's state). A Firefight game is always of this signature
+overshield (each pod's player, kind and use in Firefight's state); 106
+the enemy drop points' kinds (Forge marker types 8-10), the Flood's drop out
+of Keyes' Flood form (its time and place in Firefight's state, the form and
+its gore copied into Firefight's levels from d20, which moves the tags after
+them). A Firefight game is always of this signature
 (network_server_message_handler.c) */
-#define HALO_PORT_MOD_NETWORK_VERSION 105
+#define HALO_PORT_MOD_NETWORK_VERSION 106
 #define HALO_PORT_MODDED_VERSION_MARK 0xFF00
 #define HALO_PORT_ADVERTISED_MODDED_VERSION (HALO_PORT_MODDED_VERSION_MARK | HALO_PORT_MOD_NETWORK_VERSION)
 

@@ -196,7 +196,7 @@ enum forge_ff_spawn_type
 	_forge_ff_spawn_enemy_vehicle_only = 2, /* Approved enemy vehicle spawn (Ghost/Wraith/Banshee/Scorpion) */
 	_forge_ff_spawn_enemy_ghost_only = 3,   /* Approved Enemy Ghost spawn */
 	_forge_ff_spawn_enemy_heavy_veh = 4,    /* Approved Enemy Wraith / Scorpion / Banshee spawn */
-	_forge_ff_spawn_dropship_zone = 5,      /* Approved Covenant Spirit / Pelican dropship zone */
+	_forge_ff_spawn_dropship_zone = 5,      /* Enemy drop point taking any drop; 8-10 one kind alone (halo_firefight_route.h) */
 	_forge_ff_spawn_player_vehicle = 6,     /* Approved Player Vehicle Pad (Round 4 Warthog / Round 5 Scorpion) */
 	NUMBER_OF_FORGE_FF_SPAWN_TYPES = 7
 };

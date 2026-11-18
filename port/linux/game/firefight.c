@@ -1867,6 +1867,8 @@ static void firefight_update(
 		ff_state.ordnance_navpoint_ticks--;
 	/* (every machine's: the pod is each one's own scenery) */
 	firefight_ordnance_pod_update();
+	/* (and the Flood's drop, Keyes' Flood form out of the floor) */
+	firefight_flood_drop_update();
 
 	if (network_game_distributed_client())
 		return;

@@ -70,12 +70,18 @@ struct firefight_net_packet
 	byte ordnance_pod_owners[FIREFIGHT_MAX_ORDNANCE_PODS];
 	byte ordnance_pod_kinds[FIREFIGHT_MAX_ORDNANCE_PODS];
 	unsigned long ordnance_pod_spent[(FIREFIGHT_MAX_ORDNANCE_PODS + 31) / 32];
+	/* (mod version 106) the Flood's drop: the game time it started at (NONE:
+	none), where and its facing, which each machine grows */
+	long flood_drop_time;
+	real_point3d flood_drop_position;
+	real flood_drop_facing;
 };
 
 /* (a host's or a replay's state from before the pods: all but them; and
 from before a weapon a pod: four at most) */
 #define FIREFIGHT_NET_PACKET_BEFORE_POD offsetof(struct firefight_net_packet, ordnance_positions)
 #define FIREFIGHT_NET_PACKET_BEFORE_104 offsetof(struct firefight_net_packet, more_ordnance_positions)
+#define FIREFIGHT_NET_PACKET_BEFORE_106 offsetof(struct firefight_net_packet, flood_drop_time)
 
 /* ---------- public code */
 
@@ -151,6 +157,9 @@ long firefight_write_network_state(
 	csmemcpy(pkt.ordnance_pod_owners, ff_state.ordnance_pod_owners, sizeof(pkt.ordnance_pod_owners));
 	csmemcpy(pkt.ordnance_pod_kinds, ff_state.ordnance_pod_kinds, sizeof(pkt.ordnance_pod_kinds));
 	csmemcpy(pkt.ordnance_pod_spent, ff_state.ordnance_pod_spent, sizeof(pkt.ordnance_pod_spent));
+	pkt.flood_drop_time = ff_state.flood_drop_time;
+	pkt.flood_drop_position = ff_state.flood_drop_position;
+	pkt.flood_drop_facing = ff_state.flood_drop_facing;
 
 	csmemcpy(buffer, &pkt, sizeof(pkt));
 	return (long)sizeof(pkt);
@@ -170,6 +179,7 @@ boolean firefight_read_network_state(
 
 	csmemset(&pkt, 0, sizeof(pkt));
 	pkt.ordnance_pod_drop_time = NONE;
+	pkt.flood_drop_time = NONE;
 	csmemcpy(&pkt, buffer, (size_t)MIN(size, (long)sizeof(pkt)));
 
 	ff_state.current_set = pkt.current_set;
@@ -245,7 +255,7 @@ boolean firefight_read_network_state(
 		ff_state.last_ordnance_is_heavy = pkt.ordnance_heavy != 0;
 		ff_state.ordnance_pods_per_player = pkt.ordnance_pods_per_player;
 		/* (a host from before: weapons all, the sets by ordnance_pods_per_player) */
-		if (size >= (long)sizeof(pkt))
+		if (size >= (long)FIREFIGHT_NET_PACKET_BEFORE_106)
 		{
 			csmemcpy(ff_state.ordnance_pod_owners, pkt.ordnance_pod_owners, sizeof(ff_state.ordnance_pod_owners));
 			csmemcpy(ff_state.ordnance_pod_kinds, pkt.ordnance_pod_kinds, sizeof(ff_state.ordnance_pod_kinds));
@@ -256,11 +266,14 @@ boolean firefight_read_network_state(
 			csmemset(ff_state.ordnance_pod_kinds, _ff_pod_kind_weapon, sizeof(ff_state.ordnance_pod_kinds));
 		}
 	}
-	if (size >= (long)sizeof(pkt))
+	if (size >= (long)FIREFIGHT_NET_PACKET_BEFORE_106)
 		csmemcpy(ff_state.ordnance_pod_spent, pkt.ordnance_pod_spent, sizeof(ff_state.ordnance_pod_spent));
 	else
 		csmemset(ff_state.ordnance_pod_spent, 0, sizeof(ff_state.ordnance_pod_spent));
 	ff_state.ordnance_pod_drop_time = pkt.ordnance_pod_drop_time;
+	ff_state.flood_drop_time = pkt.flood_drop_time;
+	ff_state.flood_drop_position = pkt.flood_drop_position;
+	ff_state.flood_drop_facing = pkt.flood_drop_facing;
 
 	return TRUE;
 }

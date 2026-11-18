@@ -2709,7 +2709,10 @@ static char const *forge_ff_spawn_type_label(int type)
 	case _forge_ff_spawn_enemy_vehicle_only: return "ENEMY VEHICLE";
 	case _forge_ff_spawn_enemy_ghost_only:   return "ENEMY GHOST";
 	case _forge_ff_spawn_enemy_heavy_veh:    return "ENEMY HEAVY VEH";
-	case _forge_ff_spawn_dropship_zone:      return "DROPSHIP ZONE";
+	case FF_DROP_SPAWN_TYPE_ANY:             return "ENEMY DROP: ANY";
+	case FF_DROP_SPAWN_TYPE_COVENANT:        return "ENEMY DROP: COVENANT";
+	case FF_DROP_SPAWN_TYPE_HUMAN:           return "ENEMY DROP: HUMAN";
+	case FF_DROP_SPAWN_TYPE_FLOOD:           return "ENEMY DROP: FLOOD";
 	case _forge_ff_spawn_player_vehicle:     return "PLAYER VEH PAD";
 	case FF_ROUTE_SPAWN_TYPE:                return "DROPSHIP ROUTE";
 	default:                                 return "AI INFANTRY";
@@ -3769,6 +3772,9 @@ void forge_3d_move_instance(
 extern boolean firefight_dropship_preview_start(real_point3d const *zone, real facing, long dropship_tag);
 extern short firefight_dropship_preview_update(real seconds);
 extern void firefight_dropship_preview_stop(void);
+extern boolean firefight_flood_drop_preview_start(real_point3d const *zone, real facing, long flood_form_tag);
+extern boolean firefight_flood_drop_preview_update(real seconds);
+extern void firefight_flood_drop_preview_stop(void);
 extern short firefight_ordnance_preview_start(real_point3d const *area, long area_object, short count);
 extern short firefight_ordnance_preview_update(void);
 extern void firefight_ordnance_preview_stop(void);
@@ -3854,10 +3860,41 @@ void forge_3d_delete_instance(int32_t live_idx, int broadcast_net)
 
 /* ---------- Dropship routes: a zone's flight path, as linked Firefight markers (halo_firefight_route.h) */
 
+/* an enemy drop point (once the dropship zone), of any kind */
 static int forge_ff_is_dropship_zone(struct forge_live_instance const *inst)
 {
 	return inst->active && inst->group_tag == 'ffsp' &&
-		FORGE_FF_UNPACK_TYPE(inst->team_designator) == _forge_ff_spawn_dropship_zone;
+		ff_drop_point_kind(FORGE_FF_UNPACK_TYPE(inst->team_designator)) >= 0;
+}
+
+/* a drop point of the Flood's alone: no ship, so no route, and its test is
+Keyes' Flood form growing */
+static int forge_ff_is_flood_drop(struct forge_live_instance const *inst)
+{
+	return forge_ff_is_dropship_zone(inst) &&
+		ff_drop_point_kind(FORGE_FF_UNPACK_TYPE(inst->team_designator)) == FF_DROP_KIND_FLOOD;
+}
+
+/* the SPAWN TYPE row's next type: the drop points' kinds one after another
+where the dropship zone was, the route's points' type left out */
+static int forge_ff_spawn_type_step(int type, int dir)
+{
+	static int const cycle[] = {
+		_forge_ff_spawn_ai_infantry_only, _forge_ff_spawn_ai_and_vehicles, _forge_ff_spawn_enemy_vehicle_only,
+		_forge_ff_spawn_enemy_ghost_only, _forge_ff_spawn_enemy_heavy_veh,
+		FF_DROP_SPAWN_TYPE_ANY, FF_DROP_SPAWN_TYPE_COVENANT, FF_DROP_SPAWN_TYPE_HUMAN, FF_DROP_SPAWN_TYPE_FLOOD,
+		_forge_ff_spawn_player_vehicle,
+	};
+	int count = (int)(sizeof(cycle) / sizeof(cycle[0]));
+	int at = 0;
+	int k;
+
+	for (k = 0; k < count; k++)
+	{
+		if (cycle[k] == type)
+			at = k;
+	}
+	return cycle[(at + count + dir) % count];
 }
 
 static int forge_ff_is_route_point(struct forge_live_instance const *inst)
@@ -4220,7 +4257,7 @@ static void forge_ff_route_insert_point(int32_t point_idx, int after)
 
 	if (zone_idx < 0)
 	{
-		forge_set_status("This Route Has No Dropship Zone");
+		forge_set_status("This Route Has No Enemy Drop Point");
 		return;
 	}
 	while (rank < count && points[rank] != point_idx)
@@ -4260,8 +4297,11 @@ static int s_route_test_flying = 0;
 
 static void forge_ff_route_test_flight(int32_t zone_idx)
 {
-	static char const *const ship_tags[] = { "vehicles\\c_dropship\\c_dropship", "vehicles\\pelican\\pelican" };
+	static char const *const spirit_tags[] = { "vehicles\\c_dropship\\c_dropship", "vehicles\\pelican\\pelican" };
+	static char const *const pelican_tags[] = { "vehicles\\pelican\\pelican", "vehicles\\c_dropship\\c_dropship" };
 	struct forge_live_instance const *zone = &g_forge.live_instances[zone_idx];
+	int kind = ff_drop_point_kind(FORGE_FF_UNPACK_TYPE(zone->team_designator));
+	char const *const *ship_tags = kind == FF_DROP_KIND_HUMAN ? pelican_tags : spirit_tags;
 	real_point3d where;
 	long ship_tag = NONE;
 	int k;
@@ -4269,8 +4309,32 @@ static void forge_ff_route_test_flight(int32_t zone_idx)
 	if (s_route_test_flying)
 	{
 		firefight_dropship_preview_stop();
+		firefight_flood_drop_preview_stop();
 		s_route_test_flying = 0;
-		forge_set_status("Test Flight Stopped");
+		forge_set_status(kind == FF_DROP_KIND_FLOOD ? "Test Drop Stopped" : "Test Flight Stopped");
+		return;
+	}
+	if (kind == FF_DROP_KIND_FLOOD)
+	{
+		uint32_t actual_group = 'scen';
+		long form_tag = forge_resolve_engine_tag('scen', FF_FLOOD_DROP_TAG, &actual_group);
+
+		where.x = zone->x;
+		where.y = zone->y;
+		where.z = zone->z;
+		if (form_tag == NONE)
+		{
+			forge_set_status("Keyes' Flood Form Is Not Loaded in This Map");
+		}
+		else if (firefight_flood_drop_preview_start(&where, zone->yaw, form_tag))
+		{
+			s_route_test_flying = 2;
+			g_forge.active_modal = _forge_modal_none;
+		}
+		else
+		{
+			forge_set_status("The Flood Form Could Not Be Made");
+		}
 		return;
 	}
 	if (game_connection() == _game_connection_network_client)
@@ -4278,7 +4342,7 @@ static void forge_ff_route_test_flight(int32_t zone_idx)
 		forge_set_status("Only the Host Can Fly a Test Flight");
 		return;
 	}
-	for (k = 0; k < (int)(sizeof(ship_tags) / sizeof(ship_tags[0])) && ship_tag == NONE; k++)
+	for (k = 0; k < 2 && ship_tag == NONE; k++)
 	{
 		uint32_t actual_group = 'vehi';
 
@@ -4359,7 +4423,20 @@ static void forge_drop_area_test_drop_update(void)
 
 static void forge_ff_route_test_flight_update(float dt)
 {
-	if (s_route_test_flying)
+	if (s_route_test_flying == 2)
+	{
+		/* (a Flood drop point's: Keyes' form, this machine's alone) */
+		if (!firefight_flood_drop_preview_update(dt))
+		{
+			s_route_test_flying = 0;
+			forge_set_status("Test Drop Finished");
+		}
+		else
+		{
+			forge_set_status("Test Drop: The Flood Is Emerging");
+		}
+	}
+	else if (s_route_test_flying)
 	{
 		static char const *const phases[] = { "", "Approach", "Hover", "Departure" };
 		short phase = firefight_dropship_preview_update(dt);
@@ -6212,7 +6289,10 @@ void forge_3d_reset_session_tracking(void)
 	s_route_props_live_idx = -1;
 	g_forge.route_follow_live_index = -1;
 	if (s_route_test_flying)
+	{
 		firefight_dropship_preview_stop();
+		firefight_flood_drop_preview_stop();
+	}
 	s_route_test_flying = 0;
 	/* (a level's test drop's pods went with it) */
 	if (s_test_dropping)
@@ -7474,7 +7554,7 @@ void forge_3d_update(float dt)
 		/* (a placed vehicle's ALWAYS SPAWN, after DELETE OBJECT) */
 		int always_row = forge_props_always_spawn_row(inst, snap_row, test_drop_row);
 		int max_props_row = is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS - 1 : is_tele ? (snap_row ? 6 : 5) :
-			(is_zone ? (FF_ROUTE_ID(inst->team_designator) != 0 ? 9 : 7) :
+			(is_zone ? (forge_ff_is_flood_drop(inst) ? 6 : FF_ROUTE_ID(inst->team_designator) != 0 ? 9 : 7) :
 				(is_route_point ? 6 : (always_row >= 0 ? always_row :
 					(test_drop_row >= 0 ? test_drop_row : ((is_ff_spawn || snap_row) ? 5 : 4)))));
 		/* (DONE and UNDO, side by side under the rows) */
@@ -7611,7 +7691,7 @@ void forge_3d_update(float dt)
 				}
 				else if (g_forge.props_cursor == 0)
 				{
-					cur_type = (cur_type + NUMBER_OF_FORGE_FF_SPAWN_TYPES + dir) % NUMBER_OF_FORGE_FF_SPAWN_TYPES;
+					cur_type = forge_ff_spawn_type_step(cur_type, dir);
 					forge_ff_marker_set_usage(g_forge.grabbed_live_index,
 						FF_ROUTE_WITH_ID(FORGE_FF_PACK_USAGE(cur_type, cur_rnd, cur_wav), cur_route));
 				}
@@ -9139,7 +9219,7 @@ static void draw_teleporter_and_objective_markers(
 		{
 			int ff_type = FORGE_FF_UNPACK_TYPE(inst->team_designator);
 			uint32_t ring_col = (ff_type == _forge_ff_spawn_player_vehicle) ? 0xFF24FF54u :
-				(ff_type == _forge_ff_spawn_dropship_zone || ff_type == FF_ROUTE_SPAWN_TYPE ? 0xFFFFC824u :
+				(ff_drop_point_kind(ff_type) >= 0 || ff_type == FF_ROUTE_SPAWN_TYPE ? 0xFFFFC824u :
 				(ff_type >= _forge_ff_spawn_ai_and_vehicles ? 0xFFFF8C14u : 0xFFFF6868u));
 			char ff_lbl[64];
 
@@ -9656,7 +9736,7 @@ void forge_3d_draw_hud(
 			int test_drop_row = forge_is_drop_area(inst) ? (snap_row ? 6 : 5) : -1;
 			int always_row = forge_props_always_spawn_row(inst, snap_row, test_drop_row);
 			int row_count = is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS : is_tele ? (snap_row ? 7 : 6) :
-				(is_zone ? (FF_ROUTE_ID(inst->team_designator) != 0 ? 10 : 8) :
+				(is_zone ? (forge_ff_is_flood_drop(inst) ? 7 : FF_ROUTE_ID(inst->team_designator) != 0 ? 10 : 8) :
 					(is_route_point ? 7 : (always_row >= 0 ? always_row + 1 :
 						(test_drop_row >= 0 ? test_drop_row + 1 : ((is_ff_spawn || snap_row) ? 6 : 5)))));
 			short box_w = (short)(is_ai_spawn ? 372 : 312);
@@ -9766,7 +9846,12 @@ void forge_3d_draw_hud(
 				values[4][0] = 0;
 				snprintf(labels[5], sizeof(labels[5]), "DELETE OBJECT");
 				values[5][0] = 0;
-				if (is_zone)
+				if (is_zone && forge_ff_is_flood_drop(inst))
+				{
+					snprintf(labels[6], sizeof(labels[6]), "%s", s_route_test_flying ? "STOP TEST DROP" : "TEST DROP");
+					values[6][0] = 0;
+				}
+				else if (is_zone)
 				{
 					int route_id = FF_ROUTE_ID(inst->team_designator);
 

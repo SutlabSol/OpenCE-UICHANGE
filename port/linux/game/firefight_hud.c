@@ -1277,8 +1277,22 @@ static void format_banner_strings(
 		snprintf(sub_out, sub_size, "ROCKETS, SNIPER & OVERSHIELD DEPLOYED");
 		break;
 	case _ff_banner_dropship_inbound:
-		snprintf(title_out, title_size, "DROPSHIP INBOUND");
-		snprintf(sub_out, sub_size, "PHANTOM / PELICAN INSERTION DETECTED");
+		/* (its data what brings it: enum firefight_drop_carrier) */
+		if (banner_data == _ff_drop_carrier_flood)
+		{
+			snprintf(title_out, title_size, "THE FLOOD IS EMERGING");
+			snprintf(sub_out, sub_size, "A FLOOD FORM IS GROWING OUT OF THE GROUND");
+		}
+		else if (banner_data == _ff_drop_carrier_pelican)
+		{
+			snprintf(title_out, title_size, "PELICAN INBOUND");
+			snprintf(sub_out, sub_size, "UNSC INSERTION DETECTED");
+		}
+		else
+		{
+			snprintf(title_out, title_size, "DROPSHIP INBOUND");
+			snprintf(sub_out, sub_size, "COVENANT SPIRIT INSERTION DETECTED");
+		}
 		break;
 	case _ff_banner_vehicle_deployed:
 		snprintf(title_out, title_size, "VEHICLE DEPLOYED");
@@ -1467,8 +1481,17 @@ void firefight_hud_draw(void)
 			font_index, line_height, scale,
 			ff_state.active_dropship.vehicle_index,
 			hostile_nav_arrow_index(),
-			"DROPSHIP",
+			/* (a client is told of the ship alone: its tag says which) */
+			strstr(tag_get_name(object_get(ff_state.active_dropship.vehicle_index)->definition_index), "pelican") ?
+				"PELICAN" : "DROPSHIP",
 			&red);
+	}
+	/* (the Flood's drop, Keyes' form growing: each machine's own scenery) */
+	{
+		long flood_form = firefight_flood_drop_object();
+
+		if (flood_form != NONE && object_try_and_get_and_verify_type(flood_form, _object_mask_scenery))
+			draw_hostile_navpoint(font_index, line_height, scale, flood_form, hostile_nav_arrow_index(), "FLOOD", &red);
 	}
 
 	if (ff_state.ordnance_navpoint_ticks > 0)

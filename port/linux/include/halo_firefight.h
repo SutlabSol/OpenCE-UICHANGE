@@ -487,6 +487,18 @@ struct firefight_dropship_flight
 	boolean is_boss_wave;
 	boolean is_pelican;
 	boolean payload_deployed;
+	/* what brings it (enum firefight_drop_carrier): the Flood's is no ship,
+	so vehicle_index stays NONE and firefight_globals' flood_drop shows it */
+	byte carrier;
+	byte pad_carrier[3];
+};
+
+enum firefight_drop_carrier
+{
+	_ff_drop_carrier_spirit = 0,
+	_ff_drop_carrier_pelican,
+	_ff_drop_carrier_flood,
+	NUMBER_OF_FIREFIGHT_DROP_CARRIERS
 };
 
 typedef struct firefight_dropship_flight firefight_dropship_state;
@@ -583,6 +595,14 @@ struct firefight_globals
 	each), and the game's tick its first comes at (5 to 10 seconds in) */
 	short ordnance_drops_made;
 	long first_ordnance_tick;
+
+	/* port (mod version 106): the Flood's drop, Keyes' Flood form grown out
+	of the floor (firefight_flood_drop_update, every machine's, as the pods):
+	the game time it started at (NONE or 0: none), where, its facing; in the
+	state the host sends */
+	long flood_drop_time;
+	real_point3d flood_drop_position;
+	real flood_drop_facing;
 
 	/* HUD banner state */
 	short banner_type;
@@ -934,6 +954,16 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor);
 weapons come out of it as it lands); and the last one forgotten */
 void firefight_ordnance_pod_update(void);
 void firefight_ordnance_pod_reset(void);
+/* (port) the Flood's drop growing out of the floor and bursting, on every
+machine from flood_drop_time (the host's squad comes out as it bursts) */
+void firefight_flood_drop_update(void);
+/* (the HUD's) the Flood form growing on this machine, NONE for none */
+long firefight_flood_drop_object(void);
+/* Forge's TEST DROP of a Flood drop point: the form grown and burst on this
+machine, no squad */
+boolean firefight_flood_drop_preview_start(real_point3d const *zone, real facing, long flood_form_tag);
+boolean firefight_flood_drop_preview_update(real seconds);
+void firefight_flood_drop_preview_stop(void);
 /* (port) how long after the drop's time a pod is let go (its group's), and
 the last pod's: the same on every machine, from the pod's place and how many */
 long firefight_ordnance_pod_release_delay(short pod, short pod_count);
