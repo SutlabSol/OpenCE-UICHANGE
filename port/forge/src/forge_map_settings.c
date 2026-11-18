@@ -575,17 +575,21 @@ void forge_map_settings_players_from_options(char const *(*option)(void *context
 	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
 	{
 		char biped_key[32], hands_key[32], movement_key[32];
-		char const *biped;
-		char const *hands;
-		char const *movement;
+		char biped[FORGE_MAP_SETTINGS_PATH_MAX];
+		char hands[FORGE_MAP_SETTINGS_PATH_MAX];
+		char const *read;
 
 		snprintf(biped_key, sizeof(biped_key), campaign ? "player_biped" : "biped_%s", slot_names[slot]);
 		snprintf(hands_key, sizeof(hands_key), campaign ? "player_hands" : "hands_%s", slot_names[slot]);
 		snprintf(movement_key, sizeof(movement_key), campaign ? "player_movement" : "movement_%s", slot_names[slot]);
-		biped = option(context, biped_key);
-		hands = option(context, hands_key);
-		movement = option(context, movement_key);
-		forge_map_settings_players_set(slot, biped, hands, movement && !strcmp(movement, "spartan"));
+		/* (each copied as read: a share file's option gives every key in
+		the same buffer) */
+		read = option(context, biped_key);
+		snprintf(biped, sizeof(biped), "%s", read ? read : "");
+		read = option(context, hands_key);
+		snprintf(hands, sizeof(hands), "%s", read ? read : "");
+		read = option(context, movement_key);
+		forge_map_settings_players_set(slot, biped, hands, read && !strcmp(read, "spartan"));
 	}
 }
 
