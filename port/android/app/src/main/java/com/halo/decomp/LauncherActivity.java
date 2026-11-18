@@ -81,6 +81,7 @@ public class LauncherActivity extends Activity {
         if (dataRoot != null) {
             new File(dataRoot, "maps").mkdirs();
             new File(dataRoot, "custom_maps").mkdirs();
+            recoverLooseMaps();
         }
         if (offerMove())
             return;
@@ -155,7 +156,98 @@ public class LauncherActivity extends Activity {
     }
 
     private boolean haveData() {
-        return dataRoot != null && new File(dataRoot, "maps/ui.map").isFile();
+        return dataRoot != null && new File(mapsFolder(), "ui.map").isFile();
+    }
+
+    /**
+     * The folder the game reads its maps from (port/android/host/host_main.c): config.toml's game.maps.path (an
+     * absolute path, or one under the data folder), else the data folder's maps. The disc image is extracted into it.
+     */
+    private File mapsFolder() {
+        File config = new File(dataRoot, "config.toml");
+        String value = config.isFile() ? Updater.readSetting(config, "game", "maps.path") : null;
+        String path = value != null ? unquote(value) : "";
+
+        if (path.isEmpty())
+            return new File(dataRoot, "maps");
+        return path.startsWith("/") ? new File(path) : new File(dataRoot, path);
+    }
+
+    /** a TOML string's text ("..." or '...'), empty for anything else */
+    private static String unquote(String value) {
+        if (value.startsWith("'")) {
+            int end = value.indexOf('\'', 1);
+            return end > 0 ? value.substring(1, end) : "";
+        }
+        if (!value.startsWith("\""))
+            return "";
+        StringBuilder text = new StringBuilder();
+        for (int index = 1; index < value.length(); index++) {
+            char c = value.charAt(index);
+            if (c == '"')
+                break;
+            if (c == '\\' && index + 1 < value.length())
+                c = value.charAt(++index);
+            text.append(c);
+        }
+        return text.toString();
+    }
+
+    /**
+     * Builds from 2026-11-15 on extracted the disc image's maps into the data folder itself (files/ui.map, ...)
+     * instead of its maps folder, and then said maps/ui.map was missing: those files are moved where they belong,
+     * so the players they failed for need not extract again, and the folder that copy went through beside the data
+     * folder (files.partial) is removed.
+     */
+    private void recoverLooseMaps() {
+        File maps = mapsFolder();
+        File[] loose = dataRoot.listFiles();
+
+        if (new File(maps, "ui.map").isFile() || !new File(dataRoot, "ui.map").isFile() || loose == null)
+            return;
+        if (!maps.isDirectory() && !maps.mkdirs())
+            return;
+        File userInterface = null;
+        for (File file : loose) {
+            String name = file.getName().toLowerCase(Locale.ROOT);
+
+            if (!file.isFile() || !(isStockMap(name) || name.equals("loading.tga")))
+                continue;
+            if (name.equals("ui.map")) {
+                userInterface = file;
+                continue;
+            }
+            File target = new File(maps, file.getName());
+            target.delete();
+            file.renameTo(target);
+        }
+        // (ui.map last: it is the sign that the maps are there)
+        if (userInterface != null) {
+            File target = new File(maps, userInterface.getName());
+            target.delete();
+            userInterface.renameTo(target);
+        }
+        File partial = new File(dataRoot.getParentFile(), dataRoot.getName() + ".partial");
+        File[] leftovers = partial.listFiles();
+        if (leftovers != null) {
+            for (File leftover : leftovers)
+                leftover.delete();
+        }
+        partial.delete();
+    }
+
+    /** the maps of every Xbox disc's maps folder (lower case, with .map) */
+    static boolean isStockMap(String name) {
+        switch (name) {
+            case "a10.map": case "a30.map": case "a50.map": case "b30.map": case "b40.map": case "c10.map":
+            case "c20.map": case "c40.map": case "d20.map": case "d40.map": case "beavercreek.map":
+            case "bloodgulch.map": case "boardingaction.map": case "carousel.map": case "chillout.map":
+            case "damnation.map": case "hangemhigh.map": case "longest.map": case "prisoner.map": case "putput.map":
+            case "ratrace.map": case "sidewinder.map": case "wizard.map": case "ui.map":
+                return true;
+            default:
+                return false;
+        }
     }
 
     private boolean gameStarted;
@@ -506,7 +598,7 @@ public class LauncherActivity extends Activity {
         status.setText("Looking at the old app's files...");
         new Thread(() -> {
             try {
-                Migration.Listing listing = Migration.list(this);
+                Migration.Listing listing = Migration.list(this, dataRoot);
                 long free = dataRoot.getUsableSpace();
 
                 if (free < Migration.needed(listing, withGameData)) {
@@ -632,7 +724,7 @@ public class LauncherActivity extends Activity {
             try (FileInputStream in = new FileInputStream(descriptor.getFileDescriptor())) {
                 FileChannel channel = in.getChannel();
 
-                XisoExtractor.extractMaps(channel, dataRoot, (file, done, total) ->
+                XisoExtractor.extractMaps(channel, mapsFolder(), (file, done, total) ->
                     report("Extracting maps/" + file + " (" + (done >> 20) + " of " + (total >> 20) + " MB)",
                         total > 0 ? (int) (done * 1000 / total) : 0));
             }
@@ -640,7 +732,7 @@ public class LauncherActivity extends Activity {
                 if (haveData()) {
                     startGameAfterDriver();
                 } else {
-                    fail("The extraction finished but maps/ui.map is missing.");
+                    fail("The extraction finished but " + new File(mapsFolder(), "ui.map").getPath() + " is missing.");
                 }
             });
         } catch (XisoExtractor.ExtractException exception) {

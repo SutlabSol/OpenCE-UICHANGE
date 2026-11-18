@@ -59,8 +59,21 @@ final class Migration {
     }
 
     static State state(Context context, File dataRoot) {
-        if (dataRoot == null || new File(dataRoot, MARK).exists())
+        if (dataRoot == null)
             return State.NONE;
+        File mark = new File(dataRoot, MARK);
+        /* (skipped while the old app was older than the bridge: offered again once it is the bridge, or a player who
+        could not update it then would never get the files) */
+        boolean skipped = false;
+        if (mark.exists()) {
+            try {
+                skipped = new String(Files.readAllBytes(mark.toPath()), StandardCharsets.UTF_8).contains("skipped");
+            } catch (IOException e) {
+                return State.NONE;
+            }
+            if (!skipped)
+                return State.NONE;
+        }
         PackageManager manager = context.getPackageManager();
         try {
             manager.getPackageInfo(LEGACY_PACKAGE, 0);
@@ -69,7 +82,9 @@ final class Migration {
         }
         if (manager.checkSignatures(context.getPackageName(), LEGACY_PACKAGE) != PackageManager.SIGNATURE_MATCH)
             return State.NONE;
-        return manager.resolveContentProvider(AUTHORITY, 0) != null ? State.READY : State.OLD_VERSION;
+        if (manager.resolveContentProvider(AUTHORITY, 0) != null)
+            return State.READY;
+        return skipped ? State.NONE : State.OLD_VERSION;
     }
 
     /** whether this app has data of its own already (its game data or its settings) */
@@ -89,32 +104,49 @@ final class Migration {
     /* ---------- what the old app has */
 
     static final class Entry {
+        /** where it is in the old app */
         final String path;
+        /** where it goes in this one: path, but for a stock map the old app has loose in its data folder */
+        String to;
         final long size, modified;
 
         Entry(String path, long size, long modified) {
             this.path = path;
+            this.to = path;
             this.size = size;
             this.modified = modified;
         }
 
         /** the game data (maps/), which can be extracted again from the disc image */
         boolean isGameData() {
-            return path.startsWith("files/maps/");
+            return to.startsWith("files/maps/");
         }
     }
 
     static final class Listing {
+        /** what is to be copied: what this app has already, the same size and age, is not */
         final List<Entry> entries = new ArrayList<>();
         long bytes, gameDataBytes;
     }
 
-    /** files the old app has that are this phone's or this run's, not the player's: never copied */
-    private static boolean isLeftBehind(String path) {
-        String name = path.substring(path.lastIndexOf('/') + 1);
+    /** a folder whose files are rebuilt by the game when they are missing (the Tag Injector's unpacked props and saved Forge maps' tags) */
+    private static final String[] REBUILT_FOLDERS = {
+        "files/tag_injector/.baked/", "files/tag_injector/.props/", "files/halo_profiles/" };
 
-        if (name.endsWith(".partial"))
-            return true;
+    /**
+     * files the old app has that are this phone's or this run's, not the player's, or that the game rebuilds by
+     * itself: never copied
+     */
+    private static boolean isLeftBehind(String path) {
+        // (a copy cut short: a file, or every file of a folder, whose name ends so)
+        for (String segment : path.split("/")) {
+            if (segment.endsWith(".partial") || segment.endsWith(".moving") || segment.endsWith(".tmp"))
+                return true;
+        }
+        for (String folder : REBUILT_FOLDERS) {
+            if (path.startsWith(folder))
+                return true;
+        }
         switch (path) {
             case "files/" + MARK:
             case "files/hardware_id.txt":
@@ -122,15 +154,31 @@ final class Migration {
             case "files/join_link.txt":
             case "files/join_link.txt.tmp":
             case "files/profile_folder.txt":
+            // (the logs and diagnostics of the old app's runs)
+            case "files/debug.txt":
+            case "files/halo.log":
+            case "files/memory_map.txt":
+            case "files/profile.bin":
+            case "files/vk_probe.txt":
                 return true;
             default:
                 return false;
         }
     }
 
-    static Listing list(Context context) throws IOException {
+    /**
+     * What the old app has to copy here (dataRoot, this app's data folder): its files but those left behind, and
+     * those this app has already (the same size and modified time: a move cut short goes on where it stopped).
+     *
+     * Builds from 2026-11-15 on extracted the disc image's maps into the data folder itself instead of its maps
+     * folder: such a loose stock map goes into maps, unless the old app has one there already (then it is a copy,
+     * and is left behind).
+     */
+    static Listing list(Context context, File dataRoot) throws IOException {
         Uri uri = new Uri.Builder().scheme("content").authority(AUTHORITY).appendPath("list").build();
         Listing listing = new Listing();
+        List<Entry> found = new ArrayList<>();
+        java.util.Set<String> maps = new java.util.HashSet<>();
 
         try (Cursor cursor = context.getContentResolver().query(uri, null, null, null, null)) {
             if (cursor == null)
@@ -144,14 +192,32 @@ final class Migration {
 
                 if (entry.path == null || isLeftBehind(entry.path))
                     continue;
-                listing.entries.add(entry);
-                listing.bytes += entry.size;
-                if (entry.isGameData())
-                    listing.gameDataBytes += entry.size;
+                found.add(entry);
+                if (entry.path.startsWith("files/maps/"))
+                    maps.add(entry.path.toLowerCase(java.util.Locale.ROOT));
             }
         } catch (RuntimeException e) {
             // (a SecurityException from the old app, or one that went away)
             throw new IOException("the old app refused: " + e.getMessage(), e);
+        }
+        for (Entry entry : found) {
+            String name = entry.path.substring("files/".length()).toLowerCase(java.util.Locale.ROOT);
+
+            if (entry.path.indexOf('/', "files/".length()) < 0
+                && (LauncherActivity.isStockMap(name) || name.equals("loading.tga"))) {
+                String to = "files/maps/" + entry.path.substring("files/".length());
+                if (maps.contains(to.toLowerCase(java.util.Locale.ROOT)))
+                    continue;
+                entry.to = to;
+            }
+            File file = target(context, dataRoot, entry.to);
+            if (file != null && file.isFile() && file.length() == entry.size
+                && Math.abs(file.lastModified() - entry.modified) < 2000)
+                continue;
+            listing.entries.add(entry);
+            listing.bytes += entry.size;
+            if (entry.isGameData())
+                listing.gameDataBytes += entry.size;
         }
         return listing;
     }
@@ -196,7 +262,7 @@ final class Migration {
         for (Entry entry : listing.entries) {
             if (!withGameData && entry.isGameData())
                 continue;
-            File file = target(context, dataRoot, entry.path);
+            File file = target(context, dataRoot, entry.to);
 
             if (file == null)
                 continue;
