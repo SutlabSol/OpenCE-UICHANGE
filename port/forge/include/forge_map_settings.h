@@ -57,14 +57,24 @@ enum forge_map_sky_visibility
 	NUMBER_OF_FORGE_SKY_VISIBILITIES
 };
 
-/* how a slot's biped moves: as its tag has it, or as the map's own player
-biped (a Spartan) does: its player physics (strafing, the player's speeds),
-jump, slopes, turning and landings, copied onto the biped's tag in memory */
+/* how a slot's biped moves: as the map's own player biped (a Spartan)
+does, the default: its player physics (strafing, the player's speeds),
+jump, slopes, turning and landings, copied onto the biped's tag in memory;
+or as its tag has it. (Saved maps of before wrote 1 for a Spartan's, and
+nothing for the biped's own, which reads as the default now) */
 enum forge_map_movement
 {
-	_forge_movement_own = 0,
+	_forge_movement_default = 0,
 	_forge_movement_spartan,
+	_forge_movement_own,
 	NUMBER_OF_FORGE_MOVEMENTS
+};
+
+/* a slot's CONFIG: its own biped, hands and movement (CUSTOM), or another
+slot's (1 + that slot: red, blue, free for all) */
+enum
+{
+	_forge_link_custom = 0
 };
 
 /* what can be chosen for a tag setting: skies, bipeds or hands */
@@ -86,6 +96,8 @@ struct forge_map_settings
 	char biped[NUMBER_OF_FORGE_MAP_SLOTS][FORGE_MAP_SETTINGS_PATH_MAX];
 	char hands[NUMBER_OF_FORGE_MAP_SLOTS][FORGE_MAP_SETTINGS_PATH_MAX];
 	int movement[NUMBER_OF_FORGE_MAP_SLOTS];
+	/* (each _forge_link_custom, or 1 + the slot it plays) */
+	int link[NUMBER_OF_FORGE_MAP_SLOTS];
 	int atmosphere;
 	float fog_color[3];
 	float fog_density; /* 0 to 1 */
@@ -113,11 +125,13 @@ level's profile plays, under any a Forge map has of its own: a campaign
 profile's player (each slot), a multiplayer profile's teams (tag_campaign.c,
 tag_multiplayer.c, after the level's tags load); forgotten as the next level
 loads */
-void forge_map_settings_players_set(int slot, char const *biped, char const *hands, int movement);
+void forge_map_settings_players_set(int slot, int link, char const *biped, char const *hands, int movement);
 /* a profile's player settings, from its options (`option` gives the value
 of a key: tag_campaign.c, tag_multiplayer.c): a campaign profile's
 player_biped, player_hands and player_movement for each slot, or a
-multiplayer profile's biped_red ... movement_ffa */
+multiplayer profile's biped_red ... movement_ffa and link_red ... link_ffa
+(another team's name: "red", "blue", "ffa"; "" its own). A movement is
+"own" for the biped's own, anything else a Spartan's */
 void forge_map_settings_players_from_options(char const *(*option)(void *context, char const *key), void *context,
 	int campaign);
 
@@ -136,6 +150,10 @@ void forge_map_settings_set_display_name(char const *name);
 void forge_map_settings_set_tag(int kind, int slot, long tag_index);
 void forge_map_settings_set_atmosphere(int atmosphere);
 void forge_map_settings_set_movement(int slot, int movement);
+/* a slot's CONFIG (_forge_link_custom, or 1 + another slot) */
+void forge_map_settings_set_link(int slot, int link);
+/* the slot whose settings a slot plays, by the Forge map's links */
+int forge_map_settings_link_slot(int slot);
 void forge_map_settings_set_fog(float const color[3], float density, float start, float opaque, int indoors,
 	int sky_visibility);
 void forge_map_settings_reset(void);

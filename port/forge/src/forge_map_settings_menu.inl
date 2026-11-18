@@ -8,8 +8,9 @@ held opens it (forge_3d_update). Its pages:
 - MAP SETTINGS: DISPLAY NAME, SKYBOX, FOG SETTINGS, PLAYER BIPEDS;
 - FOG SETTINGS: the atmosphere and its fog's values;
 - PLAYER BIPEDS: RED TEAM, BLUE TEAM, FREE FOR ALL, each a page of its own
-  (its BIPED, its HANDS, which follow the biped chosen, its MOVEMENT, the
-  biped's own or a Spartan's, and TEST SPAWN);
+  (its CONFIG: CUSTOM, or another team's settings played; with CUSTOM its
+  BIPED, its HANDS, which follow the biped chosen, its MOVEMENT, a Spartan's
+  or the biped's own; and TEST SPAWN);
 - a list of the tags a setting can be (a sky, a biped, hands);
 - the display name, typed on an on-screen keyboard (or the keyboard's own
   keys).
@@ -58,6 +59,7 @@ enum
 	_map_settings_row_team_blue,
 	_map_settings_row_team_ffa,
 
+	_map_settings_row_team_config,
 	_map_settings_row_team_biped,
 	_map_settings_row_team_hands,
 	_map_settings_row_team_movement,
@@ -124,8 +126,14 @@ static int map_settings_page_rows(int page, int *rows)
 			rows[count++] = row;
 		break;
 	case _map_settings_page_team:
-		for (row = _map_settings_row_team_biped; row <= _map_settings_row_test_spawn; row++)
-			rows[count++] = row;
+		/* (a team playing another's: its CONFIG alone, and the test) */
+		rows[count++] = _map_settings_row_team_config;
+		if (!forge_map_settings_get()->link[s_map_settings_menu.team_slot])
+		{
+			for (row = _map_settings_row_team_biped; row <= _map_settings_row_team_movement; row++)
+				rows[count++] = row;
+		}
+		rows[count++] = _map_settings_row_test_spawn;
 		break;
 	}
 	return count;
@@ -180,7 +188,9 @@ static int map_settings_row_tag(int row, int *kind, int *slot)
 		*slot = 0;
 		return 1;
 	}
-	if (row >= _map_settings_row_team_red && row <= _map_settings_row_team_ffa)
+	/* (a team playing another's has no biped of its own to step) */
+	if (row >= _map_settings_row_team_red && row <= _map_settings_row_team_ffa &&
+		!forge_map_settings_get()->link[row - _map_settings_row_team_red])
 	{
 		*kind = _forge_map_kind_biped;
 		*slot = row - _map_settings_row_team_red;
@@ -229,6 +239,34 @@ static int map_settings_refuse(void)
 static char const *map_settings_slot_name(int slot)
 {
 	return slot == _forge_map_slot_red ? "RED TEAM" : slot == _forge_map_slot_blue ? "BLUE TEAM" : "FREE FOR ALL";
+}
+
+/* a team's CONFIG choices, as the menu steps them: the other two teams',
+then CUSTOM (its own) */
+static int map_settings_link_step(int slot, int link, int dir)
+{
+	int choices[NUMBER_OF_FORGE_MAP_SLOTS];
+	int count = 0;
+	int other;
+	int place;
+
+	for (other = 0; other < NUMBER_OF_FORGE_MAP_SLOTS; other++)
+	{
+		if (other != slot)
+			choices[count++] = other + 1;
+	}
+	choices[count++] = _forge_link_custom;
+	for (place = 0; place < count && choices[place] != link; place++)
+	{
+	}
+	if (place == count)
+		place = count - 1;
+	return choices[(place + count + dir) % count];
+}
+
+static char const *map_settings_link_name(int link)
+{
+	return link > _forge_link_custom && link <= NUMBER_OF_FORGE_MAP_SLOTS ? map_settings_slot_name(link - 1) : "CUSTOM";
 }
 
 /* a tag chosen: what the status bar says (a biped's hands chosen with it) */
@@ -478,14 +516,25 @@ static void map_settings_row_act(int row, int dir, int enter)
 			map_settings_tag_set(kind, slot, s_map_settings_menu.pick_tags[place]);
 		}
 	}
+	else if (row == _map_settings_row_team_config)
+	{
+		int slot_now = s_map_settings_menu.team_slot;
+		int link = map_settings_link_step(slot_now, forge_map_settings_get()->link[slot_now], dir ? dir : 1);
+
+		forge_map_settings_set_link(slot_now, link);
+		if (link == _forge_link_custom)
+			forge_set_status("%s: its own biped, hands and movement", map_settings_slot_name(slot_now));
+		else
+			forge_set_status("%s plays %s's settings", map_settings_slot_name(slot_now), map_settings_link_name(link));
+	}
 	else if (row == _map_settings_row_team_movement)
 	{
-		int movement = forge_map_settings_get()->movement[s_map_settings_menu.team_slot];
+		/* (SPARTAN, the default, or the biped's own) */
+		int own = forge_map_settings_get()->movement[s_map_settings_menu.team_slot] != _forge_movement_own;
 
-		movement = (movement + NUMBER_OF_FORGE_MOVEMENTS + dir) % NUMBER_OF_FORGE_MOVEMENTS;
-		forge_map_settings_set_movement(s_map_settings_menu.team_slot, movement);
+		forge_map_settings_set_movement(s_map_settings_menu.team_slot, own ? _forge_movement_own : _forge_movement_spartan);
 		forge_set_status("%s movement: %s", map_settings_slot_name(s_map_settings_menu.team_slot),
-			movement == _forge_movement_spartan ? "Spartan" : "the biped's own");
+			own ? "the biped's own" : "Spartan");
 	}
 	else if (row == _map_settings_row_atmosphere)
 	{
@@ -531,6 +580,7 @@ static int forge_map_settings_menu_row_has_value(int index)
 	int kind, slot;
 
 	return row != NONE && (map_settings_row_tag(row, &kind, &slot) || row == _map_settings_row_team_movement ||
+		row == _map_settings_row_team_config ||
 		(row >= _map_settings_row_atmosphere && row <= _map_settings_row_fog_sky));
 }
 
@@ -736,10 +786,21 @@ static void map_settings_row_text(int row, char *label, size_t label_size, char 
 		snprintf(value, value_size, "%s", now->sky_visibility == _forge_sky_shown ? "SHOWN" :
 			now->sky_visibility == _forge_sky_hidden ? "HIDDEN" : "AUTO");
 		break;
+	case _map_settings_row_team_config:
+		snprintf(label, label_size, "CONFIG:");
+		snprintf(value, value_size, "%s", map_settings_link_name(now->link[s_map_settings_menu.team_slot]));
+		break;
+	case _map_settings_row_team_red:
+	case _map_settings_row_team_blue:
+	case _map_settings_row_team_ffa:
+		/* (a team playing another's: map_settings_row_tag says no tag) */
+		snprintf(label, label_size, "%s:", map_settings_slot_name(row - _map_settings_row_team_red));
+		snprintf(value, value_size, "AS %s", map_settings_link_name(now->link[row - _map_settings_row_team_red]));
+		break;
 	case _map_settings_row_team_movement:
 		snprintf(label, label_size, "MOVEMENT:");
-		snprintf(value, value_size, "%s", now->movement[s_map_settings_menu.team_slot] == _forge_movement_spartan ?
-			"SPARTAN" : "BIPED'S OWN");
+		snprintf(value, value_size, "%s", now->movement[s_map_settings_menu.team_slot] == _forge_movement_own ?
+			"BIPED'S OWN" : "SPARTAN");
 		break;
 	case _map_settings_row_test_spawn:
 		snprintf(label, label_size, "TEST SPAWN");
@@ -767,6 +828,7 @@ static char const *map_settings_row_help(int row)
 	case _map_settings_row_team_ffa: return "Left/right: its biped. A: its biped, hands, test.";
 	case _map_settings_row_team_biped: return "Players spawn as it. Its hands are chosen with it.";
 	case _map_settings_row_team_hands: return "First-person arms: the biped's, or any other.";
+	case _map_settings_row_team_config: return "CUSTOM: its own. A team: plays that one's.";
 	case _map_settings_row_team_movement: return "SPARTAN: strafing, jumps, slopes as the map's player.";
 	case _map_settings_row_test_spawn: return "Play as it here, with a mirrored copy to watch.";
 	default: return "Left/right changes it.";

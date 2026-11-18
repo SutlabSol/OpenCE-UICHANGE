@@ -866,8 +866,10 @@ static char const *level_hands_alias(
 	char const *map;
 
 	*root = NULL;
+	/* (its model a gbxmodel, or a model once bundle_models_convert made it
+	this build's) */
 	if (bundle->refused || bundle->replace || bundle->loaded.tag_count <= 0 || bundle->profile == NONE ||
-		bundle_tag_group(&bundle->loaded, 0) != GBXMODEL_GROUP_TAG)
+		played_group(bundle_tag_group(&bundle->loaded, 0)) != MODEL_GROUP_TAG)
 	{
 		return NULL;
 	}
@@ -899,7 +901,11 @@ static boolean bundle_tag_kept(
 	unsigned long group_tag,
 	char const *name)
 {
-	return !bundle->replace && level_tag(group_tag, name) != NONE;
+	char const *alias_root;
+
+	/* (a map's hands' tags the level has are added beside its own, by
+	another name: level_hands_alias) */
+	return !bundle->replace && level_tag(group_tag, name) != NONE && !level_hands_alias(bundle, &alias_root);
 }
 
 /* whether every bitmap of a bundle's bitmap tags can be drawn from Halo

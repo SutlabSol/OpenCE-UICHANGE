@@ -8415,8 +8415,9 @@ each team's (biped_red, hands_red, movement_red ...), a campaign profile's
 player's (player_biped, player_hands, player_movement), as Forge's map
 settings have them (port/forge/src/forge_map_settings.c plays them). A biped
 or hands is a tag of the profile played (a value of its path; hands' as
-"path#map", tag_injector.c's), "" the map's own; a movement "spartan", "" the
-biped's own */
+"path#map", tag_injector.c's), "" the map's own; a movement "own" the biped's
+own, anything else ("spartan", "") a Spartan's. A multiplayer team may play
+another's instead (link_red ...: "red", "blue", "ffa"; "" CUSTOM, its own) */
 enum
 {
 	_tags_player_biped,
@@ -8578,7 +8579,7 @@ static void tags_player_row_text(short what, char const *who, tags_option_get ge
 	snprintf(name, name_size, "%s%s", who, what == _tags_player_biped ? "BIPED" : what == _tags_player_hands ?
 		"HANDS" : "MOVEMENT");
 	if (what == _tags_player_movement)
-		snprintf(state, state_size, "%s", !strcmp(value, "spartan") ? "SPARTAN" : "BIPED'S OWN");
+		snprintf(state, state_size, "%s", !strcmp(value, "own") ? "BIPED'S OWN" : "SPARTAN");
 	else
 		tags_player_shown(base, what, value, state, state_size);
 }
@@ -8591,7 +8592,7 @@ static void tags_player_step(short what, short step, tags_option_get get, tags_o
 
 	if (what == _tags_player_movement)
 	{
-		written = set(profile, keys[what], !strcmp(get(profile, keys[what]), "spartan") ? "" : "spartan");
+		written = set(profile, keys[what], !strcmp(get(profile, keys[what]), "own") ? "spartan" : "own");
 	}
 	else
 	{
@@ -8623,8 +8624,8 @@ static char const *tags_player_help(short what)
 		"the map's own. Its hands are chosen with it (the hands taken out of its map).\n \nA, left and right choose "
 		"another." : what == _tags_player_hands ? "The first-person arms: the profile's (FIRST PERSON HANDS, or those a "
 		"biped brought), or the map's own.\n \nA, left and right choose another." :
-		"BIPED'S OWN: as its tag moves it. SPARTAN: as the map's own player biped moves (strafing, the player's "
-		"speeds, its jump, slopes and landings).\n \nA, left and right choose.";
+		"SPARTAN (the default): as the map's own player biped moves (strafing, the player's speeds, its jump, "
+		"slopes and landings). BIPED'S OWN: as its tag moves it.\n \nA, left and right choose.";
 }
 
 static char const *const tags_mp_player_keys[NUMBER_OF_TAGS_MP_TEAMS][NUMBER_OF_TAGS_PLAYER_ROWS] =
@@ -8636,6 +8637,55 @@ static char const *const tags_mp_player_keys[NUMBER_OF_TAGS_MP_TEAMS][NUMBER_OF_
 static char const *const tags_campaign_player_keys[NUMBER_OF_TAGS_PLAYER_ROWS] =
 	{ "player_biped", "player_hands", "player_movement" };
 static char const *const tags_mp_team_names[NUMBER_OF_TAGS_MP_TEAMS] = { "RED TEAM", "BLUE TEAM", "FREE FOR ALL" };
+static char const *const tags_mp_link_keys[NUMBER_OF_TAGS_MP_TEAMS] = { "link_red", "link_blue", "link_ffa" };
+static char const *const tags_mp_link_values[NUMBER_OF_TAGS_MP_TEAMS] = { "red", "blue", "ffa" };
+
+/* the team a multiplayer profile's team plays the settings of (its CONFIG):
+another's, or NONE for its own (CUSTOM) */
+static short tags_mp_team_link(short team)
+{
+	char const *value = port_tag_mp_profiles_option(tags_screen.mp_profile, tags_mp_link_keys[team]);
+	short other;
+
+	for (other = 0; value && other < NUMBER_OF_TAGS_MP_TEAMS; other++)
+	{
+		if (other != team && !strcmp(value, tags_mp_link_values[other]))
+			return other;
+	}
+	return NONE;
+}
+
+/* a team page's row: its CONFIG (NONE), else its biped, hands or movement
+(shown with CUSTOM alone) */
+static short tags_mp_player_row(short place)
+{
+	return place == 0 ? NONE : (short)(place - 1);
+}
+
+/* a team's CONFIG stepped: the other two teams', then CUSTOM */
+static void tags_mp_team_link_step(short team, short step)
+{
+	short choices[NUMBER_OF_TAGS_MP_TEAMS];
+	short count = 0;
+	short now = tags_mp_team_link(team);
+	short other;
+	short place;
+
+	for (other = 0; other < NUMBER_OF_TAGS_MP_TEAMS; other++)
+	{
+		if (other != team)
+			choices[count++] = other;
+	}
+	choices[count++] = NONE;
+	for (place = 0; place < count && choices[place] != now; place++)
+	{
+	}
+	place = (short)((place + count + (step ? step : 1)) % count);
+	if (!port_tag_mp_profiles_set_option(tags_screen.mp_profile, tags_mp_link_keys[team],
+		choices[place] == NONE ? "" : tags_mp_link_values[choices[place]]))
+		tags_message("The profile cannot be written (the log says why).");
+	ui_play_audio_feedback_sound(SOUND_CURSOR);
+}
 
 /* whether the menus offer a profile's tag of a group as a choice: one on, and
 no flag or ball (never swapped in or given: tag_injector_weapon_objective) */
@@ -9218,6 +9268,7 @@ static short tags_count(void)
 	case _tags_list_mp_bipeds:
 		return NUMBER_OF_TAGS_MP_TEAMS;
 	case _tags_list_mp_player:
+		return tags_mp_team_link(tags_screen.mp_team) != NONE ? 1 : 1 + NUMBER_OF_TAGS_PLAYER_ROWS;
 	case _tags_list_campaign_player:
 		return NUMBER_OF_TAGS_PLAYER_ROWS;
 	case _tags_list_campaign_profiles:
@@ -9636,13 +9687,27 @@ static void tags_row_text(short place, char *name, size_t name_size, char *state
 		break;
 	case _tags_list_mp_bipeds:
 		snprintf(name, name_size, "%s", tags_mp_team_names[place]);
-		tags_player_shown(tags_mp_base(), _tags_player_biped,
-			port_tag_mp_profiles_option(tags_screen.mp_profile, tags_mp_player_keys[place][_tags_player_biped]),
-			state, state_size);
+		if (tags_mp_team_link(place) != NONE)
+			snprintf(state, state_size, "AS %s", tags_mp_team_names[tags_mp_team_link(place)]);
+		else
+			tags_player_shown(tags_mp_base(), _tags_player_biped,
+				port_tag_mp_profiles_option(tags_screen.mp_profile, tags_mp_player_keys[place][_tags_player_biped]),
+				state, state_size);
 		break;
 	case _tags_list_mp_player:
-		tags_player_row_text(place, "PLAYER ", port_tag_mp_profiles_option, tags_screen.mp_profile, tags_mp_base(),
-			tags_mp_player_keys[tags_screen.mp_team], name, name_size, state, state_size);
+		if (tags_mp_player_row(place) == NONE)
+		{
+			short link = tags_mp_team_link(tags_screen.mp_team);
+
+			snprintf(name, name_size, "CONFIG");
+			snprintf(state, state_size, "%s", link == NONE ? "CUSTOM" : tags_mp_team_names[link]);
+		}
+		else
+		{
+			tags_player_row_text(tags_mp_player_row(place), "PLAYER ", port_tag_mp_profiles_option,
+				tags_screen.mp_profile, tags_mp_base(), tags_mp_player_keys[tags_screen.mp_team], name, name_size, state,
+				state_size);
+		}
 		break;
 	case _tags_list_campaign_weapons:
 	case _tags_list_campaign_enemies:
@@ -10264,7 +10329,9 @@ static void tags_details_text(short place, char *title, size_t title_size, char 
 	case _tags_list_mp_player:
 		snprintf(title, title_size, "%s", tags_mp_team_names[tags_screen.mp_team]);
 		snprintf(text, text_size, "%s: %s", tags_screen.mp_team == _tags_mp_team_red ? "The red team" :
-			tags_screen.mp_team == _tags_mp_team_blue ? "The blue team" : "A free for all game", tags_player_help(place));
+			tags_screen.mp_team == _tags_mp_team_blue ? "The blue team" : "A free for all game",
+			tags_mp_player_row(place) == NONE ? "CUSTOM: its own biped, hands and movement, set below. Another team: "
+			"plays whatever that team has.\n \nA, left and right choose." : tags_player_help(tags_mp_player_row(place)));
 		break;
 	case _tags_list_mp_manual:
 	{
@@ -10744,8 +10811,11 @@ static boolean tags_choose(struct widget_instance *widget)
 		tags_list_open(list, _tags_list_mp_player, 0);
 		break;
 	case _tags_list_mp_player:
-		tags_player_step(place, 1, port_tag_mp_profiles_option, port_tag_mp_profiles_set_option, tags_screen.mp_profile,
-			tags_mp_base(), tags_mp_player_keys[tags_screen.mp_team]);
+		if (tags_mp_player_row(place) == NONE)
+			tags_mp_team_link_step(tags_screen.mp_team, 1);
+		else
+			tags_player_step(tags_mp_player_row(place), 1, port_tag_mp_profiles_option, port_tag_mp_profiles_set_option,
+				tags_screen.mp_profile, tags_mp_base(), tags_mp_player_keys[tags_screen.mp_team]);
 		break;
 	case _tags_list_campaign_player:
 		tags_player_step(place, 1, port_tag_campaign_profiles_option, port_tag_campaign_profiles_set_option,
@@ -10966,8 +11036,11 @@ static boolean tags_step(struct widget_instance *widget, short step)
 			tags_campaign_profile_step(step);
 		return TRUE;
 	case _tags_list_mp_player:
-		tags_player_step(place, step, port_tag_mp_profiles_option, port_tag_mp_profiles_set_option,
-			tags_screen.mp_profile, tags_mp_base(), tags_mp_player_keys[tags_screen.mp_team]);
+		if (tags_mp_player_row(place) == NONE)
+			tags_mp_team_link_step(tags_screen.mp_team, step);
+		else
+			tags_player_step(tags_mp_player_row(place), step, port_tag_mp_profiles_option, port_tag_mp_profiles_set_option,
+				tags_screen.mp_profile, tags_mp_base(), tags_mp_player_keys[tags_screen.mp_team]);
 		return TRUE;
 	case _tags_list_campaign_player:
 		tags_player_step(place, step, port_tag_campaign_profiles_option, port_tag_campaign_profiles_set_option,

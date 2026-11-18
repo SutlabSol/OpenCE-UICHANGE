@@ -59,6 +59,7 @@ extern boolean unit_has_weapon_definition_index(long unit_index, long definition
 #define SKY_GROUP_TAG 'sky '
 #define BIPED_GROUP_TAG 'bipd'
 #define GBXMODEL_GROUP_TAG 'mod2'
+#define MODEL_GROUP_TAG 'mode'
 #define MAXIMUM_SKY_REFERENCES 16
 
 /* ---------- structures */
@@ -170,23 +171,54 @@ static struct
 	char biped[NUMBER_OF_FORGE_MAP_SLOTS][FORGE_MAP_SETTINGS_PATH_MAX];
 	char hands[NUMBER_OF_FORGE_MAP_SLOTS][FORGE_MAP_SETTINGS_PATH_MAX];
 	int movement[NUMBER_OF_FORGE_MAP_SLOTS];
+	int link[NUMBER_OF_FORGE_MAP_SLOTS];
 } players_layer;
 
-/* a slot's movement: the Forge map's, else the profile's */
-static int movement_of(int slot)
+/* the slot whose biped, hands and movement a slot plays, by the links of a
+layer (a slot linked to another plays that one's, which may be linked on;
+links that come back round play the slot's own) */
+static int link_follow(int const *links, int slot)
 {
-	return settings.movement[slot] ? settings.movement[slot] : players_layer.movement[slot];
+	int at = slot;
+	int step;
+
+	for (step = 0; step < NUMBER_OF_FORGE_MAP_SLOTS; step++)
+	{
+		int link = links[at];
+
+		if (link <= _forge_link_custom || link > NUMBER_OF_FORGE_MAP_SLOTS || link - 1 == at)
+			return at;
+		if (link - 1 == slot)
+			return slot;
+		at = link - 1;
+	}
+	return slot;
 }
 
-/* a tag setting's path the level plays: the Forge map's, else the
-profile's */
-static char const *played_path(int kind, int slot)
+/* whether a movement setting moves the biped as a Spartan (the default) */
+static int movement_spartan(int movement)
 {
-	if (kind == _forge_map_kind_biped && !settings.biped[slot][0])
-		return players_layer.biped[slot];
-	if (kind == _forge_map_kind_hands && !settings.hands[slot][0])
-		return players_layer.hands[slot];
-	return NULL;
+	return movement != _forge_movement_own;
+}
+
+/* a slot's movement: the Forge map's when it has a biped of its own for the
+slot, else the profile's */
+static int movement_of(int slot)
+{
+	int forge_slot = link_follow(settings.link, slot);
+
+	if (settings.biped[forge_slot][0])
+		return movement_spartan(settings.movement[forge_slot]) ? _forge_movement_spartan : _forge_movement_own;
+	return movement_spartan(players_layer.movement[link_follow(players_layer.link, slot)]) ? _forge_movement_spartan :
+		_forge_movement_own;
+}
+
+/* a model's group in the level: a gbxmodel the Tag Injector or Forge added
+is made this build's model (tag_injector.c's bundle_models_convert), as the
+map's own are */
+static int group_matches(unsigned long wanted, unsigned long group)
+{
+	return group == wanted || (wanted == GBXMODEL_GROUP_TAG && group == MODEL_GROUP_TAG);
 }
 
 static char *settings_path(int kind, int slot)
@@ -250,7 +282,7 @@ static long tag_find(unsigned long group, char const *path)
 	instances = (struct settings_tag_instance const *)cache_files_tag_instances(&count);
 	for (index = 0; instances && index < count; index++)
 	{
-		if ((unsigned long)instances[index].group_tag == group && instances[index].tag_index != NONE &&
+		if (group_matches(group, (unsigned long)instances[index].group_tag) && instances[index].tag_index != NONE &&
 			instances[index].name && instances[index].base_address && !_stricmp(instances[index].name, path))
 		{
 			return instances[index].tag_index;
@@ -526,6 +558,14 @@ static void net_send_movement(long machine_index, int slot)
 	forge_network_send_text(machine_index, text);
 }
 
+static void net_send_link(long machine_index, int slot)
+{
+	char text[64];
+
+	snprintf(text, sizeof(text), "!FGL:%d:%d", slot, settings.link[slot]);
+	forge_network_send_text(machine_index, text);
+}
+
 static int host_tells(void)
 {
 	return forge_is_multiplayer_session() && game_connection() == _game_connection_network_server;
@@ -546,24 +586,28 @@ int forge_map_settings_any(void)
 		return 1;
 	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
 	{
-		if (settings.biped[slot][0] || settings.hands[slot][0] || settings.movement[slot])
+		if (settings.biped[slot][0] || settings.hands[slot][0] || settings.movement[slot] || settings.link[slot])
 			return 1;
 	}
 	return 0;
 }
 
-void forge_map_settings_players_set(int slot, char const *biped, char const *hands, int movement)
+void forge_map_settings_players_set(int slot, int link, char const *biped, char const *hands, int movement)
 {
+	static char const *const names[NUMBER_OF_FORGE_MAP_SLOTS] = { "red", "blue", "ffa" };
+
 	if (slot < 0 || slot >= NUMBER_OF_FORGE_MAP_SLOTS)
 		return;
 	snprintf(players_layer.biped[slot], sizeof(players_layer.biped[slot]), "%s", biped ? biped : "");
 	snprintf(players_layer.hands[slot], sizeof(players_layer.hands[slot]), "%s", hands ? hands : "");
 	players_layer.movement[slot] = PIN(movement, 0, NUMBER_OF_FORGE_MOVEMENTS - 1);
+	players_layer.link[slot] = PIN(link, 0, NUMBER_OF_FORGE_MAP_SLOTS);
 	settings_generation++;
-	if (biped && biped[0])
-		error(_error_silent, "forge map settings: the profile's %s biped %s, hands %s, movement %s",
-			slot == _forge_map_slot_red ? "red" : slot == _forge_map_slot_blue ? "blue" : "ffa", biped,
-			hands && hands[0] ? hands : "(the map's)", movement ? "spartan" : "its own");
+	if (link > _forge_link_custom && link <= NUMBER_OF_FORGE_MAP_SLOTS)
+		error(_error_silent, "forge map settings: the profile's %s players play %s's", names[slot], names[link - 1]);
+	else if (biped && biped[0])
+		error(_error_silent, "forge map settings: the profile's %s biped %s, hands %s, movement %s", names[slot], biped,
+			hands && hands[0] ? hands : "(the map's)", movement_spartan(movement) ? "spartan" : "its own");
 }
 
 void forge_map_settings_players_from_options(char const *(*option)(void *context, char const *key), void *context,
@@ -574,10 +618,13 @@ void forge_map_settings_players_from_options(char const *(*option)(void *context
 
 	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
 	{
-		char biped_key[32], hands_key[32], movement_key[32];
+		char biped_key[32], hands_key[32], movement_key[32], link_key[32];
 		char biped[FORGE_MAP_SETTINGS_PATH_MAX];
 		char hands[FORGE_MAP_SETTINGS_PATH_MAX];
 		char const *read;
+		int link = _forge_link_custom;
+		int movement;
+		int other;
 
 		snprintf(biped_key, sizeof(biped_key), campaign ? "player_biped" : "biped_%s", slot_names[slot]);
 		snprintf(hands_key, sizeof(hands_key), campaign ? "player_hands" : "hands_%s", slot_names[slot]);
@@ -589,7 +636,18 @@ void forge_map_settings_players_from_options(char const *(*option)(void *context
 		read = option(context, hands_key);
 		snprintf(hands, sizeof(hands), "%s", read ? read : "");
 		read = option(context, movement_key);
-		forge_map_settings_players_set(slot, biped, hands, read && !strcmp(read, "spartan"));
+		/* ("own": the biped's own; anything else, nothing too, a Spartan's) */
+		movement = read && !strcmp(read, "own") ? _forge_movement_own : _forge_movement_spartan;
+		/* (a team playing another's: link_red = "blue" or "ffa"; a
+		campaign's player has none) */
+		snprintf(link_key, sizeof(link_key), "link_%s", slot_names[slot]);
+		read = campaign ? NULL : option(context, link_key);
+		for (other = 0; read && other < NUMBER_OF_FORGE_MAP_SLOTS; other++)
+		{
+			if (other != slot && !strcmp(read, slot_names[other]))
+				link = other + 1;
+		}
+		forge_map_settings_players_set(slot, link, biped, hands, movement);
 	}
 }
 
@@ -627,6 +685,13 @@ void forge_map_settings_level_loading(char const *text)
 		{
 			snprintf(line[4] == 'B' ? settings.biped[slot] : settings.hands[slot], FORGE_MAP_SETTINGS_PATH_MAX, "%s",
 				value);
+		}
+		else if (!strncmp(line, "MAP_LINK|", 9))
+		{
+			int link = 0;
+
+			if (sscanf(line + 9, "%d|%d", &slot, &link) == 2 && slot >= 0 && slot < NUMBER_OF_FORGE_MAP_SLOTS)
+				settings.link[slot] = PIN(link, 0, NUMBER_OF_FORGE_MAP_SLOTS);
 		}
 		else if (!strncmp(line, "MAP_MOVEMENT|", 13))
 		{
@@ -683,6 +748,8 @@ int forge_map_settings_save_lines(char *text, unsigned long size)
 			SETTINGS_LINE("MAP_HANDS|%d|%s\r\n", slot, settings.hands[slot]);
 		if (settings.movement[slot])
 			SETTINGS_LINE("MAP_MOVEMENT|%d|%d\r\n", slot, settings.movement[slot]);
+		if (settings.link[slot])
+			SETTINGS_LINE("MAP_LINK|%d|%d\r\n", slot, settings.link[slot]);
 	}
 	if (settings.atmosphere != _forge_atmosphere_map_default)
 	{
@@ -812,7 +879,7 @@ void forge_map_settings_set_tag(int kind, int slot, long tag_index)
 
 	if (!path || !forge_map_settings_can_edit())
 		return;
-	if (instance && (unsigned long)instance->group_tag == kind_group(kind) && instance->name)
+	if (instance && group_matches(kind_group(kind), (unsigned long)instance->group_tag) && instance->name)
 		snprintf(path, FORGE_MAP_SETTINGS_PATH_MAX, "%s", instance->name);
 	else
 		path[0] = 0;
@@ -859,6 +926,21 @@ void forge_map_settings_set_movement(int slot, int movement)
 	settings_generation++;
 	if (host_tells())
 		net_send_movement(-1, slot);
+}
+
+void forge_map_settings_set_link(int slot, int link)
+{
+	if (!forge_map_settings_can_edit() || slot < 0 || slot >= NUMBER_OF_FORGE_MAP_SLOTS || link == slot + 1)
+		return;
+	settings.link[slot] = PIN(link, 0, NUMBER_OF_FORGE_MAP_SLOTS);
+	settings_generation++;
+	if (host_tells())
+		net_send_link(-1, slot);
+}
+
+int forge_map_settings_link_slot(int slot)
+{
+	return slot < 0 || slot >= NUMBER_OF_FORGE_MAP_SLOTS ? slot : link_follow(settings.link, slot);
 }
 
 void forge_map_settings_set_fog(float const color[3], float density, float start, float opaque, int indoors,
@@ -1013,13 +1095,26 @@ long forge_map_settings_tag(int kind, int slot)
 		{
 			for (each_slot = 0; each_slot < NUMBER_OF_FORGE_MAP_SLOTS; each_slot++)
 			{
-				char const *path = settings_path(each_kind, each_slot);
-
-				char const *played = each_kind != _forge_map_kind_sky ? played_path(each_kind, each_slot) : NULL;
+				char const *path;
 				long found;
 
-				if (played)
-					path = played;
+				/* (a slot linked to another: that one's; the Forge map's,
+				else the profile's) */
+				if (each_kind == _forge_map_kind_sky)
+				{
+					path = settings.sky;
+				}
+				else
+				{
+					path = settings_path(each_kind, link_follow(settings.link, each_slot));
+					if (!path || !path[0])
+					{
+						int profile_slot = link_follow(players_layer.link, each_slot);
+
+						path = each_kind == _forge_map_kind_biped ? players_layer.biped[profile_slot] :
+							players_layer.hands[profile_slot];
+					}
+				}
 				found = path && path[0] ? tag_find(kind_group(each_kind), path) : NONE;
 				/* (a map's hands, "path#map", added by their path alone: the
 				level had none of it, tag_injector.c's level_hands_alias) */
@@ -1057,7 +1152,10 @@ void forge_map_settings_net_send_all(long machine_index)
 	}
 	net_send_atmosphere(machine_index);
 	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
+	{
 		net_send_movement(machine_index, slot);
+		net_send_link(machine_index, slot);
+	}
 }
 
 int forge_map_settings_net_receive(char const *text, int from_client)
@@ -1082,13 +1180,23 @@ int forge_map_settings_net_receive(char const *text, int from_client)
 		{
 			struct settings_tag_instance const *instance = instance_of((long)tag);
 
-			if (instance && (unsigned long)instance->group_tag == kind_group(kind) && instance->name)
+			if (instance && group_matches(kind_group(kind), (unsigned long)instance->group_tag) && instance->name)
 				snprintf(path, FORGE_MAP_SETTINGS_PATH_MAX, "%s", instance->name);
 			else
 				path[0] = 0;
 			settings_generation++;
 			if (kind == _forge_map_kind_sky)
 				sky_apply();
+		}
+	}
+	else if (!strncmp(text, "!FGL:", 5))
+	{
+		int slot = 0, link = 0;
+
+		if (sscanf(text + 5, "%d:%d", &slot, &link) == 2 && slot >= 0 && slot < NUMBER_OF_FORGE_MAP_SLOTS)
+		{
+			settings.link[slot] = PIN(link, 0, NUMBER_OF_FORGE_MAP_SLOTS);
+			settings_generation++;
 		}
 	}
 	else if (!strncmp(text, "!FGM:", 5))

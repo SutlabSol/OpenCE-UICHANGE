@@ -122,7 +122,7 @@ struct profile_kind
 settings play them, port/forge/src/forge_map_settings.c) */
 static char const *const mp_option_keys[] = { "profile", "rotation", "replace", "loadout", "primary", "secondary",
 	"biped_red", "hands_red", "movement_red", "biped_blue", "hands_blue", "movement_blue",
-	"biped_ffa", "hands_ffa", "movement_ffa" };
+	"biped_ffa", "hands_ffa", "movement_ffa", "link_red", "link_blue", "link_ffa" };
 static char const *const mp_defaults[] = { "rotation", "add", "replace", "random", "loadout", "map", NULL };
 static char const *const mp_sections[] = { "manual" };
 static char const *const campaign_option_keys[] =
