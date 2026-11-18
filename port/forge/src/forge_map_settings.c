@@ -162,6 +162,33 @@ static void settings_clear(void)
 	settings.sky_visibility = _forge_sky_auto;
 }
 
+/* the players' bipeds, hands and movements a level's profile plays (a
+campaign profile's player, a multiplayer profile's teams:
+forge_map_settings_players_set), under a Forge map's own of each slot */
+static struct
+{
+	char biped[NUMBER_OF_FORGE_MAP_SLOTS][FORGE_MAP_SETTINGS_PATH_MAX];
+	char hands[NUMBER_OF_FORGE_MAP_SLOTS][FORGE_MAP_SETTINGS_PATH_MAX];
+	int movement[NUMBER_OF_FORGE_MAP_SLOTS];
+} players_layer;
+
+/* a slot's movement: the Forge map's, else the profile's */
+static int movement_of(int slot)
+{
+	return settings.movement[slot] ? settings.movement[slot] : players_layer.movement[slot];
+}
+
+/* a tag setting's path the level plays: the Forge map's, else the
+profile's */
+static char const *played_path(int kind, int slot)
+{
+	if (kind == _forge_map_kind_biped && !settings.biped[slot][0])
+		return players_layer.biped[slot];
+	if (kind == _forge_map_kind_hands && !settings.hands[slot][0])
+		return players_layer.hands[slot];
+	return NULL;
+}
+
 static char *settings_path(int kind, int slot)
 {
 	if (kind == _forge_map_kind_sky)
@@ -227,6 +254,52 @@ static long tag_find(unsigned long group, char const *path)
 			instances[index].name && instances[index].base_address && !_stricmp(instances[index].name, path))
 		{
 			return instances[index].tag_index;
+		}
+	}
+	return NONE;
+}
+
+/* a profile's hands in the level: the Tag Injector names a map's hands by
+their path and the map's ("...\\fp#bigass"), and a level adds a hands tag
+the profile names by its path alone, that the level has, so too
+(tag_injector.c's level_hands_alias) */
+static long profile_hands_level_tag(long profile, long tag)
+{
+	char const *name = port_tag_profiles_tag_name(profile, tag);
+	char const *map = port_tag_profiles_tag_map(profile, tag);
+	char alias[FORGE_MAP_SETTINGS_PATH_MAX + 64];
+	long found;
+
+	if (!name || !name[0])
+		return NONE;
+	if (strchr(name, '#') || !map || !map[0])
+		return tag_find(GBXMODEL_GROUP_TAG, name);
+	snprintf(alias, sizeof(alias), "%s#%s", name, map);
+	found = tag_find(GBXMODEL_GROUP_TAG, alias);
+	return found != NONE ? found : tag_find(GBXMODEL_GROUP_TAG, name);
+}
+
+long forge_map_settings_profile_tag(long profile, uint32_t group, char const *name)
+{
+	long found = profile == NONE ? NONE : port_tag_profiles_tag_find(profile, group, name);
+	char const *hash = name ? strchr(name, '#') : NULL;
+	long count;
+	long tag;
+
+	if (found != NONE || !hash || profile == NONE)
+		return found;
+	/* (a hands tag of a profile of before: its path alone, and the map) */
+	count = port_tag_profiles_tag_count(profile);
+	for (tag = 0; tag < count; tag++)
+	{
+		char const *entry = port_tag_profiles_tag_name(profile, tag);
+		char const *map = port_tag_profiles_tag_map(profile, tag);
+
+		if (port_tag_profiles_tag_group(profile, tag) == group && entry && map &&
+			strlen(entry) == (size_t)(hash - name) && !_strnicmp(entry, name, (size_t)(hash - name)) &&
+			!_stricmp(map, hash + 1))
+		{
+			return tag;
 		}
 	}
 	return NONE;
@@ -338,7 +411,7 @@ static void movement_apply(void)
 		long biped = forge_map_settings_tag(_forge_map_kind_biped, slot);
 		struct biped_definition *definition;
 
-		if (settings.movement[slot] != _forge_movement_spartan || biped == NONE || biped == spartan ||
+		if (movement_of(slot) != _forge_movement_spartan || biped == NONE || biped == spartan ||
 			!instance_of(biped))
 		{
 			continue;
@@ -479,10 +552,48 @@ int forge_map_settings_any(void)
 	return 0;
 }
 
+void forge_map_settings_players_set(int slot, char const *biped, char const *hands, int movement)
+{
+	if (slot < 0 || slot >= NUMBER_OF_FORGE_MAP_SLOTS)
+		return;
+	snprintf(players_layer.biped[slot], sizeof(players_layer.biped[slot]), "%s", biped ? biped : "");
+	snprintf(players_layer.hands[slot], sizeof(players_layer.hands[slot]), "%s", hands ? hands : "");
+	players_layer.movement[slot] = PIN(movement, 0, NUMBER_OF_FORGE_MOVEMENTS - 1);
+	settings_generation++;
+	if (biped && biped[0])
+		error(_error_silent, "forge map settings: the profile's %s biped %s, hands %s, movement %s",
+			slot == _forge_map_slot_red ? "red" : slot == _forge_map_slot_blue ? "blue" : "ffa", biped,
+			hands && hands[0] ? hands : "(the map's)", movement ? "spartan" : "its own");
+}
+
+void forge_map_settings_players_from_options(char const *(*option)(void *context, char const *key), void *context,
+	int campaign)
+{
+	static char const *const slot_names[NUMBER_OF_FORGE_MAP_SLOTS] = { "red", "blue", "ffa" };
+	int slot;
+
+	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
+	{
+		char biped_key[32], hands_key[32], movement_key[32];
+		char const *biped;
+		char const *hands;
+		char const *movement;
+
+		snprintf(biped_key, sizeof(biped_key), campaign ? "player_biped" : "biped_%s", slot_names[slot]);
+		snprintf(hands_key, sizeof(hands_key), campaign ? "player_hands" : "hands_%s", slot_names[slot]);
+		snprintf(movement_key, sizeof(movement_key), campaign ? "player_movement" : "movement_%s", slot_names[slot]);
+		biped = option(context, biped_key);
+		hands = option(context, hands_key);
+		movement = option(context, movement_key);
+		forge_map_settings_players_set(slot, biped, hands, movement && !strcmp(movement, "spartan"));
+	}
+}
+
 void forge_map_settings_level_loading(char const *text)
 {
 	char const *line;
 
+	memset(&players_layer, 0, sizeof(players_layer));
 	settings_clear();
 	level_serial++;
 	settings_generation++;
@@ -664,14 +775,17 @@ static void hands_of_biped(int slot, long biped_tag)
 
 		for (tag = 0; map && map[0] && tag < count; tag++)
 		{
-			char const *name = port_tag_profiles_tag_name(profile, tag);
+			long level_tag;
+			char const *name;
 			int shared;
 
 			if (port_tag_profiles_tag_group(profile, tag) != GBXMODEL_GROUP_TAG ||
-				_stricmp(port_tag_profiles_tag_map(profile, tag), map) || tag_find(GBXMODEL_GROUP_TAG, name) == NONE)
+				_stricmp(port_tag_profiles_tag_map(profile, tag), map) ||
+				(level_tag = profile_hands_level_tag(profile, tag)) == NONE || !instance_of(level_tag))
 			{
 				continue;
 			}
+			name = instance_of(level_tag)->name;
 			shared = path_folders_shared(biped->name, name);
 			if (shared > best_shared)
 			{
@@ -806,7 +920,7 @@ int forge_map_settings_candidates(int kind, long *tags, int capacity)
 
 				if (port_tag_profiles_tag_group(profiles[pass], tag) != GBXMODEL_GROUP_TAG)
 					continue;
-				level_tag = tag_find(GBXMODEL_GROUP_TAG, port_tag_profiles_tag_name(profiles[pass], tag));
+				level_tag = profile_hands_level_tag(profiles[pass], tag);
 				for (other = 0; other < found && tags[other] != level_tag; other++)
 				{
 				}
@@ -844,8 +958,15 @@ void forge_map_settings_tag_label(long tag_index, char *text, unsigned long size
 		return;
 	}
 	leaf = leaf ? leaf + 1 : name;
+	/* (a map's hands: "FP (BIGASS)") */
+	if (strchr(leaf, '#'))
+	{
+		char const *hash = strchr(leaf, '#');
+
+		snprintf(text, size, "%.*s (%s)", (int)(hash - leaf), leaf, hash + 1);
+	}
 	/* (a leaf saying little, "fp" or "sky", with its folder's) */
-	if (parent_end && strlen(leaf) <= 3)
+	else if (parent_end && strlen(leaf) <= 3)
 	{
 		char const *cursor;
 
@@ -890,7 +1011,22 @@ long forge_map_settings_tag(int kind, int slot)
 			{
 				char const *path = settings_path(each_kind, each_slot);
 
-				resolved.tags[each_kind][each_slot] = path && path[0] ? tag_find(kind_group(each_kind), path) : NONE;
+				char const *played = each_kind != _forge_map_kind_sky ? played_path(each_kind, each_slot) : NULL;
+				long found;
+
+				if (played)
+					path = played;
+				found = path && path[0] ? tag_find(kind_group(each_kind), path) : NONE;
+				/* (a map's hands, "path#map", added by their path alone: the
+				level had none of it, tag_injector.c's level_hands_alias) */
+				if (found == NONE && each_kind == _forge_map_kind_hands && path && strchr(path, '#'))
+				{
+					char base[FORGE_MAP_SETTINGS_PATH_MAX];
+
+					snprintf(base, sizeof(base), "%.*s", (int)(strchr(path, '#') - path), path);
+					found = tag_find(GBXMODEL_GROUP_TAG, base);
+				}
+				resolved.tags[each_kind][each_slot] = found;
 			}
 		}
 	}

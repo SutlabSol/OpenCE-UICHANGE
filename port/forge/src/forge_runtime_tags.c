@@ -6213,11 +6213,13 @@ int forge_baked_local_lines(struct forge_scenario_edit_state const *edits, char 
 			(is_ai && !edits->ai_spawns[ai_index].active))
 			continue;
 		if (baked != NONE)
-			tag = port_tag_profiles_tag_find(baked, group, name);
+			tag = is_setting ? forge_map_settings_profile_tag(baked, group, name) :
+				port_tag_profiles_tag_find(baked, group, name);
 		if (tag == NONE && playing != NONE)
 		{
 			profile = playing;
-			tag = port_tag_profiles_tag_find(playing, group, name);
+			tag = is_setting ? forge_map_settings_profile_tag(playing, group, name) :
+				port_tag_profiles_tag_find(playing, group, name);
 		}
 		if (tag != NONE && port_tag_profiles_tag_mcc_own(profile, tag))
 		{
@@ -6311,11 +6313,13 @@ int forge_baked_archive_make(
 		if (!name[0] || (!is_ai && !is_setting && edits->placed_objects[i].x < -90000.0f))
 			continue;
 		if (baked != NONE)
-			tag = port_tag_profiles_tag_find(baked, group, name);
+			tag = is_setting ? forge_map_settings_profile_tag(baked, group, name) :
+				port_tag_profiles_tag_find(baked, group, name);
 		if (tag == NONE && playing != NONE)
 		{
 			profile = playing;
-			tag = port_tag_profiles_tag_find(playing, group, name);
+			tag = is_setting ? forge_map_settings_profile_tag(playing, group, name) :
+				port_tag_profiles_tag_find(playing, group, name);
 		}
 		if (tag == NONE)
 			continue;

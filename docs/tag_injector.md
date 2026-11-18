@@ -620,6 +620,15 @@ daily challenge or a random run, and a saved game expects the same one.
 A campaign profile whose profile is gone, or has no tags on, plays the level
 as it is (the log says so).
 
+**PLAYER BIPED**, **PLAYER HANDS** and **PLAYER MOVEMENT** (`player_biped`,
+`player_hands`, `player_movement`) set what the player spawns as, as Forge's
+map settings do: a biped of the profile (or the map's own), its first-person
+hands (a biped chosen chooses the hands taken out of its map, the one whose
+path is most its own; hands are kept as `path#map`), and BIPED'S OWN or
+SPARTAN movement. A co-op game plays the host's for every player, read from
+its share's `campaign.toml` on every machine.
+
+
 ## In multiplayer
 
 A multiplayer game hosted on one of the game's own multiplayer maps (not a
@@ -709,6 +718,16 @@ level differ from the host's.
 Not built yet: Custom Edition maps; a multiplayer profile's AI or
 equipment. Downloaded shares stay in `tag_injector/.shared`
 until deleted by hand.
+
+Each team's **BIPED**, **HANDS** and **MOVEMENT** (RED, BLUE and FFA rows:
+`biped_red`, `hands_red`, `movement_red` and so on) set what its players
+spawn as, as Forge's map settings do (a team game plays the red and blue
+team's, a free for all game FFA's). The share carries the bipeds and hands
+chosen beside the weapons (`port_tag_profiles_shared_extras_set`), and every
+machine reads the settings from the share's `multiplayer.toml` as the level
+loads (port/forge/src/forge_map_settings.c's players layer, under a saved
+Forge map's own settings).
+
 
 ### In co-op
 
@@ -923,9 +942,15 @@ menu opens it (TAG INJECTOR).
   hands too, a tag of its own (unless the profile has one of that path): the
   arms whose path shares the most folders with the biped's
   (`characters\elite\fp\fp_arms` for `characters\elite\elite_mp`), else the
-  globals'. Forge's map settings play them; nothing else does. Hands of a
-  stock path (`characters\cyborg\fp\fp` and the like) are the level's own
-  unless REPLACE ORIGINAL is on, as any tag of a path the level has.
+  globals'. Forge's map settings play them; nothing else does. Most maps keep
+  their arms at the stock path (`characters\cyborg\fp\fp`), so a profile
+  names hands by their path and map (`characters\cyborg\fp\fp#bigass`): each
+  map's arms are a tag of their own. A level adds a profile's hands beside its
+  own: the model by that name, and what it names that the level has of the
+  same paths (shaders, bitmaps) as `<path>#<map>`, so their textures stay
+  theirs (a hands tag of an older profile, named by its path alone, is added
+  so too when the level has its path). REPLACE ORIGINAL on hands replaces the
+  level's own instead.
 - **Map settings.** In Forge mode, holding the palette's button (instead of
   pressing it) opens MAP SETTINGS: **DISPLAY NAME** (typed; the map lists
   show it), **SKYBOX**, **FOG SETTINGS** and **PLAYER BIPEDS**. FOG SETTINGS

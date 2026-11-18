@@ -819,6 +819,39 @@ static long level_tag(
 	return name && name[0] ? tag_loaded((long)played_group(group_tag), name) : NONE;
 }
 
+/* a profile's hands added beside the level's own tags of their paths: the
+model named as its profile names it (a name with the map's in it, `root`),
+or, a hands tag the profile names by its path alone that the level has, as
+that path and the map's; and the tags they name that the level has, each as
+its path and the map's. The map's name (the names' part after '#'), NULL for
+a bundle added as any other (one that replaces the level's, too) */
+static char const *level_hands_alias(
+	struct injected_bundle const *bundle,
+	char const **root)
+{
+	char const *entry;
+	char const *hash;
+	char const *map;
+
+	*root = NULL;
+	if (bundle->refused || bundle->replace || bundle->loaded.tag_count <= 0 || bundle->profile == NONE ||
+		bundle_tag_group(&bundle->loaded, 0) != GBXMODEL_GROUP_TAG)
+	{
+		return NULL;
+	}
+	entry = port_tag_profiles_tag_name(bundle->profile, bundle->profile_tag);
+	hash = entry ? strchr(entry, '#') : NULL;
+	if (hash && hash[1])
+	{
+		*root = entry;
+		return hash + 1;
+	}
+	map = port_tag_profiles_tag_map(bundle->profile, bundle->profile_tag);
+	if (!map || !map[0] || level_tag(GBXMODEL_GROUP_TAG, bundle_tag_name(&bundle->loaded, 0)) == NONE)
+		return NULL;
+	return map;
+}
+
 /* the tags the level does not keep from another map: a scenario, a
 structure, the globals (randomizer.c's) */
 static boolean group_left_out(
@@ -2226,6 +2259,18 @@ boolean tag_injector_tag_stock(
 		randomizer_stock_tag_exists((long)group_tag, port_tag_profiles_tag_name(profile, tag));
 }
 
+/* the name a profile keeps a map's first-person hands by: their path and
+the map's name ("characters\\cyborg\\fp\\fp#bigass"), so that maps' arms of
+one path (most keep the stock arms' path) are each a tag of their own, and
+a level adds each beside its own (level_hands_alias) */
+static void menu_hands_entry_name(
+	long absolute,
+	char *name,
+	unsigned long size)
+{
+	snprintf(name, size, "%s#%s", menu_tag_name(absolute), tag_injector_menu.map_name);
+}
+
 long tag_injector_tag_in_profile(
 	long profile,
 	short category,
@@ -2233,11 +2278,20 @@ long tag_injector_tag_in_profile(
 {
 	long absolute = menu_tag(category, index);
 	unsigned long group_tag;
+	long found;
 
 	if (absolute == NONE || !tag_injector_menu.header)
 		return NONE;
 	group_tag = (unsigned long)tag_injector_menu.header->instances[absolute].group_tag;
-	return port_tag_profiles_tag_find(profile, group_tag, menu_tag_name(absolute));
+	found = port_tag_profiles_tag_find(profile, group_tag, menu_tag_name(absolute));
+	if (found == NONE && category == _tag_injector_hands)
+	{
+		char entry[320];
+
+		menu_hands_entry_name(absolute, entry, sizeof(entry));
+		found = port_tag_profiles_tag_find(profile, group_tag, entry);
+	}
+	return found;
 }
 
 boolean tag_injector_tag_add(
@@ -2337,9 +2391,18 @@ boolean tag_injector_tag_add(
 
 	menu_bundle_source_for(&source, indices, count);
 	tag_bundle_write(&source, absolute, bundle_buffer_write, &buffer, &report);
-	added = report.status == _tag_bundle_status_ok &&
-		profile_bundle_add(profile, tag_injector_menu.map_name, (unsigned long)header->instances[absolute].group_tag,
-			name, buffer.bytes, buffer.size);
+	{
+		char entry[320];
+
+		/* (hands, by their path and map: menu_hands_entry_name) */
+		if (category == _tag_injector_hands)
+			menu_hands_entry_name(absolute, entry, sizeof(entry));
+		else
+			snprintf(entry, sizeof(entry), "%s", name);
+		added = report.status == _tag_bundle_status_ok &&
+			profile_bundle_add(profile, tag_injector_menu.map_name, (unsigned long)header->instances[absolute].group_tag,
+				entry, buffer.bytes, buffer.size);
+	}
 	if (report.status != _tag_bundle_status_ok)
 	{
 		error(_error_silent, "tag injector: %s cannot be taken out: %s", name, tag_bundle_status_describe(report.status));
@@ -2417,11 +2480,11 @@ boolean tag_injector_tag_add(
 		long *hands_indices = NULL;
 		long hands_count = 0;
 		long hands_problem = NONE;
-		char hands_name[256];
+		char hands_name[320];
 
 		if (hands == NONE)
 			continue;
-		snprintf(hands_name, sizeof(hands_name), "%s", menu_tag_name(hands));
+		menu_hands_entry_name(hands, hands_name, sizeof(hands_name));
 		if (port_tag_profiles_tag_find(profile, GBXMODEL_GROUP_TAG, hands_name) != NONE)
 			continue;
 		menu_bundle_source(&source);
@@ -3986,6 +4049,8 @@ long tag_injector_tags_load(
 	for (bundle_index = 0; bundle_index < tag_injector_level.bundle_count; bundle_index++)
 	{
 		struct injected_bundle *bundle = &tag_injector_level.bundles[bundle_index];
+		char const *alias_root = NULL;
+		char const *alias = level_hands_alias(bundle, &alias_root);
 		long tag;
 
 		for (tag = 0; bundle->datums && tag < bundle->loaded.tag_count; tag++)
@@ -4006,6 +4071,38 @@ long tag_injector_tags_load(
 			{
 				bundle->datums[tag] = bundle->replaced;
 				continue;
+			}
+			/* (a map's hands beside the level's own: the model by its
+			profile's name, what it names that the level has of the same
+			paths by theirs and the map's, level_hands_alias) */
+			if (alias && !group_left_out(group_tag) && (tag == 0 || datum != NONE))
+			{
+				char *aliased;
+				long already;
+
+				if (tag == 0 && alias_root)
+				{
+					aliased = level_allocation((unsigned long)strlen(alias_root) + 1);
+					if (aliased)
+						strcpy(aliased, alias_root);
+				}
+				else
+				{
+					aliased = level_allocation((unsigned long)(strlen(name) + strlen(alias) + 2));
+					if (aliased)
+						sprintf(aliased, "%s#%s", name, alias);
+				}
+				if (aliased)
+				{
+					already = level_tag(group_tag, aliased);
+					if (already != NONE)
+					{
+						bundle->datums[tag] = already;
+						continue;
+					}
+					name = aliased;
+					datum = NONE;
+				}
 			}
 			/* (an AI's weapon a player could not hold: left out, what names
 			it naming none) */

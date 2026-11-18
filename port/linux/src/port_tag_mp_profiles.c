@@ -72,7 +72,7 @@ given, but for its control characters.
 #define MAXIMUM_MANUAL_ENTRIES 1024
 #define MAXIMUM_FILE_LENGTH 64
 #define MAXIMUM_NAME_LENGTH 64
-#define MAXIMUM_OPTIONS 8
+#define MAXIMUM_OPTIONS 20
 #define MAXIMUM_VALUE_LENGTH 256
 #define MAXIMUM_PATH_LENGTH 1024
 #define TOML_CHARACTER_LENGTH 6
@@ -118,11 +118,16 @@ struct profile_kind
 
 /* ---------- globals */
 
-static char const *const mp_option_keys[] = { "profile", "rotation", "replace", "loadout", "primary", "secondary" };
+/* (and the players' bipeds, hands and movement, team by team: Forge's map
+settings play them, port/forge/src/forge_map_settings.c) */
+static char const *const mp_option_keys[] = { "profile", "rotation", "replace", "loadout", "primary", "secondary",
+	"biped_red", "hands_red", "movement_red", "biped_blue", "hands_blue", "movement_blue",
+	"biped_ffa", "hands_ffa", "movement_ffa" };
 static char const *const mp_defaults[] = { "rotation", "add", "replace", "random", "loadout", "map", NULL };
 static char const *const mp_sections[] = { "manual" };
 static char const *const campaign_option_keys[] =
-	{ "profile", "weapon_rotation", "weapon_replace", "enemy_rotation", "enemy_replace" };
+	{ "profile", "weapon_rotation", "weapon_replace", "enemy_rotation", "enemy_replace",
+	"player_biped", "player_hands", "player_movement" };
 static char const *const campaign_defaults[] =
 	{ "weapon_rotation", "add", "weapon_replace", "random", "enemy_rotation", "add", "enemy_replace", "random", NULL };
 static char const *const campaign_sections[] = { "weapons", "enemies", "loadout" };
@@ -809,6 +814,35 @@ int port_tag_mp_profiles_delete(long profile)
 int port_tag_mp_profiles_rename(long profile, const char *name)
 {
 	return kind_rename(&mp_kind, profile, name);
+}
+
+int port_tag_profile_file_option(const char *path, const char *key, char *value, unsigned long size)
+{
+	size_t length = 0;
+	char *text;
+	toml_result_t result;
+	toml_datum_t datum;
+	int found = 0;
+
+	if (!size)
+		return 0;
+	value[0] = 0;
+	text = config_file_read(path, &length);
+	if (!text)
+		return 0;
+	result = toml_parse(text, (int)length);
+	free(text);
+	if (result.ok)
+	{
+		datum = toml_get(result.toptab, key);
+		if (datum.type == TOML_STRING)
+		{
+			value_copy(value, size, datum.u.s);
+			found = 1;
+		}
+	}
+	toml_free(result);
+	return found;
 }
 
 const char *port_tag_mp_profiles_option(long profile, const char *key)

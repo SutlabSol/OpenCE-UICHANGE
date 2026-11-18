@@ -108,10 +108,27 @@ map's trailer text, its settings read from it; NULL for none (any other
 level, and a level going away) */
 void forge_map_settings_level_loading(char const *saved_state_text);
 
+/* a slot's player biped, hands (paths; "" the map's own) and movement a
+level's profile plays, under any a Forge map has of its own: a campaign
+profile's player (each slot), a multiplayer profile's teams (tag_campaign.c,
+tag_multiplayer.c, after the level's tags load); forgotten as the next level
+loads */
+void forge_map_settings_players_set(int slot, char const *biped, char const *hands, int movement);
+/* a profile's player settings, from its options (`option` gives the value
+of a key: tag_campaign.c, tag_multiplayer.c): a campaign profile's
+player_biped, player_hands and player_movement for each slot, or a
+multiplayer profile's biped_red ... movement_ffa */
+void forge_map_settings_players_from_options(char const *(*option)(void *context, char const *key), void *context,
+	int campaign);
+
 /* the trailer's lines (forge_cache_builder.c): how many bytes */
 int forge_map_settings_save_lines(char *text, unsigned long size);
 /* the tags the settings name, for the map's bake: how many */
 int forge_map_settings_tags(uint32_t *groups, char const **paths, int capacity);
+
+/* a profile's tag of a setting's path (a map's hands named "path#map" are a
+profile's tag of that path and map, as profiles of before have them) */
+long forge_map_settings_profile_tag(long profile, uint32_t group, char const *name);
 
 /* the menu's (the host's: forge_map_settings_can_edit) */
 int forge_map_settings_can_edit(void);

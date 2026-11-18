@@ -3723,6 +3723,7 @@ long port_tag_profiles_create(char const *name);
 long port_tag_profiles_duplicate(long profile, char const *name);
 int port_tag_profiles_delete(long profile);
 long port_tag_profiles_tag_count(long profile);
+long port_tag_profiles_tag_find(long profile, unsigned long group, char const *name);
 char const *port_tag_profiles_tag_map(long profile, long tag);
 unsigned long port_tag_profiles_tag_group(long profile, long tag);
 char const *port_tag_profiles_tag_name(long profile, long tag);
@@ -8020,6 +8021,10 @@ enum
 	_tags_campaign_profile,
 	_tags_campaign_weapons,
 	_tags_campaign_enemies,
+	/* (the player's biped, hands and movement: tags_player_*) */
+	_tags_campaign_player_biped,
+	_tags_campaign_player_hands,
+	_tags_campaign_player_movement,
 	NUMBER_OF_TAGS_CAMPAIGN_ROWS
 };
 
@@ -8041,7 +8046,9 @@ enum
 	_tags_mp_setting_weapon,
 	_tags_mp_setting_loadout,
 	_tags_mp_setting_primary,
-	_tags_mp_setting_secondary
+	_tags_mp_setting_secondary,
+	/* (a team's biped, hands or movement: its index slot * 3 + what) */
+	_tags_mp_setting_player
 };
 
 /* a setting's values as port_tag_profiles.c keeps them ("": AUTO, the
@@ -8389,6 +8396,232 @@ static long tags_mp_base(void)
 	return port_tag_profiles_find(port_tag_mp_profiles_option(tags_screen.mp_profile, "profile"));
 }
 
+/* ---- the players' bipeds, hands and movement: a multiplayer profile's
+each team's (biped_red, hands_red, movement_red ...), a campaign profile's
+player's (player_biped, player_hands, player_movement), as Forge's map
+settings have them (port/forge/src/forge_map_settings.c plays them). A biped
+or hands is a tag of the profile played (a value of its path; hands' as
+"path#map", tag_injector.c's), "" the map's own; a movement "spartan", "" the
+biped's own */
+enum
+{
+	_tags_player_biped,
+	_tags_player_hands,
+	_tags_player_movement,
+	NUMBER_OF_TAGS_PLAYER_ROWS
+};
+
+typedef char const *(*tags_option_get)(long profile, char const *key);
+typedef int (*tags_option_set)(long profile, char const *key, char const *value);
+
+static unsigned long tags_player_group(short what)
+{
+	return what == _tags_player_biped ? 'bipd' : 'mod2';
+}
+
+/* the profile's tags a biped or hands may be: those on, the `place`th */
+static long tags_player_candidate(long base, short what, long place)
+{
+	long count = base == NONE ? 0 : port_tag_profiles_tag_count(base);
+	long tag;
+
+	for (tag = 0; tag < count; tag++)
+	{
+		if (port_tag_profiles_tag_group(base, tag) == tags_player_group(what) && port_tag_profiles_tag_enabled(base, tag) &&
+			!place--)
+			return tag;
+	}
+	return NONE;
+}
+
+static long tags_player_candidate_count(long base, short what)
+{
+	long count = 0;
+
+	while (tags_player_candidate(base, what, count) != NONE)
+		count++;
+	return count;
+}
+
+/* a profile's tag's value: its path; a hands tag's with its map's name */
+static void tags_player_tag_value(long base, short what, long tag, char *value, size_t size)
+{
+	char const *name = port_tag_profiles_tag_name(base, tag);
+
+	if (what == _tags_player_hands && !strchr(name, '#'))
+		snprintf(value, size, "%s#%s", name, port_tag_profiles_tag_map(base, tag));
+	else
+		snprintf(value, size, "%s", name);
+}
+
+/* the place among the choices of a value (0: the map's own, NONE: a tag
+the profile has not got) */
+static long tags_player_place(long base, short what, char const *value)
+{
+	long count = tags_player_candidate_count(base, what);
+	long place;
+
+	if (!value || !value[0])
+		return 0;
+	for (place = 0; place < count; place++)
+	{
+		char candidate[320];
+
+		tags_player_tag_value(base, what, tags_player_candidate(base, what, place), candidate, sizeof(candidate));
+		if (!csstrcasecmp(candidate, value))
+			return place + 1;
+	}
+	return NONE;
+}
+
+/* a value as the row shows it */
+static void tags_player_shown(long base, short what, char const *value, char *state, size_t size)
+{
+	long place = tags_player_place(base, what, value);
+	long tag = place > 0 ? tags_player_candidate(base, what, place - 1) : NONE;
+	char name[256];
+
+	if (place == 0)
+	{
+		snprintf(state, size, "MAP'S");
+		return;
+	}
+	if (tag == NONE)
+	{
+		snprintf(state, size, "MISSING");
+		return;
+	}
+	if (what == _tags_player_hands)
+	{
+		char const *path = port_tag_profiles_tag_name(base, tag);
+		char const *leaf = strrchr(path, '\\');
+		char const *hash;
+
+		leaf = leaf ? leaf + 1 : path;
+		hash = strchr(leaf, '#');
+		snprintf(name, sizeof(name), "%.*s (%s)", hash ? (int)(hash - leaf) : (int)strlen(leaf), leaf,
+			port_tag_profiles_tag_map(base, tag));
+	}
+	else
+	{
+		tag_injector_tag_display_name(base, tag, name, sizeof(name));
+	}
+	upper_copy(state, size, name);
+}
+
+/* how many of the first parts of two paths (to each '\\') are the same */
+static short tags_path_folders_shared(char const *path, char const *other)
+{
+	short shared = 0;
+	long index;
+
+	for (index = 0; path[index] && other[index]; index++)
+	{
+		char a = (char)tolower((unsigned char)path[index]);
+		char b = (char)tolower((unsigned char)other[index]);
+
+		if (a != b)
+			break;
+		if (a == '\\')
+			shared++;
+	}
+	return shared;
+}
+
+/* a biped's hands, chosen with it: the profile's hands taken out of the
+biped's map whose path is most its own ("": the map's own) */
+static void tags_player_biped_hands(long base, char const *biped, char *hands, size_t size)
+{
+	long entry = biped && biped[0] && base != NONE ? port_tag_profiles_tag_find(base, 'bipd', biped) : NONE;
+	char const *map = entry == NONE ? NULL : port_tag_profiles_tag_map(base, entry);
+	long count = tags_player_candidate_count(base, _tags_player_hands);
+	short best_shared = -1;
+	long place;
+
+	hands[0] = 0;
+	for (place = 0; map && map[0] && place < count; place++)
+	{
+		long tag = tags_player_candidate(base, _tags_player_hands, place);
+		short shared;
+
+		if (csstrcasecmp(port_tag_profiles_tag_map(base, tag), map))
+			continue;
+		shared = tags_path_folders_shared(biped, port_tag_profiles_tag_name(base, tag));
+		if (shared > best_shared)
+		{
+			best_shared = shared;
+			tags_player_tag_value(base, _tags_player_hands, tag, hands, size);
+		}
+	}
+}
+
+/* a player row's label and state */
+static void tags_player_row_text(short what, char const *who, tags_option_get get, long profile, long base,
+	char const *const keys[NUMBER_OF_TAGS_PLAYER_ROWS], char *name, size_t name_size, char *state, size_t state_size)
+{
+	char const *value = get(profile, keys[what]);
+
+	snprintf(name, name_size, "%s%s", who, what == _tags_player_biped ? "BIPED" : what == _tags_player_hands ?
+		"HANDS" : "MOVEMENT");
+	if (what == _tags_player_movement)
+		snprintf(state, state_size, "%s", !strcmp(value, "spartan") ? "SPARTAN" : "BIPED'S OWN");
+	else
+		tags_player_shown(base, what, value, state, state_size);
+}
+
+/* a player row's value stepped (a biped's hands chosen with it) */
+static void tags_player_step(short what, short step, tags_option_get get, tags_option_set set, long profile,
+	long base, char const *const keys[NUMBER_OF_TAGS_PLAYER_ROWS])
+{
+	boolean written;
+
+	if (what == _tags_player_movement)
+	{
+		written = set(profile, keys[what], !strcmp(get(profile, keys[what]), "spartan") ? "" : "spartan");
+	}
+	else
+	{
+		long count = tags_player_candidate_count(base, what) + 1;
+		long place = tags_player_place(base, what, get(profile, keys[what]));
+		char value[320];
+
+		place = ((place == NONE ? 0 : place) + step + count) % count;
+		value[0] = 0;
+		if (place > 0)
+			tags_player_tag_value(base, what, tags_player_candidate(base, what, place - 1), value, sizeof(value));
+		written = set(profile, keys[what], value);
+		if (written && what == _tags_player_biped)
+		{
+			char hands[320];
+
+			tags_player_biped_hands(base, value, hands, sizeof(hands));
+			written = set(profile, keys[_tags_player_hands], hands);
+		}
+	}
+	if (!written)
+		tags_message("The profile cannot be written (the log says why).");
+	ui_play_audio_feedback_sound(SOUND_CURSOR);
+}
+
+static char const *tags_player_help(short what)
+{
+	return what == _tags_player_biped ? "The biped the players spawn as: one of the profile's (TAG PROFILES' BIPEDS), or "
+		"the map's own. Its hands are chosen with it (the hands taken out of its map).\n \nA, left and right choose "
+		"another." : what == _tags_player_hands ? "The first-person arms: the profile's (FIRST PERSON HANDS, or those a "
+		"biped brought), or the map's own.\n \nA, left and right choose another." :
+		"BIPED'S OWN: as its tag moves it. SPARTAN: as the map's own player biped moves (strafing, the player's "
+		"speeds, its jump, slopes and landings).\n \nA, left and right choose.";
+}
+
+static char const *const tags_mp_player_keys[3][NUMBER_OF_TAGS_PLAYER_ROWS] =
+{
+	{ "biped_red", "hands_red", "movement_red" },
+	{ "biped_blue", "hands_blue", "movement_blue" },
+	{ "biped_ffa", "hands_ffa", "movement_ffa" },
+};
+static char const *const tags_campaign_player_keys[NUMBER_OF_TAGS_PLAYER_ROWS] =
+	{ "player_biped", "player_hands", "player_movement" };
+
 /* whether the menus offer a profile's tag of a group as a choice: one on, and
 no flag or ball (never swapped in or given: tag_injector_weapon_objective) */
 static boolean tags_weapon_offered(long base, long tag, unsigned long group)
@@ -8451,10 +8684,16 @@ static short tags_mp_setting_rows(short *rows, short *weapons)
 		rows[count++] = _tags_mp_setting_primary;
 		rows[count++] = _tags_mp_setting_secondary;
 	}
+	/* (each team's biped, hands and movement) */
+	for (weapon = 0; weapon < 3 * NUMBER_OF_TAGS_PLAYER_ROWS; weapon++)
+	{
+		weapons[count] = weapon;
+		rows[count++] = _tags_mp_setting_player;
+	}
 	return count;
 }
 
-#define MAXIMUM_TAGS_MP_SETTING_ROWS (8 + TAG_MULTIPLAYER_STOCK_WEAPONS)
+#define MAXIMUM_TAGS_MP_SETTING_ROWS (8 + TAG_MULTIPLAYER_STOCK_WEAPONS + 3 * NUMBER_OF_TAGS_PLAYER_ROWS)
 
 static short tags_mp_setting_of(short place, short *weapon)
 {
@@ -8465,7 +8704,7 @@ static short tags_mp_setting_of(short place, short *weapon)
 	*weapon = NONE;
 	if (place < 0 || place >= count)
 		return NONE;
-	if (rows[place] == _tags_mp_setting_weapon)
+	if (rows[place] == _tags_mp_setting_weapon || rows[place] == _tags_mp_setting_player)
 		*weapon = weapons[place];
 	return rows[place];
 }
@@ -9283,6 +9522,15 @@ static void tags_row_text(short place, char *name, size_t name_size, char *state
 				snprintf(state, state_size, "AS IT IS");
 			break;
 		}
+		case _tags_mp_setting_player:
+		{
+			static char const *const teams[3] = { "RED ", "BLUE ", "FFA " };
+
+			tags_player_row_text((short)(weapon % NUMBER_OF_TAGS_PLAYER_ROWS), teams[weapon / NUMBER_OF_TAGS_PLAYER_ROWS],
+				port_tag_mp_profiles_option, tags_screen.mp_profile, tags_mp_base(),
+				tags_mp_player_keys[weapon / NUMBER_OF_TAGS_PLAYER_ROWS], name, name_size, state, state_size);
+			break;
+		}
 		case _tags_mp_setting_primary:
 		case _tags_mp_setting_secondary:
 		{
@@ -9351,6 +9599,11 @@ static void tags_row_text(short place, char *name, size_t name_size, char *state
 				!strcmp(replace, "manual") ? "MANUAL" : "RANDOM");
 			break;
 		}
+		default:
+			tags_player_row_text((short)(place - _tags_campaign_player_biped), "PLAYER ",
+				port_tag_campaign_profiles_option, tags_screen.campaign_profile, tags_campaign_base(),
+				tags_campaign_player_keys, name, name_size, state, state_size);
+			break;
 		}
 		break;
 	case _tags_list_campaign_weapons:
@@ -9812,6 +10065,11 @@ static void tags_details_text(short place, char *title, size_t title_size, char 
 			snprintf(text, text_size, "The weapons that take the place of the map's %s, one at random each time it "
 				"spawns. None chosen: it stays as it is.\n \nA lists them.", tag_multiplayer_stock_name(weapon));
 			break;
+		case _tags_mp_setting_player:
+			snprintf(text, text_size, "%s: %s", weapon / NUMBER_OF_TAGS_PLAYER_ROWS == 0 ? "The red team" :
+				weapon / NUMBER_OF_TAGS_PLAYER_ROWS == 1 ? "The blue team" : "A free for all game",
+				tags_player_help((short)(weapon % NUMBER_OF_TAGS_PLAYER_ROWS)));
+			break;
 		case _tags_mp_setting_loadout:
 			snprintf(text, text_size, "The weapons each player spawns with.\nGAMETYPE'S: as the gametype gives them."
 				"\nRANDOM: two of the weapons a map's weapon may be swapped for.\nSET: the two chosen below.\n \n"
@@ -9860,6 +10118,12 @@ static void tags_details_text(short place, char *title, size_t title_size, char 
 		case _tags_campaign_weapons:
 			snprintf(text, text_size, "How the weapons lying in the level are swapped for the profile's.\n \nA "
 				"opens them.");
+			break;
+		case _tags_campaign_player_biped:
+		case _tags_campaign_player_hands:
+		case _tags_campaign_player_movement:
+			snprintf(text, text_size, "The player (every player of a co-op game): %s",
+				tags_player_help((short)(place - _tags_campaign_player_biped)));
 			break;
 		default:
 			snprintf(text, text_size, "How the level's enemies are swapped for the profile's AI, and the weapons "
@@ -10410,6 +10674,12 @@ static boolean tags_choose(struct widget_instance *widget)
 			ui_play_audio_feedback_sound(SOUND_FORWARD);
 			tags_list_open(list, _tags_list_mp_manual, 0);
 		}
+		else if (setting == _tags_mp_setting_player)
+		{
+			tags_player_step((short)(weapon % NUMBER_OF_TAGS_PLAYER_ROWS), 1, port_tag_mp_profiles_option,
+				port_tag_mp_profiles_set_option, tags_screen.mp_profile, tags_mp_base(),
+				tags_mp_player_keys[weapon / NUMBER_OF_TAGS_PLAYER_ROWS]);
+		}
 		else
 		{
 			tags_mp_setting_step(setting, 1);
@@ -10436,6 +10706,12 @@ static boolean tags_choose(struct widget_instance *widget)
 		else if (place == _tags_campaign_profile)
 		{
 			tags_campaign_profile_step(1);
+		}
+		else if (place >= _tags_campaign_player_biped)
+		{
+			tags_player_step((short)(place - _tags_campaign_player_biped), 1, port_tag_campaign_profiles_option,
+				port_tag_campaign_profiles_set_option, tags_screen.campaign_profile, tags_campaign_base(),
+				tags_campaign_player_keys);
 		}
 		else
 		{
@@ -10617,7 +10893,11 @@ static boolean tags_step(struct widget_instance *widget, short step)
 		short weapon;
 		short setting = tags_mp_setting_of(place, &weapon);
 
-		if (setting != _tags_mp_setting_name && setting != _tags_mp_setting_weapon)
+		if (setting == _tags_mp_setting_player)
+			tags_player_step((short)(weapon % NUMBER_OF_TAGS_PLAYER_ROWS), step, port_tag_mp_profiles_option,
+				port_tag_mp_profiles_set_option, tags_screen.mp_profile, tags_mp_base(),
+				tags_mp_player_keys[weapon / NUMBER_OF_TAGS_PLAYER_ROWS]);
+		else if (setting != _tags_mp_setting_name && setting != _tags_mp_setting_weapon)
 			tags_mp_setting_step(setting, step);
 		return TRUE;
 	}
@@ -10627,6 +10907,10 @@ static boolean tags_step(struct widget_instance *widget, short step)
 	case _tags_list_campaign_profile:
 		if (place == _tags_campaign_profile)
 			tags_campaign_profile_step(step);
+		else if (place >= _tags_campaign_player_biped)
+			tags_player_step((short)(place - _tags_campaign_player_biped), step, port_tag_campaign_profiles_option,
+				port_tag_campaign_profiles_set_option, tags_screen.campaign_profile, tags_campaign_base(),
+				tags_campaign_player_keys);
 		return TRUE;
 	case _tags_list_campaign_weapons:
 	case _tags_list_campaign_enemies:

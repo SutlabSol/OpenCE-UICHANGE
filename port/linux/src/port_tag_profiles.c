@@ -1808,6 +1808,57 @@ static int tag_mcc_own_content(long profile, long tag)
 	return own;
 }
 
+/* the tags of other groups the next share holds too (a multiplayer
+profile's players' bipeds and hands): by their names, a map's hands also
+as "path#map" (a tag of that path and map) */
+#define MAXIMUM_SHARED_EXTRAS 16
+static char shared_extras[MAXIMUM_SHARED_EXTRAS][MAXIMUM_TAG_NAME_LENGTH + 64];
+static long shared_extra_count;
+
+void port_tag_profiles_shared_extras_set(const char *const *names, long count)
+{
+	long index;
+
+	shared_extra_count = 0;
+	for (index = 0; names && index < count && shared_extra_count < MAXIMUM_SHARED_EXTRAS; index++)
+	{
+		if (names[index] && names[index][0])
+			text_copy(shared_extras[shared_extra_count++], sizeof(shared_extras[0]), names[index]);
+	}
+}
+
+static int names_compare_length(const char *first, const char *second, size_t length)
+{
+	size_t index;
+
+	for (index = 0; index < length; index++)
+	{
+		if (lower(first[index]) != lower(second[index]))
+			return 1;
+		if (!first[index])
+			return 0;
+	}
+	return 0;
+}
+
+static int shared_extra(const struct tag_profile_tag *tag)
+{
+	long index;
+
+	for (index = 0; index < shared_extra_count; index++)
+	{
+		const char *name = shared_extras[index];
+		const char *hash = strchr(name, '#');
+
+		if (!names_compare(tag->name, name))
+			return 1;
+		if (hash && strlen(tag->name) == (size_t)(hash - name) && !names_compare_length(tag->name, name, (size_t)(hash - name)) &&
+			!names_compare(tag->map, hash + 1))
+			return 1;
+	}
+	return 0;
+}
+
 long port_tag_profiles_shared_build(long profile, unsigned long group, const char *multiplayer, const char *campaign,
 	const char *archive)
 {
@@ -1838,7 +1889,7 @@ long port_tag_profiles_shared_build(long profile, unsigned long group, const cha
 		struct tag_profile_tag *tag = &found->tags[index];
 		long other;
 
-		if (!tag->enabled || (group && tag->group != group) || !tag->size)
+		if (!tag->enabled || (group && tag->group != group && !shared_extra(tag)) || !tag->size)
 			continue;
 		if (tag_mcc_own_content(profile, index))
 		{

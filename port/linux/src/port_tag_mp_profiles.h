@@ -86,4 +86,8 @@ int port_tag_campaign_profiles_list_set(long profile, const char *section, const
 void port_tag_campaign_profiles_path(long profile, char *path, unsigned long size);
 long port_tag_campaign_profiles_import(const char *path, const char *suffix, const char *profile);
 
+/* a key's string in a profile's file at `path` (a share's multiplayer.toml
+or campaign.toml), into `value`; 0 when it has none */
+int port_tag_profile_file_option(const char *path, const char *key, char *value, unsigned long size);
+
 #endif

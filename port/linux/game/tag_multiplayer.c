@@ -82,6 +82,7 @@ one, as chosen, so a game listed for every build stays so.
 #include "mcc_cache.h"
 #include "mcc_maps.h"
 #include "interface/player_ui.h"
+#include "opence_features.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -117,6 +118,8 @@ long port_tag_profiles_shared_build(long profile, unsigned long group, char cons
 	char const *archive);
 long port_tag_profiles_shared_import(char const *id);
 int port_tag_profiles_shared_unpack(char const *archive, char const *id);
+void port_tag_profiles_shared_extras_set(char const *const *names, long count);
+int port_tag_profile_file_option(char const *path, char const *key, char *value, unsigned long size);
 int port_tag_profiles_file_replace(char const *from, char const *to);
 long port_tag_mp_profiles_scan(void);
 long port_tag_mp_profiles_count(void);
@@ -596,8 +599,21 @@ static boolean share_build(
 	/* (its tags, and the multiplayer or campaign profile, which a client
 	takes a copy of with them) */
 	played_path(kind, mp_profile, multiplayer, sizeof(multiplayer));
+	/* (and a multiplayer profile's players' bipeds and hands, which are no
+	weapons: Forge's map settings play them, forge_map_settings.c) */
+	{
+		static char const *const keys[] = { "biped_red", "hands_red", "biped_blue", "hands_blue", "biped_ffa",
+			"hands_ffa" };
+		char const *names[NUMBEROF(keys)];
+		short key;
+
+		for (key = 0; key < (short)NUMBEROF(keys); key++)
+			names[key] = kind == _played_multiplayer ? port_tag_mp_profiles_option(mp_profile, keys[key]) : NULL;
+		port_tag_profiles_shared_extras_set(names, NUMBEROF(keys));
+	}
 	shared = port_tag_profiles_shared_build(profile, played_group(kind),
 		kind == _played_multiplayer ? multiplayer : NULL, kind == _played_campaign ? multiplayer : NULL, building);
+	port_tag_profiles_shared_extras_set(NULL, 0);
 	if (!shared || !share_hash(building, hosted->hash, &hosted->size, &piece_hashes, &piece_count))
 	{
 		error(_error_silent, "tag multiplayer: the tags of %s cannot be shared", port_tag_profiles_name(profile));
@@ -1474,6 +1490,10 @@ void tag_multiplayer_replay_share_set(
 
 /* the share a level loading plays (opened), of a game that takes it, as
 the kind given (_share_*) */
+/* the share folder of the level last opened with one (its multiplayer or
+campaign profile beside its tags: tag_multiplayer_level_share_file) */
+static char level_share_folder[64];
+
 static long level_share_open(
 	char const *scenario_name,
 	short kind)
@@ -1481,6 +1501,7 @@ static long level_share_open(
 	struct share const *share;
 	char const *folder;
 
+	level_share_folder[0] = 0;
 	/* (the host's level loading before its share was made, its lobby a
 	moment long: made now, though its clients, if any, have not heard of it) */
 	if (hosting() && host_build_pending() && host_takes(network_game_get_game()))
@@ -1500,7 +1521,35 @@ static long level_share_open(
 	}
 	error(_error_silent, "tag multiplayer: %s plays the host's tags (%s)", tag_name_strip_path(scenario_name),
 		share->id);
+	snprintf(level_share_folder, sizeof(level_share_folder), "%s", folder);
 	return port_tag_profiles_shared_open(folder);
+}
+
+boolean tag_multiplayer_level_share_file(
+	char const *file,
+	char *path,
+	unsigned long size)
+{
+	size_t length;
+
+	if (!level_share_folder[0] || !size)
+		return FALSE;
+	port_tag_profiles_shared_path(level_share_folder, path, size);
+	length = strlen(path);
+	snprintf(path + length, size - length, "/%s", file);
+	return TRUE;
+}
+
+/* a key of the file of the level's share (forge_map_settings's option) */
+static char const *share_file_option(
+	void *context,
+	char const *key)
+{
+	static char value[256];
+
+	if (!port_tag_profile_file_option((char const *)context, key, value, sizeof(value)))
+		value[0] = 0;
+	return value;
 }
 
 long tag_multiplayer_level_profile(
@@ -1562,6 +1611,18 @@ void tag_multiplayer_level_loaded(
 	tag_multiplayer_level_unloaded();
 	if (profile == NONE)
 		return;
+#if OPENCE_ENABLE_FORGE
+	/* (the host's players' bipeds, hands and movement, as its share's
+	multiplayer profile has them, on every machine) */
+	{
+		extern void forge_map_settings_players_from_options(char const *(*option)(void *context, char const *key),
+			void *context, int campaign);
+		char path[1024];
+
+		if (tag_multiplayer_level_share_file("multiplayer.toml", path, sizeof(path)))
+			forge_map_settings_players_from_options(share_file_option, path, FALSE);
+	}
+#endif
 	tag_multiplayer_level.active = TRUE;
 	tag_multiplayer_level.random = system_milliseconds() * 2654435761UL | 1;
 	tag_multiplayer_level.rotation = choice_of(port_tag_mp_profiles_option(mp_profile, "rotation"), rotations,

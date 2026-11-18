@@ -140,6 +140,10 @@ campaign profile's, a co-op game's: NULL for none) as campaign.toml; how
 many tags, 0 if none or it cannot be written. An archive made a shared profile's folder
 (whole, or not at all: a folder of that id before is replaced); 0 if it
 cannot be. */
+/* the tags of other groups than the next share's group it holds too (a
+multiplayer profile's players' bipeds and hands), by their names ("path#map":
+a tag of that path and map) */
+void port_tag_profiles_shared_extras_set(const char *const *names, long count);
 long port_tag_profiles_shared_build(long profile, unsigned long group, const char *multiplayer, const char *campaign,
 	const char *archive);
 int port_tag_profiles_shared_unpack(const char *archive, const char *id);

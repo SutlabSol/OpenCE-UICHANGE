@@ -215,4 +215,8 @@ long tag_multiplayer_netgame_item(
 boolean tag_multiplayer_give_loadout(
 	long unit_index);
 
+/* the path of a file of the share the level last opened (its
+multiplayer.toml or campaign.toml); FALSE when it opened none */
+boolean tag_multiplayer_level_share_file(char const *file, char *path, unsigned long size);
+
 #endif
