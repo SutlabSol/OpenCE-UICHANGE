@@ -6549,6 +6549,10 @@ static int forge_point_in_sight(float x, float y, float z)
 settings. When it went down, and whether holding it did something) */
 static uint32_t s_palette_press_ms;
 static int s_palette_press_used;
+/* the palette button's hold toward MAP SETTINGS, for the HUD: 0 to 1
+(0 for a quick tap's first moments, so the palette's tap shows no bar) */
+static float s_map_settings_hold_fraction;
+#define FORGE_MAP_SETTINGS_HOLD_SHOW_MS 120u
 /* (B or Esc pressed in the map settings this frame: its pages go back) */
 static int s_map_settings_back;
 
@@ -7036,6 +7040,15 @@ void forge_3d_update(float dt)
 				s_palette_press_used = 1;
 				if (g_forge.mode == _forge_mode_3d_monitor)
 					forge_map_settings_menu_show();
+			}
+			s_map_settings_hold_fraction = 0.0f;
+			if (cur_f2 && s_palette_press_ms && !s_palette_press_used &&
+				g_forge.mode == _forge_mode_3d_monitor &&
+				now_ms - s_palette_press_ms >= FORGE_MAP_SETTINGS_HOLD_SHOW_MS)
+			{
+				s_map_settings_hold_fraction = (float)(now_ms - s_palette_press_ms) / (float)FORGE_MAP_SETTINGS_HOLD_MS;
+				if (s_map_settings_hold_fraction > 1.0f)
+					s_map_settings_hold_fraction = 1.0f;
 			}
 		}
 		/* Point 1: Only allow F2 / Controller B to toggle Forge Menu when the player is in Forge Mode (_forge_mode_3d_monitor)! */
@@ -9452,9 +9465,20 @@ void forge_3d_draw_hud(
 				rt.x1 = (short)(cx - 40 + (short)(80.0f * s_delete_hold_fraction)); rt.y1 = (short)(cy + 25);
 				draw_quad(&rt, 0xFFFF4040u);
 			}
+			/* and the palette button's, toward MAP SETTINGS (in the reticle's blue) */
+			else if (s_map_settings_hold_fraction > 0.0f)
+			{
+				rt.x0 = (short)(cx - 41); rt.y0 = (short)(cy + 20); rt.x1 = (short)(cx + 41); rt.y1 = (short)(cy + 26);
+				draw_quad(&rt, 0xC0061224u);
+				rt.x0 = (short)(cx - 40); rt.y0 = (short)(cy + 21);
+				rt.x1 = (short)(cx - 40 + (short)(80.0f * s_map_settings_hold_fraction)); rt.y1 = (short)(cy + 25);
+				draw_quad(&rt, 0xFF2896FFu);
+			}
 
-			/* Show hovered object/marker label right below reticle in base-game UI font */
-			if (g_forge.grabbed_live_index < 0 && g_forge.hovered_object_label[0])
+			/* Show hovered object/marker label right below reticle in base-game UI font
+			(not over the MAP SETTINGS hold's bar) */
+			if (g_forge.grabbed_live_index < 0 && g_forge.hovered_object_label[0] &&
+				s_map_settings_hold_fraction <= 0.0f)
 			{
 				char upper_lbl[96];
 				format_clean_uppercase_item_name(g_forge.hovered_object_label, upper_lbl, sizeof(upper_lbl));
