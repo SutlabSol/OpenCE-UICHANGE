@@ -804,6 +804,9 @@ SCREENS["network_setup/map_sharing"] = {
         ("DOWNLOAD MAPS:", "network.map_download", ON_OFF,
          "Allow shared map downloads. CE uses players; MCC\nuses the host and asks before downloading.",
          None),
+        ("MAP ARCHIVE FIRST:", "network.map_archive", ON_OFF,
+         "Get a missing CE map from FractumSeraph's map\narchive before asking the host's players.",
+         "desktop android switch ps5"),
         ("HELP SEND MAPS:", "network.map_seed", ON_OFF,
          "In another's game, send its map to players who\njoin without it, as a torrent's peers do.", None),
         ("UPLOAD LIMIT:", "network.map_seed_upload",
@@ -6602,16 +6605,8 @@ def _mods_hub() -> list:
                                                   ("flags", "pass_unhandled_to_focused_child pause_game"),
                                                   ("bitmap", "bitmaps/gradient")],
                      [*back, '<child widget="main_menu/new_select/sel_list_desc_bkd"/>',
-                      f'<child widget="{MODS_CE}/maps_list"/>', f'<child widget="{MODS_CE}/header_ce"/>',
-                      f'<child widget="{MODS_CE}/browse_maps"/>'])
+                      f'<child widget="{MODS_CE}/maps_list"/>', f'<child widget="{MODS_CE}/header_ce"/>'])
     lines += _hub_header(f"{MODS_CE}/header_ce", "CUSTOM EDITION MAPS")
-    # (BROWSE MAPS: words under the library's rows, greyed, no row to
-    # choose; the code places it below the last row, and hides it in the
-    # other lists: menu_functions.c's maps_update)
-    lines += _widget(f"{MODS_CE}/browse_maps",
-                     [("type", "text"), ("controller", 1), ("left", 32), ("width", 372), ("height", 22),
-                      ("text", "BROWSE MAPS (COMING SOON)"), ("font", "ui\\large_ui"), ("color", "#FF4C5866"),
-                      ("text_y", 4), ("text_flags", "no_focus_test")], [])
     lines += _widget(f"{MODS_CE}/maps_list", [("type", "column_list"), ("width", 640), ("height", 480),
                                               ("flags", "pass_unhandled_to_focused_child up_down_tabs_children"),
                                               ("description", f"{MAPS}/map_details")],
@@ -6621,6 +6616,66 @@ def _mods_hub() -> list:
                         for index in range(MAP_MANAGER_ROWS)],
                       f'<child widget="{MODS_CE}/button_bar" y="414"/>'])
     lines += _mods_folder_bar(MODS_CE, "port maps back", "port ce maps folder")
+    lines += _map_archive()
+    return lines
+
+
+# ---------- CE MAPS' BROWSE MAPS (port/linux/src/map_archive.c,
+# menu_functions.c's "port archive" functions): FractumSeraph's map archive,
+# laid out as the Steam Workshop is, with its text boxes' names: on the left
+# the rows (SEARCH, TYPE, SORT, SHOW, a page of 20 maps, PREVIOUS PAGE and
+# NEXT PAGE), scrolling over more; on the right the row chosen's details
+MAP_ARCHIVE = f"{MODS_CE}/browse"
+MAP_ARCHIVE_ROWS = 11
+
+
+def _map_archive() -> list:
+    base = MAP_ARCHIVE
+    back = ['<on event="b" run="port archive back"/>', '<on event="back" run="port archive back"/>']
+    lines = _widget(f"{MODS_CE}/browse_screen", [("width", 640), ("height", 480),
+                                                ("flags", "pass_unhandled_to_focused_child pause_game"),
+                                                ("bitmap", "bitmaps/gradient")],
+                    [*back, '<child widget="main_menu/new_select/sel_list_desc_bkd"/>',
+                     f'<child widget="{base}/archive_list"/>', f'<child widget="{base}/header_archive"/>'])
+    lines += _hub_header(f"{base}/header_archive", "BROWSE MAPS")
+    rows = [f'<child widget="{base}/op_map_{index + 1}" x="20" y="{73 + 30 * index}"/>'
+            for index in range(MAP_ARCHIVE_ROWS)]
+    lines += _widget(f"{base}/archive_list", [("type", "column_list"), ("width", 640), ("height", 480),
+                                              ("flags", "pass_unhandled_to_focused_child up_down_tabs_children"),
+                                              ("description", f"{base}/archive_details")],
+                     ['<data input="port archive update"/>', '<on event="created" run="port archive init"/>',
+                      '<on event="deleted" run="port archive close"/>', *rows,
+                      f'<child widget="{base}/button_bar" y="414"/>'])
+    for index in range(MAP_ARCHIVE_ROWS):
+        lines += _widget(f"{base}/op_map_{index + 1}",
+                         [("width", 390), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
+                          ("bitmap", "bitmaps/sel_list_item_bkd_top" if index == 0 else "bitmaps/sel_list_item_bkd"),
+                          ("color", "#FF2896FF")],
+                         ['<on event="a" run="port archive choose"/>', '<on event="start" run="port archive choose"/>',
+                          '<on event="left_mouse" run="mouse emit accept event"/>',
+                          f'<child widget="{base}/map_name" x="12"/>',
+                          f'<child widget="{base}/map_state" x="250"/>'])
+    lines += _widget(f"{base}/map_name",
+                     [("type", "text"), ("controller", 1), ("width", 238), ("height", 22), ("font", "ui\\large_ui"),
+                      ("color", "#FF2896FF"), ("text_y", 4)], [])
+    lines += _widget(f"{base}/map_state",
+                     [("type", "text"), ("controller", 1), ("width", 134), ("height", 22), ("font", "ui\\small_ui"),
+                      ("color", "#FF2896FF"), ("align", "right"), ("text_y", 6), ("text_flags", "no_focus_test")],
+                     [])
+    lines += _widget(f"{base}/archive_details", [("width", 640), ("height", 480)],
+                     [f'<child widget="{base}/map_details_name"/>', f'<child widget="{base}/map_details_text"/>'])
+    lines += _widget(f"{base}/map_details_name",
+                     [("type", "text"), ("controller", 1), ("left", 412), ("top", 84), ("width", 200), ("height", 44),
+                      ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
+    lines += _widget(f"{base}/map_details_text",
+                     [("type", "text"), ("controller", 1), ("left", 412), ("top", 130), ("width", 200),
+                      ("height", 272), ("font", "ui\\small_ui"), ("color", "#FF2896FF")], [])
+    lines += _widget(f"{base}/button_bar",
+                     [("type", "column_list"), ("width", 640), ("height", 28),
+                      ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],
+                     [f'<child widget="{base}/button_back" x="510" y="1"/>'])
+    lines += _text_button(f"{base}/button_back", "BACK", ['<on event="a" run="port archive back"/>',
+                                                         '<on event="start" run="port archive back"/>'])
     return lines
 
 

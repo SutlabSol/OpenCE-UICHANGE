@@ -58,6 +58,9 @@ enum
 	/* (the library's) IMPORT CE MAP: the menu's to do (menu_functions.c's
 	map_import_start) */
 	_map_manager_import,
+	/* (the library's) BROWSE MAPS: the map archive's screen, the menu's to
+	open (menu_functions.c's archive functions) */
+	_map_manager_browse,
 };
 
 /* ---------- structures */

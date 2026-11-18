@@ -85,6 +85,7 @@ a part file to open) it leaves for that thread.
 #include "mcc_share.h"
 #include "server_director.h"
 #include "../src/p2p.h"
+#include "../src/map_archive.h"
 #include "../src/posix.h"
 #if defined(HALO_ANDROID) || defined(HALO_PS5)
 /* the host's file connection (port/android/host/host_file_share.c; its calls
@@ -165,6 +166,9 @@ enum
 
 	/* milliseconds */
 	OFFER_TIMEOUT = 30000,
+	/* how long a joiner waits for the map archive's list (GitHub's, when
+	the one kept has not got the map) before asking the host alone */
+	ARCHIVE_LOOKUP_TIMEOUT = 10000,
 	STALL_TIMEOUT = 60000,
 	PROGRESS_INTERVAL = 2000,
 	SOURCES_INTERVAL = 10000,
@@ -292,6 +296,12 @@ enum
 	_download_transferring,
 	_download_done,
 	_download_failed,
+	/* the map looked for in FractumSeraph's map archive (its list still
+	coming), then downloaded from it (map_archive.h), the host asked
+	meanwhile all the same: it knows this machine is downloading, and its
+	offer is there if the archive fails */
+	_download_archive_looking,
+	_download_archive,
 };
 
 enum
@@ -454,7 +464,20 @@ struct download
 	unsigned long last_window_bytes;
 	unsigned long last_window_time;
 	unsigned long logged_at;
+	/* (the map archive's download) the host's answer meanwhile (an
+	_offer_* result, NONE before it), and the file it goes to */
+	short host_offer;
+	char archive_path[MAP_SHARE_PATH_SIZE];
+	unsigned long archive_rate;
 };
+
+/* whether a download is under way, from whichever source */
+static boolean download_active(
+	short state)
+{
+	return state == _download_asking || state == _download_transferring || state == _download_archive_looking ||
+		state == _download_archive;
+}
 
 /* a piece asked of a connection */
 struct request
@@ -1532,6 +1555,10 @@ static void listener_update(
 
 static void download_report(
 	byte state);
+static void download_ask(
+	void);
+static void download_fail(
+	char const *reason);
 static void request_remove(
 	struct connection *connection,
 	short index);
@@ -1857,6 +1884,8 @@ static void download_end(
 	struct download *download = &globals->download;
 	short index;
 
+	if (download->state == _download_archive || download->state == _download_archive_looking)
+		map_archive_fetch_end();
 	globals->failure[0] = 0;
 	fs_source_end(_fs_source_off);
 	globals->fs.token_valid = FALSE;
@@ -2014,7 +2043,7 @@ static boolean map_share_download_begin_unlocked(
 	{
 		return FALSE;
 	}
-	if (download->state == _download_asking || download->state == _download_transferring)
+	if (download_active(download->state))
 	{
 		if (!csstrcmp(download->level_name, level_name) && download->version == version)
 			return TRUE;
@@ -2043,6 +2072,18 @@ static boolean map_share_download_begin_unlocked(
 	download->wanted = wanted;
 	download->asked_at = system_milliseconds();
 	download->progress_at = download->asked_at;
+	download->host_offer = NONE;
+	/* (the map alone: FractumSeraph's map archive may have it, looked for
+	first, network.map_archive; the host asked all the same) */
+	if (wanted == FLAG(_map_share_file_map) && config_boolean("network.map_archive") && map_archive_available())
+	{
+		download->state = _download_archive_looking;
+		error(_error_silent, "map sharing: looking for %s (%08lx) in the map archive, and asking the host", level_name,
+			version);
+		download_ask();
+		map_archive_start();
+		return TRUE;
+	}
 	error(_error_silent, "map sharing: asking the host for %s (files 0x%X)", level_name, (unsigned)wanted);
 	download_ask();
 	return TRUE;
@@ -2061,7 +2102,7 @@ static boolean map_share_tags_download_begin_unlocked(
 	{
 		return FALSE;
 	}
-	if (download->state == _download_asking || download->state == _download_transferring)
+	if (download_active(download->state))
 	{
 		if (download->wanted == FLAG(_map_share_file_tags) &&
 			!csmemcmp(download->tags_hash, hash, MAP_SHARE_HASH_BYTES))
@@ -2111,8 +2152,7 @@ static boolean map_share_downloading_unlocked(
 	/* (MCC package sharing's download, a map of mcc_maps: mcc_share.c) */
 	if (mcc_share_game_downloading(level_name))
 		return TRUE;
-	return (download->state == _download_asking || download->state == _download_transferring) &&
-		level_name && !csstrcmp(download->level_name, level_name);
+	return download_active(download->state) && level_name && !csstrcmp(download->level_name, level_name);
 }
 
 static boolean map_share_holds_players_unlocked(
@@ -2130,7 +2170,11 @@ static boolean map_share_holds_players_unlocked(
 	if (!map_share_host() && game && !game->map.name[0])
 		return TRUE;
 	/* (failed: the game is being left) */
+	/* (the map archive's: held until the host says the game is not in
+	progress) */
 	return download->state == _download_asking || download->state == _download_failed ||
+		download->state == _download_archive_looking ||
+		(download->state == _download_archive && (download->host_offer == NONE || download->in_progress)) ||
 		(download->state == _download_transferring && download->in_progress);
 }
 
@@ -2199,6 +2243,15 @@ static void download_offered(
 	byte offered = 0;
 	short index;
 
+	/* (the map archive tried first: the host's answer kept, for the
+	archive's failing) */
+	if ((download->state == _download_archive_looking || download->state == _download_archive) &&
+		!csstrcmp(offer->level_name, download->level_name))
+	{
+		download->host_offer = offer->result;
+		download->in_progress = TEST_FLAG(offer->flags, _offer_in_progress_bit);
+		return;
+	}
 	if (download->state != _download_asking || csstrcmp(offer->level_name, download->level_name))
 		return;
 	if (offer->result == _offer_off)
@@ -3947,6 +4000,149 @@ static unsigned long download_rate(
 		(unsigned long)((unsigned long long)download->last_window_bytes * 1000 / download->last_window_time) : 0;
 }
 
+/* ---------- the map from FractumSeraph's map archive (map_archive.h),
+before the host's players: map_share_download_begin_unlocked */
+
+/* the archive has not got the map, or could not send it: the host asked
+again (its offer then taken as ever), unless it said it shares none */
+static void download_archive_fall_back(
+	char const *why)
+{
+	struct download *download = &map_share_globals.download;
+	char reason[320];
+
+	error(_error_silent, "map sharing: %s from the map archive: %s", download->level_name, why);
+	map_archive_fetch_end();
+	if (download->host_offer == _offer_off || download->host_offer == _offer_unavailable)
+	{
+		snprintf(reason, sizeof(reason), "The map archive could not send the map (%s), and the host %s.", why,
+			download->host_offer == _offer_off ? "does not share its maps" : "cannot share this map");
+		download->state = _download_asking;
+		download_fail(reason);
+		return;
+	}
+	download->state = _download_asking;
+	download->asked_at = system_milliseconds();
+	download->progress_at = download->asked_at;
+	download->done_bytes = 0;
+	download->total_bytes = 0;
+	download_ask();
+}
+
+/* the archive's file in custom_maps: its hash kept, the map lists told,
+the map checked */
+static void download_archive_finish(
+	byte const *hash)
+{
+	struct download *download = &map_share_globals.download;
+	char message[256];
+	char path[MAP_SHARE_PATH_SIZE];
+
+	csstrncpy(path, download->archive_path, sizeof(path) - 1);
+	path[sizeof(path) - 1] = 0;
+	map_share_map_hash_remember(path, hash);
+	custom_edition_maps_look_again();
+	if (!custom_edition_cache_present(download->level_name, download->version, message, sizeof(message)))
+	{
+		DeleteFileA(path);
+		csstrncpy(download->message, message, sizeof(download->message) - 1);
+		download_fail("The map was downloaded from the map archive, but cannot be played.");
+		return;
+	}
+	error(_error_silent, "map sharing: downloaded %s from the map archive (%lu bytes) as %s", download->level_name,
+		download->total_bytes, path);
+	download->done_bytes = download->total_bytes;
+	download_report(_progress_done);
+	download_end(FALSE);
+	download->state = _download_done;
+}
+
+/* (download_update's) */
+static void download_archive_update(
+	unsigned long now)
+{
+	struct download *download = &map_share_globals.download;
+	char const *name = tag_name_strip_path(download->level_name);
+
+	if (download->state == _download_archive_looking)
+	{
+		unsigned long long size = 0;
+
+		switch (map_archive_lookup(name, download->version, &size))
+		{
+		case MAP_ARCHIVE_LOOKUP_FOUND:
+		{
+			char file_name[MAP_ARCHIVE_NAME_SIZE];
+
+			/* (by its own name, or beside another version of it, by the
+			name and its version's digits, as the host's download names
+			it) */
+			snprintf(download->archive_path, sizeof(download->archive_path), "%s%s.map", CUSTOM_EDITION_MAP_DIRECTORY,
+				name);
+			snprintf(file_name, sizeof(file_name), "%s.map", name);
+			if (GetFileAttributesA(download->archive_path) != (unsigned long)-1)
+			{
+				snprintf(download->archive_path, sizeof(download->archive_path), "%s%s_%08lx.map",
+					CUSTOM_EDITION_MAP_DIRECTORY, name, download->version);
+				snprintf(file_name, sizeof(file_name), "%s_%08lx.map", name, download->version);
+			}
+			if (size > MAXIMUM_MAP_BYTES || !map_archive_fetch(name, download->version, file_name))
+			{
+				download_archive_fall_back("it could not be asked for");
+				return;
+			}
+			download->state = _download_archive;
+			download->total_bytes = (unsigned long)size;
+			download->done_bytes = 0;
+			download->progress_at = now;
+			download->reported_at = 0;
+			error(_error_silent, "map sharing: downloading %s from the map archive (%llu bytes)", download->level_name,
+				size);
+			break;
+		}
+		case MAP_ARCHIVE_LOOKUP_WAIT:
+			if (elapsed(download->asked_at, now, ARCHIVE_LOOKUP_TIMEOUT))
+				download_archive_fall_back("its list did not come in time");
+			break;
+		default:
+			download_archive_fall_back("it is not in the archive's list");
+			break;
+		}
+		return;
+	}
+	{
+		unsigned long long done = 0;
+		unsigned long long total = 0;
+		unsigned long rate = 0;
+		byte hash[MAP_ARCHIVE_HASH_BYTES];
+		char why[200];
+
+		switch (map_archive_fetch_status(&done, &total, &rate, hash, why, (int)sizeof(why)))
+		{
+		case MAP_ARCHIVE_FETCH_RUNNING:
+			if ((unsigned long)done != download->done_bytes)
+				download->progress_at = now;
+			download->done_bytes = (unsigned long)done;
+			download->archive_rate = rate;
+			if (elapsed(download->progress_at, now, STALL_TIMEOUT))
+			{
+				download_archive_fall_back("it stopped coming");
+				return;
+			}
+			if (!download->reported_at || elapsed(download->reported_at, now, PROGRESS_INTERVAL))
+				download_report(_progress_downloading);
+			break;
+		case MAP_ARCHIVE_FETCH_DONE:
+			map_archive_fetch_end();
+			download_archive_finish(hash);
+			break;
+		default:
+			download_archive_fall_back(why[0] ? why : "it failed");
+			break;
+		}
+	}
+}
+
 static void download_update(
 	void)
 {
@@ -3955,7 +4151,7 @@ static void download_update(
 	unsigned long now = system_milliseconds();
 	short index;
 
-	if (download->state != _download_asking && download->state != _download_transferring)
+	if (!download_active(download->state))
 		return;
 	/* (the game left, or its map changed) */
 	if (!game || csstrcmp(game->map.name, download->level_name))
@@ -3963,6 +4159,11 @@ static void download_update(
 		error(_error_silent, "map sharing: the download of %s stopped: the game is on another map now",
 			download->level_name);
 		download_end(FALSE);
+		return;
+	}
+	if (download->state == _download_archive_looking || download->state == _download_archive)
+	{
+		download_archive_update(now);
 		return;
 	}
 	if (download->state == _download_asking)
@@ -4830,7 +5031,7 @@ static void map_share_render_unlocked(
 	short base_length;
 	long percent;
 
-	if (download->state != _download_asking && download->state != _download_transferring)
+	if (!download_active(download->state))
 		return;
 	font_tag_index = interface_get_tag_index(_interface_font_terminal);
 	if (font_tag_index == NONE)
@@ -4845,6 +5046,16 @@ static void map_share_render_unlocked(
 	if (download->state == _download_asking)
 	{
 		snprintf(text, sizeof(text), "Asking the host for %s...", what);
+	}
+	else if (download->state == _download_archive_looking)
+	{
+		snprintf(text, sizeof(text), "Looking for %s in the map archive...", what);
+	}
+	else if (download->state == _download_archive)
+	{
+		percent = download->total_bytes ? (long)(download->done_bytes / (download->total_bytes / 100 + 1)) : 0;
+		snprintf(text, sizeof(text), "Downloading %s from the map archive: %ld%% of %lu MB, %lu KB/s", what,
+			MIN(percent, 100), (download->total_bytes + 0x80000) >> 20, download->archive_rate >> 10);
 	}
 	else
 	{

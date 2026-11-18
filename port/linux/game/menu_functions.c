@@ -147,6 +147,7 @@ their handlers open opens.
 #include "tag_pack.h"
 #include "map_manager.h"
 #include "../src/steam_downloads.h"
+#include "../src/map_archive.h"
 #include "interface/virtual_keyboard.h"
 #include "social.h"
 #include "social_chat.h"
@@ -12226,17 +12227,6 @@ static void maps_update(struct widget_instance *list)
 	first = map_manager_first();
 	chosen = map_manager_chosen();
 	count = map_manager_count();
-	/* (CE MAPS' BROWSE MAPS, greyed under the library's rows, a row's
-	place below the last: tools/port_settings.py's _mods_hub) */
-	{
-		struct widget_instance *browse = named(screen_of(list), "browse_maps", 0);
-
-		if (browse)
-		{
-			visible_set(browse, map_manager_library_shown());
-			browse->vertical_offset = (short)(MAP_MANAGER_ROW_TOP + MAP_MANAGER_ROW_PITCH * count);
-		}
-	}
 	/* (a list opened: its row chosen focused) */
 	if (map_manager_list() != maps_screen.list_shown)
 	{
@@ -12625,6 +12615,232 @@ struct bitmap_data *steam_menu_picture(void)
 	return steam_screen.qr;
 }
 
+/* ---------- BROWSE MAPS (Mods > CE MAPS > BROWSE MAPS: map_archive.c,
+tools/port_settings.py's _map_archive): FractumSeraph's map archive, laid
+out as the Steam Workshop is, with its text boxes' names; the rows SEARCH,
+TYPE, SORT and SHOW, a page of maps, and the pages */
+
+#define ARCHIVE_SCREEN "pc\\main_menu\\mods\\ce_maps\\browse_screen"
+#define ARCHIVE_ROWS 11
+#define ARCHIVE_DETAILS_LINES 9
+
+static boolean hub_open(struct widget_instance *widget, char const *name, boolean *widget_deleted);
+
+static struct
+{
+	char shown[MOD_DETAILS_LENGTH];
+	char row_shown[ARCHIVE_ROWS][2 * ROW_TEXT_LENGTH + 16];
+	/* the search's keyboard up, and what is typed in it */
+	boolean typing;
+	wchar_t typed[64];
+} archive_screen;
+
+/* (locked) the place on the list of the row, else NONE */
+static short archive_row_place(struct widget_instance *row)
+{
+	short place = row ? (short)(*map_archive_first() + atoi(row->name + 7) - 1) : NONE;
+
+	return place >= 0 && place < map_archive_count() ? place : NONE;
+}
+
+/* "port archive init" and "port archive close" */
+static boolean archive_screen_reset(boolean opening)
+{
+	short index;
+
+	if (opening)
+		map_archive_open();
+	else
+		map_archive_close();
+	archive_screen.shown[0] = 0;
+	csmemset(archive_screen.row_shown, 0, sizeof(archive_screen.row_shown));
+	for (index = 0; index < NUMBER_OF_MOD_TEXT_BOXES; index++)
+	{
+		mods_screen.fonts[index] = NONE;
+		mods_screen.widths[index] = 0;
+	}
+	return TRUE;
+}
+
+/* "port archive update": as "port steam update", of map_archive.c's rows
+(the last frame's standing when its thread holds the lock); the map lists
+look again when it put a map in custom_maps */
+static void archive_update(struct widget_instance *list)
+{
+	struct widget_instance *row;
+	struct widget_instance *focused;
+	struct widget_instance *details = list->parameters.list.extended_description;
+	short *first;
+	short *chosen;
+	short count;
+	short focused_index;
+	char search[64];
+	boolean search_wanted;
+
+	/* (what was typed, once the keyboard has closed) */
+	if (archive_screen.typing && !virtual_keyboard_active())
+	{
+		char text[64];
+		short index;
+
+		for (index = 0; index < (short)NUMBEROF(text) - 1 && archive_screen.typed[index]; index++)
+			text[index] = archive_screen.typed[index] < 128 ? (char)archive_screen.typed[index] : '?';
+		text[index] = 0;
+		archive_screen.typing = FALSE;
+		if (virtual_keyboard_last_exit_saved_text())
+			map_archive_search(text);
+	}
+	if (!map_archive_try_lock())
+		return;
+	if (map_archive_take_rescan())
+	{
+		custom_edition_maps_look_again();
+		map_browse_forget();
+	}
+	search_wanted = !archive_screen.typing && !virtual_keyboard_active() &&
+		map_archive_take_search(search, (int)sizeof(search));
+	first = map_archive_first();
+	chosen = map_archive_chosen();
+	count = (short)map_archive_count();
+	if (*chosen >= count)
+		*chosen = (short)MAX(count - 1, 0);
+	/* (the rows changed: the chosen one focused again) */
+	if (map_archive_take_moved())
+	{
+		if (*chosen < *first || *chosen >= *first + ARCHIVE_ROWS)
+			*first = (short)PIN(*chosen - ARCHIVE_ROWS / 2, 0, MAX(count - ARCHIVE_ROWS, 0));
+		focus_row(list, count ? (short)(*chosen - *first) : NONE);
+		csmemset(archive_screen.row_shown, 0, sizeof(archive_screen.row_shown));
+	}
+	focused = maps_row(list->focused_child);
+	focused_index = focused ? (short)(atoi(focused->name + 7) - 1) : NONE;
+	if (focused_index == ARCHIVE_ROWS - 1 && *first + ARCHIVE_ROWS < count && list_scrolls_at_end())
+	{
+		(*first)++;
+		focus_row(list, --focused_index);
+	}
+	else if (focused_index == 0 && *first > 0 && list_scrolls_at_end())
+	{
+		(*first)--;
+		focus_row(list, ++focused_index);
+	}
+	if (*first > 0 && *first + ARCHIVE_ROWS > count)
+		*first = (short)MAX(0, count - ARCHIVE_ROWS);
+	if (focused_index != NONE && *first + focused_index < count)
+		*chosen = (short)(*first + focused_index);
+	for (row = list->child; row; row = row->next)
+	{
+		short place;
+		short row_index;
+		char name[ROW_TEXT_LENGTH];
+		char state[ROW_TEXT_LENGTH];
+		char shown[sizeof(archive_screen.row_shown[0])];
+
+		if (strncmp(row->name, "op_map_", 7))
+			continue;
+		row->animation.current_frame_index = row == focused ? 1 : 0;
+		place = archive_row_place(row);
+		row->visible = place != NONE;
+		if (place == NONE)
+		{
+			if (row == focused)
+				focus_row(list, count ? (short)(count - 1 - *first) : NONE);
+			continue;
+		}
+		row_index = (short)PIN(atoi(row->name + 7) - 1, 0, ARCHIVE_ROWS - 1);
+		map_archive_row(place, name, sizeof(name), state, sizeof(state));
+		snprintf(shown, sizeof(shown), "%s|%s|%ld", name, state, mods_screen.fonts[_mod_row_name]);
+		if (strcmp(shown, archive_screen.row_shown[row_index]))
+		{
+			char shortened[MOD_DETAILS_LENGTH];
+			wchar_t wide[ROW_TEXT_LENGTH];
+
+			if (mods_text_fits(_mod_row_name, name, strlen(name)))
+				snprintf(shortened, sizeof(shortened), "%s", name);
+			else
+				mods_text_shorten(_mod_row_name, name, strlen(name), shortened, sizeof(shortened));
+			mods_wide_text(shortened, wide, ROW_TEXT_LENGTH);
+			text_set(named(row, "map_name", 0), wide);
+			mods_wide_text(state, wide, ROW_TEXT_LENGTH);
+			text_set(named(row, "map_state", 0), wide);
+			snprintf(archive_screen.row_shown[row_index], sizeof(archive_screen.row_shown[0]), "%s", shown);
+		}
+	}
+	if (details)
+	{
+		char title[MOD_DETAILS_LENGTH];
+		char text[MOD_DETAILS_LENGTH];
+		char wrapped[MOD_DETAILS_LENGTH];
+		char shown[sizeof(archive_screen.shown)];
+		wchar_t wide[MOD_DETAILS_LENGTH];
+
+		map_archive_details(count ? *chosen : NONE, title, sizeof(title), text, sizeof(text));
+		snprintf(shown, sizeof(shown), "%ld %d %ld %d|%s|%s", mods_screen.fonts[_mod_details_name],
+			mods_screen.widths[_mod_details_name], mods_screen.fonts[_mod_details_text],
+			mods_screen.widths[_mod_details_text], title, text);
+		if (strcmp(shown, archive_screen.shown))
+		{
+			snprintf(archive_screen.shown, sizeof(archive_screen.shown), "%s", shown);
+			wrapped[0] = 0;
+			mods_wrap(title, wrapped, sizeof(wrapped), _mod_details_name, 2, 0);
+			mods_wide_text(wrapped, wide, NUMBEROF(wide));
+			text_set_length(named(details, "map_details_name", 0), wide, NUMBEROF(wide));
+			wrapped[0] = 0;
+			mods_wrap(text, wrapped, sizeof(wrapped), _mod_details_text, ARCHIVE_DETAILS_LINES, 0);
+			mods_wide_text(wrapped, wide, NUMBEROF(wide));
+			text_set_length(named(details, "map_details_text", 0), wide, NUMBEROF(wide));
+		}
+	}
+	map_archive_unlock();
+	/* (the search's keyboard, opened outside the lock) */
+	if (search_wanted)
+	{
+		short index;
+		static wchar_t const caption[] = L"SEARCH MAPS";
+
+		csmemset(archive_screen.typed, 0, sizeof(archive_screen.typed));
+		for (index = 0; search[index] && index < (short)NUMBEROF(archive_screen.typed) - 1; index++)
+			archive_screen.typed[index] = (wchar_t)(unsigned char)search[index];
+		virtual_keyboard_set_caption(caption);
+		virtual_keyboard_allow_any_name();
+		/* (an empty search shows every map) */
+		virtual_keyboard_allow_empty_text();
+		if (virtual_keyboard_launch(archive_screen.typed, (word)sizeof(archive_screen.typed), 8))
+			archive_screen.typing = TRUE;
+	}
+}
+
+/* "port archive choose" (A on a row) */
+static boolean archive_choose(struct widget_instance *widget)
+{
+	short place;
+
+	if (!map_archive_try_lock())
+		return TRUE;
+	place = archive_row_place(maps_row(widget));
+	if (place == NONE)
+		place = *map_archive_chosen();
+	*map_archive_chosen() = place;
+	map_archive_unlock();
+	ui_play_audio_feedback_sound(SOUND_FORWARD);
+	map_archive_choose(place);
+	return TRUE;
+}
+
+/* "port archive back" (B, and BACK): not while maps are coming */
+static boolean archive_back(struct widget_instance *widget, boolean *widget_deleted)
+{
+	if (map_archive_back())
+	{
+		ui_play_audio_feedback_sound(SOUND_ERROR);
+		return TRUE;
+	}
+	ui_play_audio_feedback_sound(SOUND_BACK);
+	ui_widget_port_go_back(widget);
+	*widget_deleted = TRUE;
+	return TRUE;
+}
+
 /* "port maps choose" (A on a row): a Theater loading closes the menus
 with its game; the map deleted, back to the map list */
 static boolean maps_choose(struct widget_instance *widget, boolean *widget_deleted)
@@ -12644,6 +12860,8 @@ static boolean maps_choose(struct widget_instance *widget, boolean *widget_delet
 	case _map_manager_import:
 		map_import_start();
 		break;
+	case _map_manager_browse:
+		return hub_open(widget, ARCHIVE_SCREEN, widget_deleted);
 	}
 	return TRUE;
 }
@@ -26391,6 +26609,12 @@ boolean pc_menu_event_function_invoke(
             return steam_choose(widget);
         else if (!strcmp(name,"port steam back"))
             return steam_back(widget, widget_deleted);
+        else if (!strcmp(name,"port archive init") || !strcmp(name,"port archive close"))
+            return archive_screen_reset(!strcmp(name,"port archive init"));
+        else if (!strcmp(name,"port archive choose"))
+            return archive_choose(widget);
+        else if (!strcmp(name,"port archive back"))
+            return archive_back(widget, widget_deleted);
         else if (!strcmp(name,"port mcc downloads open")) mcc_share_menu_open();
         else if (!strcmp(name,"port mcc downloads previous")) mcc_share_menu_step(-1);
         else if (!strcmp(name,"port mcc downloads next")) mcc_share_menu_step(1);
@@ -26476,6 +26700,18 @@ boolean pc_menu_event_function_invoke(
 		else if (!strcmp(name, "port steam back"))
 		{
 			return steam_back(widget, widget_deleted);
+		}
+		else if (!strcmp(name, "port archive init") || !strcmp(name, "port archive close"))
+		{
+			return archive_screen_reset(!strcmp(name, "port archive init"));
+		}
+		else if (!strcmp(name, "port archive choose"))
+		{
+			return archive_choose(widget);
+		}
+		else if (!strcmp(name, "port archive back"))
+		{
+			return archive_back(widget, widget_deleted);
 		}
 		else if (!strcmp(name, "port maps init") || !strcmp(name, "port maps close"))
 		{
@@ -27149,6 +27385,8 @@ void pc_menu_game_data_function_invoke(
 		hub_update(widget);
 	else if (!strcmp(name, "port steam update"))
 		steam_update(widget);
+	else if (!strcmp(name, "port archive update"))
+		archive_update(widget);
 	else if (!strcmp(name, "port social update"))
 		social_screen_update(widget);
 	else if (!strcmp(name, "color picker update"))

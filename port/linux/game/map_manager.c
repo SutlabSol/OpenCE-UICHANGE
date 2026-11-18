@@ -30,6 +30,7 @@ keyboard, which holds 31 characters), with Windows' line ends.
 #include "map_pictures.h"
 #include "map_manager.h"
 #include "network_replay.h"
+#include "../src/map_archive.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -101,6 +102,8 @@ enum
 	_row_shared_files,
 	_row_import,
 	_row_manage,
+	/* (FractumSeraph's map archive: menu_functions.c opens its screen) */
+	_row_browse,
 	_row_new_folder,
 	_row_folder,
 	_row_library_map,
@@ -444,6 +447,8 @@ static void rows_build(
 		if (manager.can_import)
 			row_add(_row_import, 0);
 		row_add(_row_manage, 0);
+		if (map_archive_available())
+			row_add(_row_browse, 0);
 		break;
 	case _list_manage:
 		row_add(_row_new_folder, 0);
@@ -1188,6 +1193,9 @@ void map_manager_row(
 	case _row_manage:
 		snprintf(name, (size_t)name_size, "MANAGE MAPS");
 		break;
+	case _row_browse:
+		snprintf(name, (size_t)name_size, "BROWSE MAPS");
+		break;
 	case _row_new_folder:
 		snprintf(name, (size_t)name_size, "NEW FOLDER");
 		break;
@@ -1337,6 +1345,11 @@ void map_manager_details(
 			snprintf(about, sizeof(about), "custom_maps' folders and maps: A lists them, to move, describe, picture "
 				"or delete a map, and to make or delete folders.");
 			break;
+		case _row_browse:
+			snprintf(title, (size_t)title_size, "Browse maps");
+			snprintf(about, sizeof(about), "The Custom Edition maps of FractumSeraph's map archive: search them, "
+				"filter them by type, and download them into custom_maps. A map you have already says INSTALLED.");
+			break;
 		case _row_new_folder:
 			snprintf(title, (size_t)title_size, "New folder");
 			snprintf(about, sizeof(about), "A names a new folder in custom_maps. A map's FOLDER row moves it in; "
@@ -1424,6 +1437,8 @@ short map_manager_choose(
 		manager.folder[0] = 0;
 		list_open(_list_manage);
 		break;
+	case _row_browse:
+		return _map_manager_browse;
 	case _row_new_folder:
 		return keyboard_open(_typing_new_folder, 0) ? _map_manager_typing : _map_manager_stays;
 	case _row_folder:

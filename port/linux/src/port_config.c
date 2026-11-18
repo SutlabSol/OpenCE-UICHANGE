@@ -1432,6 +1432,12 @@ static const struct config_setting config_settings[] =
 		"download it (and the resource maps it needs) from the game's players\n"
 		"into custom_maps, if its host shares it (network.map_share); false\n"
 		"leaves the game, saying which map is missing." },
+	{ "network.map_archive", _config_boolean, "true", "HALO_NET_MAP_ARCHIVE", _environment_value, _platform_all,
+		"When joining a game on a Custom Edition map this machine does not\n"
+		"have (network.map_download on): look for the host's version of it in\n"
+		"FractumSeraph's map archive first and download it from there, asking\n"
+		"the host's players only if the archive has not got it\n"
+		"(port/linux/src/map_archive.c). Not in the browser build." },
 	{ "network.coop_public", _config_boolean, "false", "HALO_NET_COOP_PUBLIC", _environment_value, _platform_all,
 		"Whether an online co-op game (Create Game > Internet, a SINGLEPLAYER\n"
 		"map) starts as PUBLIC or, false, PRIVATE: Server Setup's LISTING in\n"

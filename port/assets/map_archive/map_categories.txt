@@ -1,0 +1,44 @@
+# map archive categories v1
+# serial 1793481173
+# file name, version (the share hash's first 8 hex digits), and S solo, M multiplayer,
+# A multiplayer with AI, U user interface, ? not read (tools/map_archive_categories.py)
+''H3''_prisioner.map	CE04DF8B	M
+(!V1¡)-(HR)Floodinthebase.map	79750E76	A
+(182) Zombies.map	B969BB66	M
+(182)_Chatroom_V2.map	A33C97B6	A
+(182)_Hanger.map	5F94FA3F	M
+(182)_Zombies_ME.map	FB7A4AEA	M
+(182)_Zombies_V2.map	78828B20	M
+(182)_Zombies_V3.map	5592F159	M
+(arbiter)VS(elite).map	90749710	A
+(CSK)Gulch.map	21ADFB23	A
+(DMC)PokemonStadium.map	6D52D7D9	A
+(H2)bloodgulch.map	E6454976	M
+(H3)-Battle_field.map	B3F98F1B	M
+(H3)_Guardians.map	7F5E85DC	M
+(h3)_precipice_gulch.map	313B4C22	M
+(h3)_swampthing.map	C7FA67BF	M
+(H4)Batalla Total.map	1CF1E458	A
+(H4)Duelo-Spartan.map	EEFCAE7C	A
+(H4)Prisoner.map	803EB1A0	A
+(H4)Rojos-vs-Azules.map	00C1A1A6	A
+(H4)Sanctified.map	370DEF1B	A
+(H4)Spartans-Vs-Elites.map	997C2163	A
+(H4)Wizard.map	9A5E12AA	A
+(H5)Rat-Spartan.map	7D3E830E	A
+(H5)Rojos-Vs-Azules.map	0A0D6D8F	A
+(HR)Covenant-vs-flood.map	2F15BB7B	A
+(HR)Emilie-Vs-Covenant.map	1E0DF39A	A
+(hr)floodinthebase.map	79750E76	A
+(HR)Kat-Vs-Covenant.map	E0765AE5	A
+(HR)Marines-Vs-Covenant.map	2FF2C1A2	A
+(HR)Noble1-vs-Covenant.map	A429662C	A
+(HR)Noble6-vs-Covenant.map	77C3493B	A
+(HR)Noble6-vs-flood.map	9B515D4A	A
+(HR)Survivor-Emile.map	DAF075A7	A
+(SHY)_ALPHA_CANYON.map	9E67F1B4	M
+(V2)EMILE-Vs-Covenant.map	65B45634	A
+-ib-portent.map	FF0F6DC0	M
+-ib-portent_v2.map	CC6D70E5	M
+-IB-school.map	F2BC038D	M
+-IB-~Zanzibar.map	4864832D	M

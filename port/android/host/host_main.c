@@ -876,7 +876,7 @@ static void *game_main(void *unused)
 	each start, as a desktop update replaces the files beside its game */
 	{
 		static char const *const shipped[] = { "brokers.txt", "rank_icons.bin", "forge_markers.bin",
-			"tag_props.bin" };
+			"tag_props.bin", "map_categories.txt" };
 		size_t index;
 
 		for (index = 0; index < sizeof(shipped) / sizeof(shipped[0]); index++)

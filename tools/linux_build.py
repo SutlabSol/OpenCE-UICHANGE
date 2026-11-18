@@ -165,7 +165,10 @@ GAME_DATA_FILES = [Path("port/assets/firefight/rank_icons.bin"),
                    Path("port/assets/forge/forge_markers.bin"),
                    # (the game's props, Firefight's and Forge's: tools/prop_assets.py,
                    # port/linux/src/port_tag_profiles.c's port_tag_profiles_props_open)
-                   Path("port/assets/props/tag_props.bin")]
+                   Path("port/assets/props/tag_props.bin"),
+                   # (FractumSeraph's map archive's categories, BROWSE MAPS' TYPE:
+                   # tools/map_archive_categories.py, port/linux/src/map_archive.c)
+                   Path("port/assets/map_archive/map_categories.txt")]
 # internet play's UPnP (port/linux/src/posix_upnp.c)
 MINIUPNPC_DIR = Path("port/third_party/miniupnpc")
 # the Custom Edition maps' Ogg Vorbis decoder (custom_edition_sounds.c),

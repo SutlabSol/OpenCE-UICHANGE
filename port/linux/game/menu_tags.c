@@ -378,6 +378,8 @@ static char const *const port_function_names[] =
 	"port map import page closed",
 	/* the Steam Workshop (menu_functions.c's steam_*) */
 	"port steam init", "port steam close", "port steam choose", "port steam back",
+	/* (CE MAPS' BROWSE MAPS: FractumSeraph's map archive, map_archive.c) */
+	"port archive init", "port archive close", "port archive choose", "port archive back",
 	"port pause end game", "port coop friendly fire",
 	"port coop begin", "port coop player 2 list initialize", "port coop player 2",
 	"port lobby open", "port lobby add player", "port lobby join", "port lobby leave", "port lobby player menu",
@@ -481,6 +483,8 @@ static char const *const port_function_names[] =
 	"port mcc maps folder",
 	/* (the Steam Workshop screen: steam_downloads.c) */
 	"port steam init", "port steam close", "port steam choose", "port steam back",
+	/* (CE MAPS' BROWSE MAPS: FractumSeraph's map archive, map_archive.c) */
+	"port archive init", "port archive close", "port archive choose", "port archive back",
 	/* (Social: the main menu's Y, and Chat's BLOCKED & MUTED: menu_functions.c, social_menu.c) */
 	"port social init", "port social close", "port social choose", "port social back", "port social open",
 	"port social moderation", "port social options", "port social join", "port social profile", "port social identity",
@@ -548,7 +552,7 @@ static char const *const port_game_data_input_names[] =
 	"port mcc import update", "port mcc import text",
 	/* (the consoles' IMPORT's upload page: map_import_page.c) */
 	"port map import page update", "port map import page text",
-	"port steam update",
+	"port steam update", "port archive update",
 	/* (network co-op's pause menu's FRIENDLY FIRE: its text, ON or OFF) */
 	"port coop friendly fire text",
 	/* (New Game's LEADERBOARD's rows, and the daily challenge's) */
@@ -566,7 +570,7 @@ static char const *const port_game_data_input_names[] =
 	/* (the main menu's Theater) */
 	"port theater update",
 	/* (the Map Manager) */
-	"port maps update", "port steam update",
+	"port maps update", "port steam update", "port archive update",
 	/* (Social) */
 	"port social update",
 	"port controller update",
