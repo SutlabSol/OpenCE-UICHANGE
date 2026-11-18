@@ -381,7 +381,10 @@
   }
 
   const platformOptions = [
-    { key: 'android', label: 'Android APK', matches: (name) => /android/i.test(name) && /\.apk$/i.test(name) && !/debug/i.test(name) },
+    // the game's APK, halo-contentevolved-* (com.halo.contentevolved) from build 142
+    // on; up to build 141 it was halo-android-*, a name now only the bridge's zips keep
+    { key: 'android', label: 'Android APK', matches: (name) => /^halo-contentevolved-/i.test(name) && /\.apk$/i.test(name) && !/debug/i.test(name),
+      fallback: (name) => /android/i.test(name) && /\.apk$/i.test(name) && !/debug/i.test(name) },
     { key: 'switch', label: 'Nintendo Switch', matches: (name) => /switch/i.test(name) && /\.zip$/i.test(name) && !/debug/i.test(name) },
     { key: 'web', label: 'Web', matches: (name) => /web/i.test(name) && /\.zip$/i.test(name) && !/debug/i.test(name) },
     { key: 'windows', label: 'Windows', matches: (name) => /windows/i.test(name) && /\.zip$/i.test(name) && !/debug/i.test(name) },
@@ -410,7 +413,8 @@
     const assets = Array.isArray(release.assets) ? release.assets.filter((asset) => asset &&
       typeof asset.name === 'string' && typeof asset.browser_download_url === 'string' && validReleaseAsset(asset)) : [];
     const links = platformOptions.flatMap((platform) => {
-      const asset = assets.find((candidate) => platform.matches(candidate.name));
+      const asset = assets.find((candidate) => platform.matches(candidate.name)) ||
+        (platform.fallback && assets.find((candidate) => platform.fallback(candidate.name)));
       if (!asset) return [];
       const link = document.createElement('a');
       link.className = 'platform-download';

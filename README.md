@@ -576,7 +576,7 @@ The latest published builds are available individually, or from the
 
 | Platform | Download |
 | --- | --- |
-| Android app | [APK](https://github.com/Watanoge/halo-content-evolved/releases/latest/download/halo-android-release.apk) · [ZIP](https://github.com/Watanoge/halo-content-evolved/releases/latest/download/halo-android-release.zip) |
+| Android app | [APK](https://github.com/Watanoge/halo-content-evolved/releases/latest/download/halo-contentevolved-release.apk) · [ZIP](https://github.com/Watanoge/halo-content-evolved/releases/latest/download/halo-contentevolved-release.zip) |
 | Nintendo Switch | [halo-switch-release.zip](https://github.com/Watanoge/halo-content-evolved/releases/latest/download/halo-switch-release.zip) |
 | Web | [halo-web-release.zip](https://github.com/Watanoge/halo-content-evolved/releases/latest/download/halo-web-release.zip) · [play online](https://opence.watanoge.com/) |
 | Windows | [halo-windows-release.zip](https://github.com/Watanoge/halo-content-evolved/releases/latest/download/halo-windows-release.zip) |
