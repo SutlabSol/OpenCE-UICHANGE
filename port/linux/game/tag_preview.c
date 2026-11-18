@@ -28,6 +28,14 @@ profile's tag from its bundle (its tags, and its vertices, strips and
 pixels), the map open's from the map's tags already loaded; and kept while
 it is chosen, with what it needs to work (tag_preview_needs). It is drawn to
 fill the widget's shape whichever way it has turned.
+
+A sky's model (tag_injector_mesh's sky) is seen as the game draws it, from
+inside: from its origin, by perspective, turning about its up axis and
+looking a little up, only its triangles that face the eye (as most of
+them do, which says which way they turn), cut at a near plane. Its opaque
+parts are drawn first, the nearest kept; then its transparent shaders'
+parts (their first map) over them in its model's order, each by its
+shader's framebuffer blend function, where nothing opaque is nearer.
 */
 
 /* ---------- headers */
@@ -79,6 +87,15 @@ made to be lit by more than this light) */
 #define TAG_PREVIEW_LIGHT_TOWARD 0.70f
 #define TAG_PREVIEW_TEXTURE_BRIGHTNESS 1.5f
 #define TAG_PREVIEW_KEY_LENGTH 384
+/* a sky's view, from its model's origin: a turn's time, its pitch up from
+the horizon (radians), how wide it sees across the widget (radians), and
+the nearest it draws, of its model's farthest vertex */
+#define TAG_PREVIEW_SKY_TURN_MILLISECONDS 40000
+#define TAG_PREVIEW_SKY_PITCH 0.2f
+#define TAG_PREVIEW_SKY_FIELD_OF_VIEW 1.75f
+#define TAG_PREVIEW_SKY_NEAR 0.001f
+/* the corners a triangle cut at the near plane has at most */
+#define TAG_PREVIEW_SKY_CORNERS 4
 #define TAG_PREVIEW_PI 3.14159265f
 
 /* (bitmaps.c's formats: the picture's, and those of the textures decoded) */
@@ -153,6 +170,10 @@ static struct
 	/* the mesh's middle, and the widget's units a world unit is drawn at */
 	float center[3];
 	float scale;
+	/* a sky's: which way its triangles turn that face its origin (1, else
+	-1: most of them do, being seen from it), and the nearest it draws */
+	float sky_winding;
+	float sky_near;
 	/* each vertex as it is drawn: where in the picture (x, y) and its depth
 	toward the eye; and its light (what its color or texture is drawn by)
 	and the blue of its edge */
@@ -472,6 +493,42 @@ static void tag_preview_fit(
 		MIN(TAG_PREVIEW_WIDTH * 0.5f / across, TAG_PREVIEW_HEIGHT * 0.5f / MAX(down, 0.001f));
 }
 
+/* a sky's: which way the triangles facing its origin turn, by the area of
+those that turn each way, and how near it draws */
+static void tag_preview_sky_fit(
+	void)
+{
+	struct tag_injector_mesh const *mesh = &tag_preview.mesh;
+	double facing = 0.0;
+	float farthest = 0.0f;
+	long index;
+
+	for (index = 0; index < mesh->vertex_count; index++)
+	{
+		float const *p = mesh->positions[index];
+
+		farthest = MAX(farthest, p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+	}
+	for (index = 0; index < mesh->triangle_count; index++)
+	{
+		float const *a = mesh->positions[mesh->triangles[index][0]];
+		float const *b = mesh->positions[mesh->triangles[index][1]];
+		float const *c = mesh->positions[mesh->triangles[index][2]];
+		float ab[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+		float ac[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+		float normal[3] = { ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0] };
+		float middle[3] = { (a[0] + b[0] + c[0]) / 3.0f, (a[1] + b[1] + c[1]) / 3.0f, (a[2] + b[2] + c[2]) / 3.0f };
+		float length = sqrtf(middle[0] * middle[0] + middle[1] * middle[1] + middle[2] * middle[2]);
+
+		/* (toward the origin, its area's worth: a triangle's normal its area
+		long) */
+		if (length > 0.0001f)
+			facing -= (normal[0] * middle[0] + normal[1] * middle[1] + normal[2] * middle[2]) / length;
+	}
+	tag_preview.sky_winding = facing >= 0.0 ? 1.0f : -1.0f;
+	tag_preview.sky_near = MAX(sqrtf(farthest) * TAG_PREVIEW_SKY_NEAR, 0.0001f);
+}
+
 /* the tag chosen read: what it needs, and its model and textures */
 static void tag_preview_read(
 	void)
@@ -522,6 +579,8 @@ static void tag_preview_read(
 		return;
 	}
 	tag_preview_fit();
+	if (tag_preview.mesh.sky)
+		tag_preview_sky_fit();
 }
 
 /* the tag chosen now: its key, and what it is */
@@ -819,6 +878,407 @@ static void tag_preview_markers_draw(
 	}
 }
 
+/* a corner of a sky's triangle as it is drawn: where it is seen (to the
+right, up and ahead of the eye), and its texture coordinates */
+struct tag_preview_sky_corner
+{
+	float eye[3];
+	float texcoord[2];
+};
+
+/* each vertex of a sky where the eye sees it, at its origin, turned by
+`turn` and looking up by the pitch: (right, up, ahead) */
+static void tag_preview_sky_project(
+	float turn)
+{
+	struct tag_injector_mesh const *mesh = &tag_preview.mesh;
+	float turn_cosine = cosf(turn);
+	float turn_sine = sinf(turn);
+	float pitch_cosine = cosf(TAG_PREVIEW_SKY_PITCH);
+	float pitch_sine = sinf(TAG_PREVIEW_SKY_PITCH);
+	long index;
+
+	for (index = 0; index < mesh->vertex_count; index++)
+	{
+		float const *position = mesh->positions[index];
+		float ahead = position[0] * turn_cosine + position[1] * turn_sine;
+		/* (the model's +y to the eye's left, as the game's) */
+		float right = position[0] * turn_sine - position[1] * turn_cosine;
+
+		tag_preview.projected[index][0] = right;
+		tag_preview.projected[index][1] = position[2] * pitch_cosine - ahead * pitch_sine;
+		tag_preview.projected[index][2] = ahead * pitch_cosine + position[2] * pitch_sine;
+	}
+}
+
+/* (a chicago shader's function: shader_transparent_chicago_preprocessor.c's
+thirteen, in their order) */
+enum
+{
+	_tag_preview_function_current,
+	_tag_preview_function_next_map,
+	_tag_preview_function_multiply,
+	_tag_preview_function_double_multiply,
+	_tag_preview_function_add,
+	_tag_preview_function_add_signed_current,
+	_tag_preview_function_add_signed_next_map,
+	_tag_preview_function_subtract_current,
+	_tag_preview_function_subtract_next_map,
+	_tag_preview_function_blend_current_alpha,
+	_tag_preview_function_blend_current_alpha_inverse,
+	_tag_preview_function_blend_next_map_alpha,
+	_tag_preview_function_blend_next_map_alpha_inverse,
+};
+
+/* what a function makes of what the maps before made (current) and the
+next map's (0 to 1), by their alphas */
+static float tag_preview_function(
+	short function,
+	float current,
+	float current_alpha,
+	float next,
+	float next_alpha)
+{
+	float value;
+
+	switch (function)
+	{
+	case _tag_preview_function_next_map:
+		value = next;
+		break;
+	case _tag_preview_function_multiply:
+		value = current * next;
+		break;
+	case _tag_preview_function_double_multiply:
+		value = 2.0f * current * next;
+		break;
+	case _tag_preview_function_add:
+		value = current + next;
+		break;
+	case _tag_preview_function_add_signed_current:
+	case _tag_preview_function_add_signed_next_map:
+		value = current + next - 0.5f;
+		break;
+	case _tag_preview_function_subtract_current:
+		value = current - next;
+		break;
+	case _tag_preview_function_subtract_next_map:
+		value = next - current;
+		break;
+	case _tag_preview_function_blend_current_alpha:
+		value = current * current_alpha + next * (1.0f - current_alpha);
+		break;
+	case _tag_preview_function_blend_current_alpha_inverse:
+		value = next * current_alpha + current * (1.0f - current_alpha);
+		break;
+	case _tag_preview_function_blend_next_map_alpha:
+		value = next * next_alpha + current * (1.0f - next_alpha);
+		break;
+	case _tag_preview_function_blend_next_map_alpha_inverse:
+		value = current * next_alpha + next * (1.0f - next_alpha);
+		break;
+	default:
+		value = current;
+		break;
+	}
+	return PIN(value, 0.0f, 1.0f);
+}
+
+/* a material's color at (u, v): its chicago shader's maps folded together,
+each repeated as it says, else its base map's (white without one) */
+static uint32_t tag_preview_material_sample(
+	struct tag_injector_mesh_material const *material,
+	struct tag_preview_texture const *texture,
+	float u,
+	float v)
+{
+	float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	short index;
+	short channel;
+
+	if (!material || material->layer_count <= 0)
+		return texture ? tag_preview_sample(texture, u, v) : 0xFFFFFFFFu;
+	for (index = 0; index < material->layer_count; index++)
+	{
+		struct tag_injector_mesh_layer const *layer = &material->layers[index];
+		struct tag_preview_texture const *layer_texture = tag_preview_texture(layer->texture);
+		uint32_t sample = layer_texture ?
+			tag_preview_sample(layer_texture, u * layer->scale[0], v * layer->scale[1]) : 0xFFFFFFFFu;
+		float next[4];
+
+		next[3] = (float)(sample >> 24) * (1.0f / 255.0f);
+		for (channel = 0; channel < 3; channel++)
+		{
+			next[channel] = layer->alpha_replicate ? next[3] :
+				(float)((sample >> (16 - 8 * channel)) & 0xFF) * (1.0f / 255.0f);
+		}
+		if (index == 0)
+		{
+			memcpy(color, next, sizeof(color));
+			continue;
+		}
+		{
+			struct tag_injector_mesh_layer const *before = &material->layers[index - 1];
+			float alpha = color[3];
+
+			for (channel = 0; channel < 3; channel++)
+				color[channel] = tag_preview_function(before->color_function, color[channel], alpha, next[channel], next[3]);
+			color[3] = tag_preview_function(before->alpha_function, alpha, alpha, next[3], next[3]);
+		}
+	}
+	return (uint32_t)(color[3] * 255.0f + 0.5f) << 24 | (uint32_t)(color[0] * 255.0f + 0.5f) << 16 |
+		(uint32_t)(color[1] * 255.0f + 0.5f) << 8 | (uint32_t)(color[2] * 255.0f + 0.5f);
+}
+
+/* what a texel of a sky's material is over what is there */
+static uint32_t tag_preview_sky_blend(
+	short blend,
+	uint32_t source,
+	uint32_t target)
+{
+	float alpha = (float)(source >> 24) * (1.0f / 255.0f);
+	uint32_t color = 0xFF000000u;
+	short channel;
+
+	for (channel = 0; channel < 3; channel++)
+	{
+		short shift = (short)(16 - 8 * channel);
+		float in = (float)((source >> shift) & 0xFF);
+		float there = (float)((target >> shift) & 0xFF);
+		float value;
+
+		switch (blend)
+		{
+		case _tag_injector_blend_multiply:
+			value = in * there * (1.0f / 255.0f);
+			break;
+		case _tag_injector_blend_double_multiply:
+			value = in * there * (2.0f / 255.0f);
+			break;
+		case _tag_injector_blend_add:
+			value = there + in;
+			break;
+		case _tag_injector_blend_subtract:
+			value = there - in;
+			break;
+		case _tag_injector_blend_minimum:
+			value = MIN(in, there);
+			break;
+		case _tag_injector_blend_maximum:
+			value = MAX(in, there);
+			break;
+		case _tag_injector_blend_alpha_multiply_add:
+			value = there + in * alpha;
+			break;
+		case _tag_injector_blend_alpha:
+			value = in * alpha + there * (1.0f - alpha);
+			break;
+		default:
+			value = in;
+			break;
+		}
+		color |= (uint32_t)PIN(value, 0.0f, 255.0f) << shift;
+	}
+	return color;
+}
+
+/* a part of a sky's triangle in front of the eye into the picture, by its
+perspective: each texel whose middle it covers, its material's base map (its
+texture coordinates true to the perspective) or grey, opaque where it is the
+nearest, else blended over what is there where nothing opaque is nearer */
+static void tag_preview_sky_fill(
+	uint32_t *texels,
+	struct tag_preview_sky_corner const corners[3],
+	struct tag_injector_mesh_material const *material,
+	struct tag_preview_texture const *texture)
+{
+	/* (the widget's units of a unit's view ahead, in texels) */
+	float focal = TAG_PREVIEW_WIDTH * 0.5f / tanf(TAG_PREVIEW_SKY_FIELD_OF_VIEW * 0.5f);
+	float across = focal * TAG_PREVIEW_TEXTURE_WIDTH / TAG_PREVIEW_WIDTH;
+	float down = focal * TAG_PREVIEW_TEXTURE_HEIGHT / TAG_PREVIEW_HEIGHT;
+	boolean opaque = !material || material->blend == _tag_injector_blend_opaque;
+	float screen[3][5];
+	float area;
+	long left;
+	long right;
+	long top;
+	long bottom;
+	long x;
+	long y;
+	short corner;
+
+	/* (where it is seen, and its inverse distance ahead and its texture
+	coordinates by it: those are carried straight across the picture) */
+	for (corner = 0; corner < 3; corner++)
+	{
+		float inverse = 1.0f / corners[corner].eye[2];
+
+		screen[corner][0] = TAG_PREVIEW_TEXTURE_WIDTH * 0.5f + corners[corner].eye[0] * inverse * across;
+		screen[corner][1] = TAG_PREVIEW_TEXTURE_HEIGHT * 0.5f - corners[corner].eye[1] * inverse * down;
+		screen[corner][2] = inverse;
+		screen[corner][3] = corners[corner].texcoord[0] * inverse;
+		screen[corner][4] = corners[corner].texcoord[1] * inverse;
+	}
+	area = (screen[1][0] - screen[0][0]) * (screen[2][1] - screen[0][1]) -
+		(screen[1][1] - screen[0][1]) * (screen[2][0] - screen[0][0]);
+	if (fabsf(area) < 0.0001f)
+		return;
+	left = (long)MAX(floorf(MIN(screen[0][0], MIN(screen[1][0], screen[2][0]))), 0.0f);
+	right = (long)MIN(ceilf(MAX(screen[0][0], MAX(screen[1][0], screen[2][0]))), (float)(TAG_PREVIEW_TEXTURE_WIDTH - 1));
+	top = (long)MAX(floorf(MIN(screen[0][1], MIN(screen[1][1], screen[2][1]))), 0.0f);
+	bottom = (long)MIN(ceilf(MAX(screen[0][1], MAX(screen[1][1], screen[2][1]))), (float)(TAG_PREVIEW_TEXTURE_HEIGHT - 1));
+	area = 1.0f / area;
+	for (y = top; y <= bottom; y++)
+	{
+		float middle_y = (float)y + 0.5f;
+
+		for (x = left; x <= right; x++)
+		{
+			float middle_x = (float)x + 0.5f;
+			float a_share = ((screen[1][0] - middle_x) * (screen[2][1] - middle_y) -
+				(screen[1][1] - middle_y) * (screen[2][0] - middle_x)) * area;
+			float b_share = ((screen[2][0] - middle_x) * (screen[0][1] - middle_y) -
+				(screen[2][1] - middle_y) * (screen[0][0] - middle_x)) * area;
+			float c_share = 1.0f - a_share - b_share;
+			long texel = y * TAG_PREVIEW_TEXTURE_WIDTH + x;
+			float inverse;
+			uint32_t sample;
+
+			if (a_share < 0.0f || b_share < 0.0f || c_share < 0.0f)
+				continue;
+			/* (nearer: a larger inverse distance) */
+			inverse = a_share * screen[0][2] + b_share * screen[1][2] + c_share * screen[2][2];
+			if (opaque ? inverse <= tag_preview.depths[texel] : inverse < tag_preview.depths[texel])
+				continue;
+			if (texture || (material && material->layer_count > 0))
+			{
+				float u = (a_share * screen[0][3] + b_share * screen[1][3] + c_share * screen[2][3]) / inverse;
+				float v = (a_share * screen[0][4] + b_share * screen[1][4] + c_share * screen[2][4]) / inverse;
+
+				sample = tag_preview_material_sample(material, texture, u, v);
+			}
+			else
+				sample = 0xFF000000u | (uint32_t)tag_preview_color[0] << 16 | (uint32_t)tag_preview_color[1] << 8 |
+					(uint32_t)tag_preview_color[2];
+			if (opaque)
+			{
+				tag_preview.depths[texel] = inverse;
+				texels[texel] = sample | 0xFF000000u;
+			}
+			else
+				texels[texel] = tag_preview_sky_blend(material->blend, sample, texels[texel]);
+		}
+	}
+}
+
+/* a sky's triangle into the picture (opaque: those of opaque materials,
+else those of transparent ones) when it faces the eye: cut where it passes
+behind the near plane */
+static void tag_preview_sky_triangle(
+	uint32_t *texels,
+	long triangle_index,
+	boolean opaque_pass)
+{
+	unsigned short const *triangle = tag_preview.mesh.triangles[triangle_index];
+	short material_index = tag_preview.mesh.triangle_materials[triangle_index];
+	struct tag_injector_mesh_material const *material =
+		material_index >= 0 && material_index < tag_preview.mesh.material_count ?
+		&tag_preview.mesh.materials[material_index] : NULL;
+	boolean opaque = !material || material->blend == _tag_injector_blend_opaque;
+	struct tag_preview_texture const *texture = material ? tag_preview_texture(material->base_texture) : NULL;
+	struct tag_preview_sky_corner in[3];
+	struct tag_preview_sky_corner out[TAG_PREVIEW_SKY_CORNERS];
+	float ab[3];
+	float ac[3];
+	float normal[3];
+	short count = 0;
+	short corner;
+	short axis;
+
+	if (opaque != opaque_pass || (!opaque && !texture && !(material && material->layer_count > 0)))
+		return;
+	for (corner = 0; corner < 3; corner++)
+	{
+		memcpy(in[corner].eye, tag_preview.projected[triangle[corner]], sizeof(in[corner].eye));
+		memcpy(in[corner].texcoord, tag_preview.mesh.texcoords[triangle[corner]], sizeof(in[corner].texcoord));
+	}
+	/* (facing the eye, at the origin, as most of the sky's do: in the
+	model's space, as tag_preview_sky_fit, the eye's turning none of it) */
+	{
+		float const *a = tag_preview.mesh.positions[triangle[0]];
+		float const *b = tag_preview.mesh.positions[triangle[1]];
+		float const *c = tag_preview.mesh.positions[triangle[2]];
+
+		for (axis = 0; axis < 3; axis++)
+		{
+			ab[axis] = b[axis] - a[axis];
+			ac[axis] = c[axis] - a[axis];
+		}
+		normal[0] = ab[1] * ac[2] - ab[2] * ac[1];
+		normal[1] = ab[2] * ac[0] - ab[0] * ac[2];
+		normal[2] = ab[0] * ac[1] - ab[1] * ac[0];
+		if (-(normal[0] * a[0] + normal[1] * a[1] + normal[2] * a[2]) * tag_preview.sky_winding <= 0.0f)
+			return;
+	}
+	/* (its part ahead of the near plane: each corner in front of it, and
+	where each edge crosses it) */
+	for (corner = 0; corner < 3; corner++)
+	{
+		struct tag_preview_sky_corner const *from = &in[corner];
+		struct tag_preview_sky_corner const *to = &in[(corner + 1) % 3];
+		boolean from_in = from->eye[2] >= tag_preview.sky_near;
+		boolean to_in = to->eye[2] >= tag_preview.sky_near;
+
+		if (from_in)
+			out[count++] = *from;
+		if (from_in != to_in)
+		{
+			float share = (tag_preview.sky_near - from->eye[2]) / (to->eye[2] - from->eye[2]);
+			struct tag_preview_sky_corner *cut = &out[count++];
+
+			for (axis = 0; axis < 3; axis++)
+				cut->eye[axis] = from->eye[axis] + (to->eye[axis] - from->eye[axis]) * share;
+			for (axis = 0; axis < 2; axis++)
+				cut->texcoord[axis] = from->texcoord[axis] + (to->texcoord[axis] - from->texcoord[axis]) * share;
+			cut->eye[2] = tag_preview.sky_near;
+		}
+	}
+	for (corner = 1; corner + 1 < count; corner++)
+	{
+		struct tag_preview_sky_corner fan[3];
+
+		fan[0] = out[0];
+		fan[1] = out[corner];
+		fan[2] = out[corner + 1];
+		tag_preview_sky_fill(texels, fan, material, texture);
+	}
+}
+
+/* a sky's picture drawn again, as it is seen from its origin turned as it
+is now: black where it has nothing, its opaque parts, then its transparent
+ones over them in its model's order */
+static void tag_preview_sky_draw(
+	uint32_t *texels,
+	unsigned long now)
+{
+	float turn = (float)(now % TAG_PREVIEW_SKY_TURN_MILLISECONDS) / TAG_PREVIEW_SKY_TURN_MILLISECONDS * 2.0f *
+		TAG_PREVIEW_PI;
+	long index;
+	short pass;
+
+	tag_preview_sky_project(turn);
+	for (index = 0; index < TAG_PREVIEW_TEXTURE_WIDTH * TAG_PREVIEW_TEXTURE_HEIGHT; index++)
+	{
+		texels[index] = 0xFF000000u;
+		tag_preview.depths[index] = 0.0f;
+	}
+	for (pass = 0; pass < 2; pass++)
+	{
+		for (index = 0; index < tag_preview.mesh.triangle_count; index++)
+			tag_preview_sky_triangle(texels, index, pass == 0);
+	}
+}
+
 /* the picture drawn again, the model turned as it is now */
 static void tag_preview_draw(
 	unsigned long now)
@@ -829,6 +1289,14 @@ static void tag_preview_draw(
 		TAG_PREVIEW_PI * 0.5f;
 	long index;
 
+	if (tag_preview.mesh.sky)
+	{
+		tag_preview_sky_draw(texels, now);
+		rasterizer_bitmap_changed(tag_preview.bitmap);
+		tag_preview.drawn_time = now;
+		tag_preview.drawn = TRUE;
+		return;
+	}
 	tag_preview_project(turn);
 	memset(texels, 0, TAG_PREVIEW_TEXTURE_WIDTH * TAG_PREVIEW_TEXTURE_HEIGHT * sizeof(uint32_t));
 	for (index = 0; index < TAG_PREVIEW_TEXTURE_WIDTH * TAG_PREVIEW_TEXTURE_HEIGHT; index++)

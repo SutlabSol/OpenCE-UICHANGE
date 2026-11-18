@@ -118,6 +118,10 @@ enum
 	LIGHT_FIXTURE_GROUP_TAG = 'lifi',
 	SHADER_MODEL_GROUP_TAG = 'soso',
 	SHADER_ENVIRONMENT_GROUP_TAG = 'senv',
+	SHADER_TRANSPARENT_GENERIC_GROUP_TAG = 'sotr',
+	SHADER_TRANSPARENT_CHICAGO_GROUP_TAG = 'schi',
+	SHADER_TRANSPARENT_CHICAGO_EXTENDED_GROUP_TAG = 'scex',
+	SHADER_TRANSPARENT_WATER_GROUP_TAG = 'swat',
 	SKY_GROUP_TAG = 'sky ',
 
 	/* the most maps listed (Custom Edition's, then MCC's), and tags of a
@@ -173,6 +177,29 @@ enum
 	SHADER_MODEL_CHANGE_COLOR_SOURCE_OFFSET = 0x4C,
 	SHADER_MODEL_MULTIPURPOSE_MAP_OFFSET = 0xBC,
 	SHADER_ENVIRONMENT_BASE_MAP_OFFSET = 0x88,
+	/* a transparent shader's framebuffer blend function and its maps (a
+	generic's, a chicago's, and a chicago extended's four-stage maps), and
+	in a map, its scales and bitmap: a generic's map, and a chicago's
+	(rasterizer_xbox_transparent_geometry.c's struct
+	shader_transparent_generic_map and struct shader_transparent_chicago_map) */
+	SHADER_TRANSPARENT_BLEND_FUNCTION_OFFSET = 0x2C,
+	SHADER_TRANSPARENT_MAPS_OFFSET = 0x54,
+	SHADER_TRANSPARENT_GENERIC_MAP_BYTES = 0x64,
+	SHADER_TRANSPARENT_GENERIC_MAP_U_SCALE_OFFSET = 0x04,
+	SHADER_TRANSPARENT_GENERIC_MAP_OFFSET = 0x1C,
+	SHADER_TRANSPARENT_CHICAGO_MAP_BYTES = 0xDC,
+	SHADER_TRANSPARENT_CHICAGO_MAP_U_SCALE_OFFSET = 0x54,
+	SHADER_TRANSPARENT_CHICAGO_MAP_OFFSET = 0x6C,
+	/* a chicago's map's flags (alpha replicate, its second bit), and its
+	color and alpha functions (shader_transparent_chicago_preprocessor.c's) */
+	SHADER_TRANSPARENT_CHICAGO_MAP_FLAGS_OFFSET = 0x00,
+	SHADER_TRANSPARENT_CHICAGO_MAP_ALPHA_REPLICATE_FLAG = 0x2,
+	SHADER_TRANSPARENT_CHICAGO_MAP_COLOR_FUNCTION_OFFSET = 0x2C,
+	SHADER_TRANSPARENT_CHICAGO_MAP_ALPHA_FUNCTION_OFFSET = 0x2E,
+	/* a water shader's base map (rasterizer_xbox_water.c's) */
+	SHADER_TRANSPARENT_WATER_BASE_MAP_OFFSET = 0x4C,
+	/* the most of a transparent shader's maps looked through */
+	PREVIEW_MAXIMUM_TRANSPARENT_MAPS = 8,
 	/* a preview's mesh (tag_injector_mesh): the most of it read, as
 	object_mesh.c's, a part's strip at most, the regions read, and the
 	models' detail levels (models.c's NUMBER_OF_DETAIL_LEVELS_PER_MODEL) */
@@ -189,6 +216,8 @@ enum
 	PREVIEW_MATERIAL_UNMADE = -2,
 	PREVIEW_CHANGE_COLORS = 4,
 	PREVIEW_TEXTURE_SIZE = 128,
+	/* (a sky's: it is seen from inside, filling the preview) */
+	PREVIEW_SKY_TEXTURE_SIZE = 512,
 	PREVIEW_MAXIMUM_BITMAP_SIZE = 4096,
 };
 
@@ -240,6 +269,9 @@ enum
 /* the farthest from its origin a preview's vertex is taken to be (one
 farther is taken to be at it: a vertex that is not a number) */
 #define PREVIEW_MAXIMUM_COORDINATE 1000.0f
+/* (a sky's: its models are tens of thousands of units across, drawn about
+the eye whatever their size) */
+#define PREVIEW_MAXIMUM_SKY_COORDINATE 10000000.0f
 /* the largest map scale read (a larger one, or none, is taken to be 1) */
 #define PREVIEW_MAXIMUM_MAP_SCALE 1000.0f
 
@@ -2544,6 +2576,9 @@ struct preview_build
 	float colors[PREVIEW_CHANGE_COLORS][3];
 	short shader_materials[PREVIEW_MAXIMUM_SHADERS];
 	long texture_tags[TAG_INJECTOR_MESH_MAXIMUM_TEXTURES];
+	/* (a sky's model: its transparent shaders' parts too, and its textures
+	larger) */
+	boolean sky;
 };
 
 /* what of a preview's tags' files is read: a gbxmodel part's vertices or
@@ -2771,7 +2806,8 @@ static short preview_texture(
 	}
 	/* (its largest level no larger than the preview draws: Halo PC's
 	levels one after another, the largest first) */
-	for (level = 0; level < bitmap->mipmap_count && MAX(width, height) > PREVIEW_TEXTURE_SIZE; level++)
+	for (level = 0; level < bitmap->mipmap_count &&
+		MAX(width, height) > (build->sky ? PREVIEW_SKY_TEXTURE_SIZE : PREVIEW_TEXTURE_SIZE); level++)
 	{
 		offset += preview_level_size(bitmap->format, width, height);
 		width = MAX(1, width >> 1);
@@ -2821,11 +2857,58 @@ static short preview_material(
 	short source = 0;
 	short index;
 
+	boolean transparent = group_tag == SHADER_TRANSPARENT_GENERIC_GROUP_TAG ||
+		group_tag == SHADER_TRANSPARENT_CHICAGO_GROUP_TAG || group_tag == SHADER_TRANSPARENT_CHICAGO_EXTENDED_GROUP_TAG;
+	byte const *map = NULL;
+
 	scale[0] = scale[1] = 1.0f;
 	if (!shader || shader_index >= PREVIEW_MAXIMUM_SHADERS ||
-		(group_tag != SHADER_MODEL_GROUP_TAG && group_tag != SHADER_ENVIRONMENT_GROUP_TAG))
+		(group_tag != SHADER_MODEL_GROUP_TAG && group_tag != SHADER_ENVIRONMENT_GROUP_TAG &&
+		group_tag != SHADER_TRANSPARENT_WATER_GROUP_TAG && !transparent))
 	{
 		return NONE;
+	}
+	/* (a generic's map drawn: of its maps that name a bitmap, the one
+	repeated least, the first of those: its picture, where the others are
+	details tiled over it; a chicago's are all drawn, as layers, each
+	repeated as it says, below) */
+	if (group_tag == SHADER_TRANSPARENT_GENERIC_GROUP_TAG)
+	{
+		struct tag_block const *maps = (struct tag_block const *)(shader + SHADER_TRANSPARENT_MAPS_OFFSET);
+		boolean generic = group_tag == SHADER_TRANSPARENT_GENERIC_GROUP_TAG;
+		long map_bytes = generic ? SHADER_TRANSPARENT_GENERIC_MAP_BYTES : SHADER_TRANSPARENT_CHICAGO_MAP_BYTES;
+		long scale_offset = generic ? SHADER_TRANSPARENT_GENERIC_MAP_U_SCALE_OFFSET :
+			SHADER_TRANSPARENT_CHICAGO_MAP_U_SCALE_OFFSET;
+		long map_offset = generic ? SHADER_TRANSPARENT_GENERIC_MAP_OFFSET : SHADER_TRANSPARENT_CHICAGO_MAP_OFFSET;
+		float least = 1.0e30f;
+		long index;
+
+		for (index = 0; index < MIN(maps->count, PREVIEW_MAXIMUM_TRANSPARENT_MAPS); index++)
+		{
+			byte const *candidate = (byte const *)tag_block_get_element_fast(maps, index, map_bytes);
+			float u_scale;
+			float v_scale;
+
+			if (!candidate || ((struct tag_reference const *)(candidate + map_offset))->index == NONE)
+				continue;
+			memcpy(&u_scale, candidate + scale_offset, sizeof(u_scale));
+			memcpy(&v_scale, candidate + scale_offset + sizeof(u_scale), sizeof(v_scale));
+			/* (repeated as much mirrored, a negative scale; none, or not a
+			number: 1) */
+			u_scale = fabsf(u_scale);
+			v_scale = fabsf(v_scale);
+			if (!(u_scale > 0.0f && u_scale < PREVIEW_MAXIMUM_MAP_SCALE))
+				u_scale = 1.0f;
+			if (!(v_scale > 0.0f && v_scale < PREVIEW_MAXIMUM_MAP_SCALE))
+				v_scale = 1.0f;
+			if (u_scale * v_scale < least)
+			{
+				least = u_scale * v_scale;
+				scale[0] = u_scale;
+				scale[1] = v_scale;
+				map = candidate + map_offset;
+			}
+		}
 	}
 	if (group_tag == SHADER_MODEL_GROUP_TAG)
 	{
@@ -2848,7 +2931,63 @@ static short preview_material(
 	material = &mesh->materials[mesh->material_count];
 	material->mask_texture = NONE;
 	material->tinted = FALSE;
-	if (group_tag == SHADER_MODEL_GROUP_TAG)
+	material->blend = _tag_injector_blend_opaque;
+	material->layer_count = 0;
+	if (transparent)
+	{
+		short function = 0;
+
+		memcpy(&function, shader + SHADER_TRANSPARENT_BLEND_FUNCTION_OFFSET, sizeof(function));
+		material->blend = (short)(_tag_injector_blend_alpha + PIN(function, 0, _tag_injector_blend_count -
+			_tag_injector_blend_alpha - 1));
+		material->base_texture = map ? preview_texture(build, (struct tag_reference const *)map, mesh) : NONE;
+		/* (a chicago's maps, a chicago extended's four-stage ones: each
+		folded into what the ones before it made, by its function) */
+		if (group_tag != SHADER_TRANSPARENT_GENERIC_GROUP_TAG)
+		{
+			struct tag_block const *maps = (struct tag_block const *)(shader + SHADER_TRANSPARENT_MAPS_OFFSET);
+
+			for (index = 0; index < MIN(maps->count, TAG_INJECTOR_MESH_MAXIMUM_LAYERS); index++)
+			{
+				byte const *chicago_map = (byte const *)tag_block_get_element_fast(maps, index,
+					SHADER_TRANSPARENT_CHICAGO_MAP_BYTES);
+				struct tag_injector_mesh_layer *layer = &material->layers[material->layer_count];
+				unsigned short flags = 0;
+				float layer_scale[2];
+				short axis;
+
+				if (!chicago_map)
+					break;
+				memcpy(&flags, chicago_map + SHADER_TRANSPARENT_CHICAGO_MAP_FLAGS_OFFSET, sizeof(flags));
+				memcpy(&layer->color_function, chicago_map + SHADER_TRANSPARENT_CHICAGO_MAP_COLOR_FUNCTION_OFFSET,
+					sizeof(layer->color_function));
+				memcpy(&layer->alpha_function, chicago_map + SHADER_TRANSPARENT_CHICAGO_MAP_ALPHA_FUNCTION_OFFSET,
+					sizeof(layer->alpha_function));
+				memcpy(layer_scale, chicago_map + SHADER_TRANSPARENT_CHICAGO_MAP_U_SCALE_OFFSET, sizeof(layer_scale));
+				for (axis = 0; axis < 2; axis++)
+				{
+					/* (as the generic's, above) */
+					layer->scale[axis] = fabsf(layer_scale[axis]);
+					if (!(layer->scale[axis] > 0.0f && layer->scale[axis] < PREVIEW_MAXIMUM_MAP_SCALE))
+						layer->scale[axis] = 1.0f;
+				}
+				layer->alpha_replicate = (flags & SHADER_TRANSPARENT_CHICAGO_MAP_ALPHA_REPLICATE_FLAG) != 0;
+				layer->texture = preview_texture(build,
+					(struct tag_reference const *)(chicago_map + SHADER_TRANSPARENT_CHICAGO_MAP_OFFSET), mesh);
+				material->layer_count++;
+			}
+			if (material->layer_count > 0)
+				material->base_texture = material->layers[0].texture;
+		}
+	}
+	else if (group_tag == SHADER_TRANSPARENT_WATER_GROUP_TAG)
+	{
+		/* (its base map alone, opaque: its reflection and ripples are not
+		drawn) */
+		material->base_texture = preview_texture(build,
+			(struct tag_reference const *)(shader + SHADER_TRANSPARENT_WATER_BASE_MAP_OFFSET), mesh);
+	}
+	else if (group_tag == SHADER_MODEL_GROUP_TAG)
 	{
 		material->base_texture = preview_texture(build,
 			(struct tag_reference const *)(shader + SHADER_MODEL_BASE_MAP_OFFSET), mesh);
@@ -2920,6 +3059,7 @@ static void preview_mesh_part(
 			float *position = mesh->positions[first_vertex + index];
 			float *normal = mesh->normals[first_vertex + index];
 			float *texcoord = mesh->texcoords[first_vertex + index];
+			float farthest = build->sky ? PREVIEW_MAXIMUM_SKY_COORDINATE : PREVIEW_MAXIMUM_COORDINATE;
 			short axis;
 
 			memcpy(position, vertex + GBXMODEL_VERTEX_POSITION_OFFSET, 3 * sizeof(float));
@@ -2928,7 +3068,7 @@ static void preview_mesh_part(
 			/* (a NaN fails every comparison) */
 			for (axis = 0; axis < 3; axis++)
 			{
-				if (!(position[axis] >= -PREVIEW_MAXIMUM_COORDINATE && position[axis] <= PREVIEW_MAXIMUM_COORDINATE))
+				if (!(position[axis] >= -farthest && position[axis] <= farthest))
 					position[axis] = 0.0f;
 				if (!(normal[axis] >= -2.0f && normal[axis] <= 2.0f))
 					normal[axis] = 0.0f;
@@ -2988,6 +3128,7 @@ static boolean preview_mesh_build(
 
 	memset(&build, 0, sizeof(build));
 	build.source = source;
+	build.sky = group_tag == SKY_GROUP_TAG;
 	/* (an object's or an actor variant's: no sky's or model's) */
 	if (group_tag != GBXMODEL_GROUP_TAG && group_tag != SKY_GROUP_TAG)
 		preview_change_colors(source, root, group_tag, &build);
@@ -3026,9 +3167,10 @@ static boolean preview_mesh_build(
 	}
 	for (index = 0; index < PREVIEW_MAXIMUM_SHADERS; index++)
 		build.shader_materials[index] = PREVIEW_MATERIAL_UNMADE;
+	mesh->sky = build.sky;
 	/* (its opaque parts, else all of them: an energy sword's are all
-	transparent) */
-	for (pass = 0; pass < 2 && !mesh->triangle_count; pass++)
+	transparent; a sky's all of them, its clouds and glows over its dome) */
+	for (pass = build.sky ? 1 : 0; pass < 2 && !mesh->triangle_count; pass++)
 	{
 		struct model const *model = build.model;
 		short region_index;

@@ -37,8 +37,10 @@ show under TYPE ALL only.
 
 ## BROWSE MAPS
 
-SEARCH (part of the name), TYPE (ALL, SINGLEPLAYER, MULTIPLAYER, MULTIPLAYER
-+ AI), SORT (name, largest, smallest), SHOW (all, installed, not installed),
+SEARCH (part of the name), TYPE (ALL, SINGLEPLAYER, MULTIPLAYER, MULTI +
+AI), SORT (name, rating, downloads, date, size: maps without the value last),
+ORDER (ascending, descending; SORT sets name A to Z and the others highest
+first), SHOW (all, installed, not installed),
 then 20 maps a page with PREVIOUS PAGE and NEXT PAGE. A map is INSTALLED when
 a file of its name (less `.map`, or less a second version's `_<8 digits>`) is
 in custom_maps or one of the Map Manager's folders. A downloads a map that
@@ -71,8 +73,9 @@ minute, the host is asked again and its players send the map as before.
 Everything BROWSE MAPS shows of a map comes from the community server's
 catalog (`GET /archive/catalog`, api-opence's `routes/routes_map_archive.js`):
 a line per map with its type letter (S/M/A/U, which TYPE filters by), title,
-author, date, rating, the site's category, first screenshot's URL and
-description. It's about 1 MB, read once after the signed list, kept in
+author, date, rating, the site's category, first screenshot's URL,
+description and HAC2 downloads (an eleventh field; a ten-field catalog still
+reads, with no downloads). It's about 1 MB, read once after the signed list, kept in
 `<data root>/map_archive/catalog.txt` and fetched again only when
 `GET /archive/catalog/serial` differs from the kept one. The bundled
 `map_categories.txt` is only the fallback for types while offline.

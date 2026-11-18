@@ -395,6 +395,8 @@ static short mcc_preview_material(struct mcc_preview_build *build, short shader_
 	material = &mesh->materials[mesh->material_count];
 	material->mask_texture = NONE;
 	material->tinted = FALSE;
+	material->blend = _tag_injector_blend_opaque;
+	material->layer_count = 0;
 	if (group == MCC_SHADER_MODEL_GROUP)
 	{
 		material->base_texture = mcc_preview_texture(build,

@@ -79,8 +79,8 @@ enum
 {
 	NAME_SIZE = MAP_ARCHIVE_NAME_SIZE,
 	PAGE_MAPS = 20,
-	/* SEARCH, TYPE, SORT and SHOW */
-	FILTER_ROWS = 4,
+	/* SEARCH, TYPE, SORT, ORDER and SHOW */
+	FILTER_ROWS = 5,
 	QUEUE_SIZE = 64,
 	SEARCH_SIZE = 64,
 	MESSAGE_SIZE = 320,
@@ -93,11 +93,13 @@ enum
 enum sort
 {
 	SORT_NAME,
-	SORT_LARGEST,
-	SORT_SMALLEST,
+	SORT_RATING,
+	SORT_DOWNLOADS,
+	SORT_DATE,
+	SORT_SIZE,
 	SORT_COUNT
 };
-static char const *const sort_names[SORT_COUNT] = { "NAME", "LARGEST", "SMALLEST" };
+static char const *const sort_names[SORT_COUNT] = { "NAME", "RATING", "DOWNLOADS", "DATE", "SIZE" };
 
 enum show
 {
@@ -117,7 +119,7 @@ enum type
 	TYPE_MULTIPLAYER_AI,
 	TYPE_COUNT
 };
-static char const *const type_names[TYPE_COUNT] = { "ALL", "SINGLEPLAYER", "MULTIPLAYER", "MULTIPLAYER + AI" };
+static char const *const type_names[TYPE_COUNT] = { "ALL", "SINGLEPLAYER", "MULTIPLAYER", "MULTI + AI" };
 
 struct map
 {
@@ -148,6 +150,7 @@ enum row_kind
 	ROW_SEARCH,
 	ROW_TYPE,
 	ROW_SORT,
+	ROW_ORDER,
 	ROW_SHOW,
 	ROW_MAP,
 	ROW_PREVIOUS,
@@ -171,6 +174,8 @@ struct entry
 	char const *category;
 	char const *picture;
 	char const *description;
+	/* (the catalog's eleventh field: its HAC2 downloads) */
+	char const *downloads;
 };
 
 enum
@@ -237,6 +242,9 @@ static struct
 	char search[SEARCH_SIZE];
 	enum type type;
 	enum sort sort;
+	/* the sort's order, 1 descending (SORT sets names A to Z, the others
+	highest first) */
+	int descending;
 	enum show show;
 	int want_search;
 
@@ -717,14 +725,76 @@ static int compare_by_name(void const *a, void const *b)
 	return order ? order : x - y;
 }
 
-static int compare_by_size(void const *a, void const *b)
+/* a map's catalog entry, or NULL */
+static struct entry const *map_entry(int map)
+{
+	int entry = archive.maps[map].entry;
+
+	return entry >= 0 && entry < archive.entry_count ? &archive.entries[entry] : NULL;
+}
+
+/* (locked) a map's value under the sort (not name): 0 when it has none */
+static int sort_value(int map, double *value, char const **date)
+{
+	struct entry const *entry = map_entry(map);
+	char *end;
+
+	*value = 0;
+	*date = "";
+	switch (archive.sort)
+	{
+	case SORT_SIZE:
+		*value = (double)archive.maps[map].size;
+		return 1;
+	case SORT_RATING:
+	case SORT_DOWNLOADS:
+	{
+		char const *text = !entry ? NULL : archive.sort == SORT_RATING ? entry->rating : entry->downloads;
+
+		if (!text || !text[0])
+			return 0;
+		*value = strtod(text, &end);
+		return end != text;
+	}
+	case SORT_DATE:
+		if (!entry || !entry->date[0])
+			return 0;
+		*date = entry->date;
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+/* (locked) the maps by name (A to Z, or Z to A) */
+static int compare_shown_by_name(void const *a, void const *b)
+{
+	int order = compare_by_name(a, b);
+
+	return archive.descending ? -order : order;
+}
+
+/* (locked) the maps by the sort's value, those with none last either way,
+then by name */
+static int compare_by_value(void const *a, void const *b)
 {
 	int x = *(int const *)a, y = *(int const *)b;
-	unsigned long long p = archive.maps[x].size, q = archive.maps[y].size;
+	double p, q;
+	char const *date_x, *date_y;
+	int has_x = sort_value(x, &p, &date_x), has_y = sort_value(y, &q, &date_y), order = 0;
 
-	if (p != q)
-		return archive.sort == SORT_SMALLEST ? (p < q ? -1 : 1) : (p > q ? -1 : 1);
-	return compare_by_name(a, b);
+	if (has_x != has_y)
+		return has_x ? -1 : 1;
+	if (has_x)
+	{
+		if (archive.sort == SORT_DATE)
+			order = strcmp(date_x, date_y);
+		else
+			order = p < q ? -1 : p > q ? 1 : 0;
+		if (archive.descending)
+			order = -order;
+	}
+	return order ? order : compare_by_name(a, b);
 }
 
 /* (locked) the maps shown again, by the search, type, show and sort */
@@ -748,7 +818,7 @@ static void shown_build(void)
 		archive.shown[archive.shown_count++] = i;
 	}
 	qsort(archive.shown, (size_t)archive.shown_count, sizeof(int),
-		archive.sort == SORT_NAME ? compare_by_name : compare_by_size);
+		archive.sort == SORT_NAME ? compare_shown_by_name : compare_by_value);
 	if ((archive.page - 1) * PAGE_MAPS >= archive.shown_count)
 		archive.page = 1;
 }
@@ -1572,7 +1642,7 @@ static int catalog_parse(char *text, size_t size, struct entry **entries_out, un
 	while (line < end)
 	{
 		char *stop = memchr(line, '\n', (size_t)(end - line));
-		char *fields[10];
+		char *fields[11];
 		int field = 0;
 		char *at = line;
 
@@ -1585,7 +1655,7 @@ static int catalog_parse(char *text, size_t size, struct entry **entries_out, un
 			*serial = strtoull(line + 9, NULL, 10);
 		if (*line && *line != '#')
 		{
-			while (field < 10)
+			while (field < 11)
 			{
 				char *tab = strchr(at, '\t');
 
@@ -1595,7 +1665,7 @@ static int catalog_parse(char *text, size_t size, struct entry **entries_out, un
 				*tab = 0;
 				at = tab + 1;
 			}
-			if (field == 10 && fields[0][0] && strlen(fields[1]) == 8)
+			if (field >= 10 && fields[0][0] && strlen(fields[1]) == 8)
 			{
 				struct entry *entry = &entries[count++];
 
@@ -1609,6 +1679,7 @@ static int catalog_parse(char *text, size_t size, struct entry **entries_out, un
 				entry->category = fields[7];
 				entry->picture = fields[8];
 				entry->description = fields[9];
+				entry->downloads = field > 10 ? fields[10] : "";
 			}
 		}
 		line = stop + 1;
@@ -1987,6 +2058,8 @@ static enum row_kind row_kind(int place, int *map)
 	case 2:
 		return ROW_SORT;
 	case 3:
+		return ROW_ORDER;
+	case 4:
 		return ROW_SHOW;
 	}
 	place -= FILTER_ROWS;
@@ -2067,6 +2140,10 @@ void map_archive_row(int place, char *name, int name_size, char *state, int stat
 		snprintf(name, (size_t)name_size, "SORT");
 		snprintf(state, (size_t)state_size, "%s", sort_names[archive.sort]);
 		break;
+	case ROW_ORDER:
+		snprintf(name, (size_t)name_size, "ORDER");
+		snprintf(state, (size_t)state_size, "%s", archive.descending ? "DESCENDING" : "ASCENDING");
+		break;
 	case ROW_SHOW:
 		snprintf(name, (size_t)name_size, "SHOW");
 		snprintf(state, (size_t)state_size, "%s", show_names[archive.show]);
@@ -2128,7 +2205,13 @@ void map_archive_details(int place, char *title, int title_size, char *text, int
 		break;
 	case ROW_SORT:
 		snprintf(title, (size_t)title_size, "Sort");
-		snprintf(body, sizeof(body), "A sorts the maps by name, or by size.");
+		snprintf(body, sizeof(body), "A sorts the maps by name, rating, downloads, date or size. Maps "
+			"their page gives no rating, downloads or date for come last.");
+		break;
+	case ROW_ORDER:
+		snprintf(title, (size_t)title_size, "Order");
+		snprintf(body, sizeof(body), "A turns the sort around: ascending (A to Z, lowest, oldest, smallest "
+			"first) or descending.");
 		break;
 	case ROW_SHOW:
 		snprintf(title, (size_t)title_size, "Show");
@@ -2148,10 +2231,11 @@ void map_archive_details(int place, char *title, int title_size, char *text, int
 		size_text(entry->size, size, (int)sizeof(size));
 		if (details && details->title[0])
 		{
-			used = (size_t)snprintf(body, sizeof(body), "%s%s%s%s%s\n%s%s%s, %s.\n", details->title,
+			used = (size_t)snprintf(body, sizeof(body), "%s%s%s%s%s\n%s%s%s%s%s%s, %s.\n", details->title,
 				details->author[0] ? " by " : "", details->author, details->date[0] ? ", " : "", details->date,
 				details->category[0] ? details->category : category_name(entry->category),
-				details->rating[0] ? ", rated " : "", details->rating, size);
+				details->rating[0] ? ", rated " : "", details->rating,
+				details->downloads[0] ? ", " : "", details->downloads, details->downloads[0] ? " downloads" : "", size);
 		}
 		else
 			used = (size_t)snprintf(body, sizeof(body), "%s\n%s, version %08lX.\n", category_name(entry->category),
@@ -2278,6 +2362,13 @@ void map_archive_choose(int place)
 		break;
 	case ROW_SORT:
 		archive.sort = (enum sort)((archive.sort + 1) % SORT_COUNT);
+		/* (names A to Z; ratings, downloads, dates and sizes highest first) */
+		archive.descending = archive.sort != SORT_NAME;
+		archive.page = 1;
+		shown_build();
+		break;
+	case ROW_ORDER:
+		archive.descending = !archive.descending;
 		archive.page = 1;
 		shown_build();
 		break;

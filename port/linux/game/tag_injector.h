@@ -199,12 +199,52 @@ environment's): its base map's texture, and for a model's shader that names
 a change color the object has, the color (0 to 1) its multipurpose map's
 texture tints the base map by, where its color change mask (Halo PC's
 alpha) says (textures NONE for none). */
+/* how a material is drawn over what is behind it: opaque (a model's or an
+environment's shader), else as a transparent shader's framebuffer blend
+function says (shader_transparent_generic's, in its order) */
+enum tag_injector_blend
+{
+	_tag_injector_blend_opaque,
+	_tag_injector_blend_alpha,
+	_tag_injector_blend_multiply,
+	_tag_injector_blend_double_multiply,
+	_tag_injector_blend_add,
+	_tag_injector_blend_subtract,
+	_tag_injector_blend_minimum,
+	_tag_injector_blend_maximum,
+	_tag_injector_blend_alpha_multiply_add,
+	_tag_injector_blend_count
+};
+
+/* the maps of a chicago shader a material draws at most */
+#define TAG_INJECTOR_MESH_MAXIMUM_LAYERS 4
+
+/* A map of a chicago shader's material: its texture (NONE: white), how
+what the maps before it made is folded with it (the color and alpha
+functions of the map before it: shader_transparent_chicago_preprocessor.c's
+thirteen, current first), whether its color is its alpha, and how many
+times it repeats across the part's texture coordinates. */
+struct tag_injector_mesh_layer
+{
+	short texture;
+	short color_function;
+	short alpha_function;
+	boolean alpha_replicate;
+	float scale[2];
+};
+
+/* (a sky's transparent shaders' too, by their blend: a generic's map
+repeated least, a chicago's maps as layers, its parts' texture coordinates
+then unscaled by the shader) */
 struct tag_injector_mesh_material
 {
 	short base_texture;
 	short mask_texture;
 	boolean tinted;
 	float tint[3];
+	short blend;
+	short layer_count;
+	struct tag_injector_mesh_layer layers[TAG_INJECTOR_MESH_MAXIMUM_LAYERS];
 };
 
 struct tag_injector_mesh
@@ -220,6 +260,9 @@ struct tag_injector_mesh
 	struct tag_injector_mesh_texture textures[TAG_INJECTOR_MESH_MAXIMUM_TEXTURES];
 	short material_count;
 	struct tag_injector_mesh_material materials[TAG_INJECTOR_MESH_MAXIMUM_MATERIALS];
+	/* a sky's model: seen from inside, from its origin (where the game
+	draws it about the eye), every part of it */
+	boolean sky;
 };
 
 /* whether a tag has a tag it needs to work: it has it, it has not (it
