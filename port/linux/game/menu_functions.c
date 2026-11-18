@@ -12623,6 +12623,8 @@ TYPE, SORT and SHOW, a page of maps, and the pages */
 #define ARCHIVE_SCREEN "pc\\main_menu\\mods\\ce_maps\\browse_screen"
 #define ARCHIVE_ROWS 11
 #define ARCHIVE_DETAILS_LINES 9
+/* (above the picture: tools/port_settings.py's MAP_ARCHIVE_PICTURE_BOUNDS) */
+#define ARCHIVE_DETAILS_LINES_PICTURED 7
 
 static boolean hub_open(struct widget_instance *widget, char const *name, boolean *widget_deleted);
 
@@ -12633,7 +12635,44 @@ static struct
 	/* the search's keyboard up, and what is typed in it */
 	boolean typing;
 	wchar_t typed[64];
+	/* the chosen map's picture's texture, and which it holds */
+	struct bitmap_data *picture;
+	unsigned picture_serial;
+	boolean picture_filled;
 } archive_screen;
+
+/* the chosen map's screenshot over archive_picture (NULL when none): drawn
+by ui_widget.c */
+struct bitmap_data *archive_menu_picture(void)
+{
+	unsigned serial;
+	int side = map_archive_picture(&serial, NULL);
+
+	if (side != MAP_ARCHIVE_PICTURE_SIDE)
+		return NULL;
+	if (!archive_screen.picture)
+	{
+		archive_screen.picture = bitmap_2d_new(MAP_ARCHIVE_PICTURE_SIDE, MAP_ARCHIVE_PICTURE_SIDE, 0, 11 /* a8r8g8b8 */);
+		if (archive_screen.picture && !rasterizer_bitmap_new(archive_screen.picture))
+		{
+			bitmap_delete(archive_screen.picture);
+			archive_screen.picture = NULL;
+		}
+		if (!archive_screen.picture)
+			return NULL;
+		archive_screen.picture_filled = FALSE;
+	}
+	if (!archive_screen.picture_filled || archive_screen.picture_serial != serial)
+	{
+		if (map_archive_picture(&serial, (unsigned long *)archive_screen.picture->base_address) !=
+			MAP_ARCHIVE_PICTURE_SIDE)
+			return NULL;
+		rasterizer_bitmap_changed(archive_screen.picture);
+		archive_screen.picture_serial = serial;
+		archive_screen.picture_filled = TRUE;
+	}
+	return archive_screen.picture;
+}
 
 /* (locked) the place on the list of the row, else NONE */
 static short archive_row_place(struct widget_instance *row)
@@ -12786,7 +12825,7 @@ static void archive_update(struct widget_instance *list)
 			mods_wide_text(wrapped, wide, NUMBEROF(wide));
 			text_set_length(named(details, "map_details_name", 0), wide, NUMBEROF(wide));
 			wrapped[0] = 0;
-			mods_wrap(text, wrapped, sizeof(wrapped), _mod_details_text, ARCHIVE_DETAILS_LINES, 0);
+			mods_wrap(text, wrapped, sizeof(wrapped), _mod_details_text, ARCHIVE_DETAILS_LINES_PICTURED, 0);
 			mods_wide_text(wrapped, wide, NUMBEROF(wide));
 			text_set_length(named(details, "map_details_text", 0), wide, NUMBEROF(wide));
 		}

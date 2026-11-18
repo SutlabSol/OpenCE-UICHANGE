@@ -65,3 +65,26 @@ version). The host is asked as usual all the same, and the joiner sends it
 progress reports, so a sharing host keeps it while it downloads (no network
 change). If the archive hasn't got the map, can't send it or stalls for a
 minute, the host is asked again and its players send the map as before.
+
+## Details and screenshots
+
+Everything BROWSE MAPS shows of a map comes from the community server's
+catalog (`GET /archive/catalog`, api-opence's `routes/routes_map_archive.js`):
+a line per map with its type letter (S/M/A/U, which TYPE filters by), title,
+author, date, rating, the site's category, first screenshot's URL and
+description. It's about 1 MB, read once after the signed list, kept in
+`<data root>/map_archive/catalog.txt` and fetched again only when
+`GET /archive/catalog/serial` differs from the kept one. The bundled
+`map_categories.txt` is only the fallback for types while offline.
+
+Only the screenshots come from FractumSeraph's server: the chosen row's
+(after 120 ms on it), then up to 5 rows either side while idle, over one
+kept-open HTTP connection, 24 kept decoded in memory.
+
+The server's data is his site read once into its database:
+
+    node scripts/map_archive_scrape.js     # his pages into scripts/map_archive/pages.jsonl (resumable)
+    node scripts/map_archive_import.js --categories <game repo>/port/assets/map_archive/map_categories.txt
+
+The import links each map of the list to its page by the list's own
+`halomaps:<fid>` / `halonet:<zip>` fields and builds the catalog once.

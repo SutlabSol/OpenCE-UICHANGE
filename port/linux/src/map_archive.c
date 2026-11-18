@@ -18,6 +18,7 @@ folders, the type filter and the joiner's fetch are this fork's.
 #include "port_config.h"
 #include "posix.h"
 #include "steam_net.h"
+#include "community_net.h"
 
 #include "monocypher.h"
 #include "monocypher-ed25519.h"
@@ -27,8 +28,21 @@ folders, the type filter and the joiner's fetch are this fork's.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 unsigned long system_milliseconds(void);
+
+/* the details' pictures, decoded by stb_image (a copy of its own: its
+functions are static, as steam_downloads.c's are) */
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_JPEG
+#define STBI_ONLY_PNG
+#define STBI_NO_STDIO
+#define STBI_NO_SIMD
+#define STBI_NO_HDR
+#define STBI_NO_THREAD_LOCALS
+#include "../../third_party/stb/stb_image.h"
 
 /* ---------- the list's source and its keys */
 
@@ -113,9 +127,11 @@ struct map
 	unsigned long long size;
 	uint8_t blake2b[32];
 	uint8_t share[32];
-	/* S, M, A, U, or 0 (not known) */
+	/* S, M, A, U, or 0 (not known): the catalog's, else the categories file's */
 	char category;
 	unsigned char installed;
+	/* its catalog entry, or -1 */
+	int entry;
 };
 
 enum list_state
@@ -139,6 +155,51 @@ enum row_kind
 };
 
 /* a category's line: its map's name and version */
+/* a map of the community server's catalog (api-opence's /archive/catalog:
+FractumSeraph's site's page of each map, read into its database): fields
+pointing into the catalog's text, "" when none */
+struct entry
+{
+	char const *name;
+	unsigned long version;
+	/* S, M, A, U, or 0 */
+	char type;
+	char const *title;
+	char const *author;
+	char const *date;
+	char const *rating;
+	char const *category;
+	char const *picture;
+	char const *description;
+};
+
+enum
+{
+	/* the pictures kept decoded (a quarter of a megabyte each) */
+	PICTURES_KEPT = 24,
+	/* the rows either side of the chosen one whose pictures are fetched
+	ahead while nothing else is wanted */
+	PICTURES_AHEAD = 5,
+	/* a row chosen this long before its picture is fetched (not each row
+	the list scrolls past) */
+	PICTURE_DELAY = 120,
+	PICTURE_MAXIMUM = 4 * 1024 * 1024,
+	CATALOG_MAXIMUM = 32 * 1024 * 1024,
+	PICTURE_SIDE = MAP_ARCHIVE_PICTURE_SIDE
+};
+
+#define CATALOG_FORMAT "# map archive catalog v1"
+#define PICTURES_HOST "halomaps.fractumseraph.net"
+
+/* a picture kept: its catalog entry's, decoded */
+struct picture
+{
+	int entry;
+	unsigned long used_at;
+	unsigned serial;
+	unsigned long *pixels;
+};
+
 struct category
 {
 	char name[NAME_SIZE];
@@ -208,7 +269,23 @@ static struct
 	int want_scan;
 	int rescan;
 	int opened;
+
+	/* the catalog (its text, which its entries point into), sorted by
+	name and version, and its serial */
+	char *catalog_text;
+	struct entry *entries;
+	int entry_count;
+	unsigned long long catalog_serial;
+	/* the pictures: those kept, the entry whose is wanted (-1: none) and
+	since when */
+	struct picture pictures[PICTURES_KEPT];
+	unsigned picture_serials;
+	int picture_want;
+	unsigned long picture_want_at;
+	int pictures_started;
 } archive;
+
+static pthread_cond_t picture_wake = PTHREAD_COND_INITIALIZER;
 
 /* ---------- small helpers */
 
@@ -676,6 +753,9 @@ static void shown_build(void)
 		archive.page = 1;
 }
 
+static void catalog_link(void);
+static void catalog_load(void);
+
 /* (thread) the list taken in place of the one in use, if it is signed and
 newer: 1 if taken */
 static int list_take(unsigned char const *list, size_t list_size, char const *signature, size_t signature_size,
@@ -716,6 +796,7 @@ static int list_take(unsigned char const *list, size_t list_size, char const *si
 	archive.shown = malloc((size_t)count * sizeof(int));
 	archive.serial = serial;
 	archive.list_state = LIST_READY;
+	catalog_link();
 	archive.queue_count = 0;
 	archive.want_scan = 1;
 	archive.moved = 1;
@@ -775,6 +856,8 @@ static void list_load(void)
 	else if (error[0] && !kept)
 		platform_log("map archive: kept the list in use (%s)", error);
 	pthread_mutex_unlock(&archive_lock);
+	/* (the catalog's details and types, the community server's) */
+	catalog_load();
 }
 
 /* ---------- what is installed: by name, in custom_maps and its folders */
@@ -1291,6 +1374,13 @@ void map_archive_start(void)
 	{
 		archive.started = 1;
 		archive.downloading = -1;
+		archive.picture_want = -1;
+		{
+			int i;
+
+			for (i = 0; i < PICTURES_KEPT; i++)
+				archive.pictures[i].entry = -1;
+		}
 		archive.page = 1;
 		archive.want_list = 1;
 		archive.list_state = LIST_LOADING;
@@ -1425,6 +1515,414 @@ void map_archive_fetch_end(void)
 	pthread_mutex_unlock(&archive_lock);
 }
 
+/* ---------- the catalog and the pictures */
+
+static int row_kind_of_chosen(int *map);
+static enum row_kind row_kind(int place, int *map);
+
+static int compare_entries(void const *a, void const *b)
+{
+	struct entry const *x = a, *y = b;
+	int order = name_compare(x->name, y->name);
+
+	return order ? order : x->version < y->version ? -1 : x->version > y->version;
+}
+
+/* (locked) each map's catalog entry, and its type from it */
+static void catalog_link(void)
+{
+	int i;
+
+	for (i = 0; i < archive.map_count; i++)
+	{
+		struct map *map = &archive.maps[i];
+		struct entry key;
+		struct entry const *found;
+
+		memset(&key, 0, sizeof(key));
+		key.name = map->name;
+		key.version = (unsigned long)map->share[0] << 24 | (unsigned long)map->share[1] << 16 |
+			(unsigned long)map->share[2] << 8 | map->share[3];
+		found = archive.entry_count ? bsearch(&key, archive.entries, (size_t)archive.entry_count, sizeof(key),
+			compare_entries) : NULL;
+		map->entry = found ? (int)(found - archive.entries) : -1;
+		if (found && found->type)
+			map->category = found->type;
+	}
+}
+
+/* the catalog's entries (text's fields cut in place: text is theirs from
+then): their count, -1 when it is not a catalog */
+static int catalog_parse(char *text, size_t size, struct entry **entries_out, unsigned long long *serial)
+{
+	size_t lines = 0, i;
+	struct entry *entries;
+	char *line = text, *end = text + size;
+	int count = 0;
+
+	*entries_out = NULL;
+	*serial = 0;
+	if (size < sizeof(CATALOG_FORMAT) - 1 || memcmp(text, CATALOG_FORMAT, sizeof(CATALOG_FORMAT) - 1))
+		return -1;
+	for (i = 0; i < size; i++)
+		lines += text[i] == '\n';
+	entries = calloc(lines + 1, sizeof(*entries));
+	if (!entries)
+		return -1;
+	while (line < end)
+	{
+		char *stop = memchr(line, '\n', (size_t)(end - line));
+		char *fields[10];
+		int field = 0;
+		char *at = line;
+
+		if (!stop)
+			stop = end;
+		*stop = 0;
+		if (stop > line && stop[-1] == '\r')
+			stop[-1] = 0;
+		if (!strncmp(line, "# serial ", 9))
+			*serial = strtoull(line + 9, NULL, 10);
+		if (*line && *line != '#')
+		{
+			while (field < 10)
+			{
+				char *tab = strchr(at, '\t');
+
+				fields[field++] = at;
+				if (!tab)
+					break;
+				*tab = 0;
+				at = tab + 1;
+			}
+			if (field == 10 && fields[0][0] && strlen(fields[1]) == 8)
+			{
+				struct entry *entry = &entries[count++];
+
+				entry->name = fields[0];
+				entry->version = strtoul(fields[1], NULL, 16);
+				entry->type = strchr("SMAU", fields[2][0]) && fields[2][0] ? fields[2][0] : 0;
+				entry->title = fields[3];
+				entry->author = fields[4];
+				entry->date = fields[5];
+				entry->rating = fields[6];
+				entry->category = fields[7];
+				entry->picture = fields[8];
+				entry->description = fields[9];
+			}
+		}
+		line = stop + 1;
+	}
+	if (count)
+		qsort(entries, (size_t)count, sizeof(*entries), compare_entries);
+	*entries_out = entries;
+	return count;
+}
+
+/* (thread) a catalog's text taken in place of the one in use: 1 if it was */
+static int catalog_take(char *text, size_t size, char const *source)
+{
+	struct entry *entries;
+	unsigned long long serial;
+	int count = catalog_parse(text, size, &entries, &serial), i;
+
+	if (count <= 0)
+	{
+		free(entries);
+		platform_log("map archive: the catalog from %s is not one", source);
+		return 0;
+	}
+	pthread_mutex_lock(&archive_lock);
+	free(archive.catalog_text);
+	free(archive.entries);
+	archive.catalog_text = text;
+	archive.entries = entries;
+	archive.entry_count = count;
+	archive.catalog_serial = serial;
+	/* (the pictures kept are the old entries') */
+	for (i = 0; i < PICTURES_KEPT; i++)
+		archive.pictures[i].entry = -1;
+	archive.picture_want = -1;
+	catalog_link();
+	shown_build();
+	archive.moved = 1;
+	pthread_mutex_unlock(&archive_lock);
+	platform_log("map archive: the catalog from %s is in use: serial %llu, %d maps", source, serial, count);
+	return 1;
+}
+
+/* (thread) the catalog kept, then the community server's when its serial
+is another */
+static void catalog_load(void)
+{
+	char folder[PATH_SIZE], path[PATH_SIZE], server[512], url[640], error[200];
+	unsigned char *data = NULL;
+	size_t size = 0;
+	unsigned long got = 0;
+	int status = 0;
+	unsigned long long serial;
+
+	path_join(folder, sizeof(folder), archive.data_root, "map_archive");
+	path_join(path, sizeof(path), folder, "catalog.txt");
+	if (file_read(path, CATALOG_MAXIMUM, &data, &size) && !catalog_take((char *)data, size, "this device"))
+		free(data);
+	data = NULL;
+	if (!community_net_address(server, (int)sizeof(server)))
+		return;
+	snprintf(url, sizeof(url), "%s/archive/catalog/serial", server);
+	if (!steam_https_get(url, 64, &data, &got, &status, error, (int)sizeof(error)) || status != 200 || !data)
+	{
+		platform_log("map archive: no catalog serial from %s (%d %s)", server, status, error);
+		free(data);
+		return;
+	}
+	serial = strtoull((char const *)data, NULL, 10);
+	free(data);
+	data = NULL;
+	pthread_mutex_lock(&archive_lock);
+	if (serial && serial == archive.catalog_serial)
+		serial = 0;
+	pthread_mutex_unlock(&archive_lock);
+	if (!serial)
+		return;
+	snprintf(url, sizeof(url), "%s/archive/catalog", server);
+	if (!steam_https_get(url, CATALOG_MAXIMUM, &data, &got, &status, error, (int)sizeof(error)) || status != 200 || !data)
+	{
+		platform_log("map archive: no catalog from %s (%d %s)", server, status, error);
+		free(data);
+		return;
+	}
+	posix_make_directory(folder);
+	if (!file_write(path, data, got))
+		platform_log("map archive: the catalog could not be kept in %s", folder);
+	if (!catalog_take((char *)data, got, "the community server"))
+		free(data);
+}
+
+/* a picture's bytes fitted to PICTURE_SIDE square on black (malloc'd), or NULL */
+static unsigned long *picture_decode(unsigned char const *data, unsigned long size)
+{
+	int width, height, components;
+	unsigned char *rgba = stbi_load_from_memory(data, (int)size, &width, &height, &components, 4);
+	unsigned long *pixels;
+	long x, y, fitted_width, fitted_height, left, top;
+
+	if (!rgba)
+		return NULL;
+	pixels = malloc(sizeof(*pixels) * PICTURE_SIDE * PICTURE_SIDE);
+	if (!pixels || width <= 0 || height <= 0)
+	{
+		stbi_image_free(rgba);
+		free(pixels);
+		return NULL;
+	}
+	/* (fitted into a 4:3 frame, which the square is stretched to: the
+	picture's widget is 4:3) */
+	if ((long)width * 3 >= (long)height * 4)
+	{
+		fitted_width = PICTURE_SIDE;
+		fitted_height = (long)height * 4 * PICTURE_SIDE / ((long)width * 3);
+	}
+	else
+	{
+		fitted_height = PICTURE_SIDE;
+		fitted_width = (long)width * 3 * PICTURE_SIDE / ((long)height * 4);
+	}
+	left = (PICTURE_SIDE - fitted_width) / 2;
+	top = (PICTURE_SIDE - fitted_height) / 2;
+	for (y = 0; y < PICTURE_SIDE; y++)
+	{
+		for (x = 0; x < PICTURE_SIDE; x++)
+		{
+			unsigned long pixel = 0xFF000000UL;
+
+			if (x >= left && x < left + fitted_width && y >= top && y < top + fitted_height && fitted_width &&
+				fitted_height)
+			{
+				long source_x = (x - left) * width / fitted_width;
+				long source_y = (y - top) * height / fitted_height;
+				unsigned char const *texel = rgba + 4 * ((size_t)source_y * (size_t)width + (size_t)source_x);
+
+				pixel = 0xFF000000UL | (unsigned long)texel[0] << 16 | (unsigned long)texel[1] << 8 | texel[2];
+			}
+			pixels[y * PICTURE_SIDE + x] = pixel;
+		}
+	}
+	stbi_image_free(rgba);
+	return pixels;
+}
+
+static void picture_sleep(unsigned long milliseconds)
+{
+	struct timespec wait = { (time_t)(milliseconds / 1000), (long)(milliseconds % 1000) * 1000000L };
+
+	nanosleep(&wait, NULL);
+}
+
+/* (locked) the kept picture of an entry, or NULL */
+static struct picture *picture_find(int entry)
+{
+	int i;
+
+	for (i = 0; i < PICTURES_KEPT; i++)
+		if (archive.pictures[i].entry == entry && entry >= 0 && archive.pictures[i].pixels)
+			return &archive.pictures[i];
+	return NULL;
+}
+
+/* (locked) the next picture to fetch ahead: the nearest row to the chosen
+one, within PICTURES_AHEAD, whose map has a picture not kept; -1 when none
+(or the screen is closed) */
+static int picture_ahead(void)
+{
+	int distance;
+
+	if (!archive.opened || archive.list_state != LIST_READY)
+		return -1;
+	for (distance = 1; distance <= PICTURES_AHEAD; distance++)
+	{
+		int side;
+
+		for (side = 0; side < 2; side++)
+		{
+			int map, entry;
+
+			if (row_kind(archive.chosen + (side ? -distance : distance), &map) != ROW_MAP)
+				continue;
+			entry = archive.maps[map].entry;
+			if (entry >= 0 && entry < archive.entry_count && archive.entries[entry].picture[0] && !picture_find(entry))
+				return entry;
+		}
+	}
+	return -1;
+}
+
+/* the chosen rows' pictures, from FractumSeraph's server over one kept
+HTTP connection (a picture is no secret; a TLS handshake each took most
+of a second) */
+static void *picture_thread(void *unused)
+{
+	struct steam_http http;
+
+	(void)unused;
+	steam_http_init(&http);
+	pthread_mutex_lock(&archive_lock);
+	for (;;)
+	{
+		char path[300];
+		char const *url;
+		int entry, i;
+		unsigned char *body = NULL;
+		unsigned long size = 0;
+		int status = 0;
+		char error[200];
+		unsigned long *pixels = NULL;
+		struct picture *slot;
+		int fetched_ahead;
+
+		while (archive.picture_want < 0)
+		{
+			int ahead = picture_ahead();
+
+			if (ahead >= 0)
+			{
+				archive.picture_want = ahead;
+				archive.picture_want_at = 0;
+				break;
+			}
+			pthread_cond_wait(&picture_wake, &archive_lock);
+		}
+		if (archive.picture_want_at && system_milliseconds() - archive.picture_want_at < PICTURE_DELAY)
+		{
+			pthread_mutex_unlock(&archive_lock);
+			picture_sleep(30);
+			pthread_mutex_lock(&archive_lock);
+			continue;
+		}
+		entry = archive.picture_want;
+		fetched_ahead = !archive.picture_want_at;
+		archive.picture_want = -1;
+		if (entry >= archive.entry_count || picture_find(entry))
+			continue;
+		/* (its path on his server: the catalog's URLs are his) */
+		url = archive.entries[entry].picture;
+		path[0] = 0;
+		if (!strncmp(url, "https://" PICTURES_HOST "/", sizeof("https://" PICTURES_HOST)))
+			snprintf(path, sizeof(path), "%s", url + sizeof("https://" PICTURES_HOST) - 1);
+		else if (!strncmp(url, "http://" PICTURES_HOST "/", sizeof("http://" PICTURES_HOST)))
+			snprintf(path, sizeof(path), "%s", url + sizeof("http://" PICTURES_HOST) - 1);
+		if (!path[0] || strchr(path, ' '))
+			continue;
+		pthread_mutex_unlock(&archive_lock);
+		if (steam_http_get(&http, PICTURES_HOST, path, PICTURE_MAXIMUM, &body, &size, &status, error,
+			(int)sizeof(error)) && status == 200 && body)
+			pixels = picture_decode(body, size);
+		else
+			platform_log("map archive: no picture %s (%d %s)", path, status, error);
+		free(body);
+		pthread_mutex_lock(&archive_lock);
+		if (!pixels)
+			continue;
+		/* (in the place of the one shown longest ago) */
+		slot = &archive.pictures[0];
+		for (i = 1; i < PICTURES_KEPT; i++)
+			if (archive.pictures[i].used_at < slot->used_at)
+				slot = &archive.pictures[i];
+		free(slot->pixels);
+		slot->pixels = pixels;
+		slot->entry = entry;
+		/* (one fetched ahead counts as shown a moment ago: the chosen row's
+		are the last to go) */
+		slot->used_at = (system_milliseconds() - (fetched_ahead ? 1000 : 0)) | 1;
+		slot->serial = ++archive.picture_serials;
+	}
+	return NULL;
+}
+
+/* (locked) the entry's picture asked for, if it has one not kept; the
+thread started the first time */
+static void picture_want(int entry)
+{
+	struct picture *kept;
+
+	if (entry < 0 || entry >= archive.entry_count || !archive.entries[entry].picture[0])
+		return;
+	kept = picture_find(entry);
+	if (kept)
+	{
+		kept->used_at = system_milliseconds() | 1;
+		return;
+	}
+	if (archive.picture_want == entry)
+		return;
+	archive.picture_want = entry;
+	archive.picture_want_at = system_milliseconds();
+	if (!archive.pictures_started)
+	{
+		pthread_t thread;
+
+		archive.pictures_started = 1;
+		if (pthread_create(&thread, NULL, picture_thread, NULL) == 0)
+			pthread_detach(thread);
+	}
+	pthread_cond_signal(&picture_wake);
+}
+
+int map_archive_picture(unsigned *serial, unsigned long *pixels)
+{
+	struct picture const *kept = NULL;
+	int map;
+
+	pthread_mutex_lock(&archive_lock);
+	if (archive.list_state == LIST_READY && row_kind_of_chosen(&map) && archive.maps[map].entry >= 0)
+		kept = picture_find(archive.maps[map].entry);
+	*serial = kept ? kept->serial : 0;
+	if (kept && pixels)
+		memcpy(pixels, kept->pixels, sizeof(*pixels) * PICTURE_SIDE * PICTURE_SIDE);
+	pthread_mutex_unlock(&archive_lock);
+	return kept ? PICTURE_SIDE : 0;
+}
+
 /* ---------- BROWSE MAPS */
 
 void map_archive_open(void)
@@ -1504,6 +2002,12 @@ static enum row_kind row_kind(int place, int *map)
 	if (archive.page * PAGE_MAPS < archive.shown_count && place == 0)
 		return ROW_NEXT;
 	return ROW_NONE;
+}
+
+/* (locked) the chosen row's map, if it is one */
+static int row_kind_of_chosen(int *map)
+{
+	return row_kind(archive.chosen, map) == ROW_MAP;
 }
 
 int map_archive_count(void)
@@ -1619,7 +2123,7 @@ void map_archive_details(int place, char *title, int title_size, char *text, int
 	case ROW_TYPE:
 		snprintf(title, (size_t)title_size, "Type");
 		snprintf(body, sizeof(body), "A shows every map, or only singleplayer maps, multiplayer maps, or "
-			"multiplayer maps with AI.%s", archive.category_count ? "" :
+			"multiplayer maps with AI.%s", archive.category_count || archive.entry_count ? "" :
 			"\nThis build has no categories file: every map shows.");
 		break;
 	case ROW_SORT:
@@ -1636,19 +2140,54 @@ void map_archive_details(int place, char *title, int title_size, char *text, int
 		struct map const *entry = &archive.maps[map];
 		char size[24];
 
+		struct entry const *details = entry->entry >= 0 && entry->entry < archive.entry_count ?
+			&archive.entries[entry->entry] : NULL;
+
+		picture_want(entry->entry);
 		display_name(entry, title, title_size);
 		size_text(entry->size, size, (int)sizeof(size));
-		used = (size_t)snprintf(body, sizeof(body), "%s\n%s, version %08lX.\n", category_name(entry->category), size,
-			entry->version);
+		if (details && details->title[0])
+		{
+			used = (size_t)snprintf(body, sizeof(body), "%s%s%s%s%s\n%s%s%s, %s.\n", details->title,
+				details->author[0] ? " by " : "", details->author, details->date[0] ? ", " : "", details->date,
+				details->category[0] ? details->category : category_name(entry->category),
+				details->rating[0] ? ", rated " : "", details->rating, size);
+		}
+		else
+			used = (size_t)snprintf(body, sizeof(body), "%s\n%s, version %08lX.\n", category_name(entry->category),
+				size, entry->version);
 		if (archive.downloading == map)
 			snprintf(body + used, sizeof(body) - used, "Downloading: A cancels.");
 		else if (queued_at(map) >= 0)
 			snprintf(body + used, sizeof(body) - used, "Queued: A takes it out.");
 		else if (entry->installed)
-			snprintf(body + used, sizeof(body) - used, "You have a map of this name. MANAGE MAPS moves or deletes "
-				"it.");
+			snprintf(body + used, sizeof(body) - used, "Installed.");
 		else
-			snprintf(body + used, sizeof(body) - used, "A downloads it into custom_maps.");
+			snprintf(body + used, sizeof(body) - used, "A downloads it.");
+		/* (what its page says of it; its "\\n"s, line breaks) */
+		if (details && details->description[0])
+		{
+			char const *at = details->description;
+
+			used = strlen(body);
+			if (used + 2 < sizeof(body))
+			{
+				body[used++] = '\n';
+				while (*at && used + 1 < sizeof(body))
+				{
+					if (at[0] == '\\' && at[1] == 'n')
+					{
+						body[used++] = '\n';
+						at += 2;
+						while (*at == ' ')
+							at++;
+						continue;
+					}
+					body[used++] = *at++;
+				}
+				body[used] = 0;
+			}
+		}
 		break;
 	}
 	case ROW_PREVIOUS:

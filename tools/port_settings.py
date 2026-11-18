@@ -6627,6 +6627,10 @@ def _mods_hub() -> list:
 # NEXT PAGE), scrolling over more; on the right the row chosen's details
 MAP_ARCHIVE = f"{MODS_CE}/browse"
 MAP_ARCHIVE_ROWS = 11
+# the chosen map's screenshot, under its details (archive_picture, the code's:
+# ui_widget.c), 4:3 as the archive's screenshots are (map_archive.c fits each
+# into its square texture so), its bottom inside the details' frame (406)
+MAP_ARCHIVE_PICTURE_BOUNDS = (432, 280, 160, 120)
 
 
 def _map_archive() -> list:
@@ -6654,22 +6658,27 @@ def _map_archive() -> list:
                          ['<on event="a" run="port archive choose"/>', '<on event="start" run="port archive choose"/>',
                           '<on event="left_mouse" run="mouse emit accept event"/>',
                           f'<child widget="{base}/map_name" x="12"/>',
-                          f'<child widget="{base}/map_state" x="250"/>'])
+                          f'<child widget="{base}/map_state" x="230"/>'])
+    # (the state's right end at 368, short of the details' frame at 381)
     lines += _widget(f"{base}/map_name",
-                     [("type", "text"), ("controller", 1), ("width", 238), ("height", 22), ("font", "ui\\large_ui"),
+                     [("type", "text"), ("controller", 1), ("width", 214), ("height", 22), ("font", "ui\\large_ui"),
                       ("color", "#FF2896FF"), ("text_y", 4)], [])
     lines += _widget(f"{base}/map_state",
-                     [("type", "text"), ("controller", 1), ("width", 134), ("height", 22), ("font", "ui\\small_ui"),
+                     [("type", "text"), ("controller", 1), ("width", 118), ("height", 22), ("font", "ui\\small_ui"),
                       ("color", "#FF2896FF"), ("align", "right"), ("text_y", 6), ("text_flags", "no_focus_test")],
                      [])
     lines += _widget(f"{base}/archive_details", [("width", 640), ("height", 480)],
-                     [f'<child widget="{base}/map_details_name"/>', f'<child widget="{base}/map_details_text"/>'])
+                     [f'<child widget="{base}/map_details_name"/>', f'<child widget="{base}/map_details_text"/>',
+                      f'<child widget="{base}/archive_picture"/>'])
     lines += _widget(f"{base}/map_details_name",
                      [("type", "text"), ("controller", 1), ("left", 412), ("top", 84), ("width", 200), ("height", 44),
                       ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
+    left, top, width, height = MAP_ARCHIVE_PICTURE_BOUNDS
     lines += _widget(f"{base}/map_details_text",
                      [("type", "text"), ("controller", 1), ("left", 412), ("top", 130), ("width", 200),
-                      ("height", 272), ("font", "ui\\small_ui"), ("color", "#FF2896FF")], [])
+                      ("height", top - 4 - 130), ("font", "ui\\small_ui"), ("color", "#FF2896FF")], [])
+    lines += _widget(f"{base}/archive_picture", [("controller", 1), ("left", left), ("top", top), ("width", width),
+                                                ("height", height), ("bitmap", "blank")], [])
     lines += _widget(f"{base}/button_bar",
                      [("type", "column_list"), ("width", 640), ("height", 28),
                       ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],

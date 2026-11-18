@@ -155,7 +155,7 @@ static void copy_shipped_files(const char *resources, const char *folder)
 {
 	static const char *const shipped[] =
 	{
-		"brokers.txt", "masters.txt", "rank_icons.bin", "forge_markers.bin", "tag_props.bin",
+		"brokers.txt", "masters.txt", "rank_icons.bin", "forge_markers.bin", "tag_props.bin", "map_categories.txt",
 	};
 	size_t index;
 

@@ -43,7 +43,9 @@ enum
 	MAP_ARCHIVE_HASH_BYTES = 32,
 	/* a map's file name: the game's 31 characters, a second version's
 	_<8 digits> and ".map" */
-	MAP_ARCHIVE_NAME_SIZE = 48
+	MAP_ARCHIVE_NAME_SIZE = 48,
+	/* the chosen map's picture: a square of this side (map_archive_picture) */
+	MAP_ARCHIVE_PICTURE_SIDE = 256
 };
 
 /* whether this build can reach the archive at all */
@@ -112,6 +114,12 @@ int map_archive_take_rescan(void);
 /* (locked) whether the rows changed under the screen (a page turned, a
 filter): it focuses the chosen row again */
 int map_archive_take_moved(void);
+
+/* (any thread; takes the lock) the chosen map's first screenshot, as its
+archive page names it (the community server's /archive/map), fitted on
+black: its side, copied into pixels (MAP_ARCHIVE_PICTURE_SIDE squared, ARGB)
+if not NULL, else 0 while there is none; serial changes with each picture */
+int map_archive_picture(unsigned *serial, unsigned long *pixels);
 
 /* A on a row; B (1 if it was taken: the screen stays); the search typed */
 void map_archive_choose(int place);
