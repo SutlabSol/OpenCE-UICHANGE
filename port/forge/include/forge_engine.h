@@ -25,6 +25,16 @@ play together. The browser lists one number alone: forge_get_network_version) */
  * so an upstream protocol bump never leaves Forge unable to join stock games. */
 #define _forge_ai_team_friendly_human _forge_ai_team_friendly
 
+/* an AI spawn's TEAM past the engine's own (_game_team_default..sentinel, kept
+as they are): the players' teams, which forge_ai.c makes the match's as its
+AI starts. In a team game RED and BLUE are the teams 0 and 1 the players are
+on, and ALL PLAYERS the engine's unused team 6, which forge_ai_team_enmity
+makes no player's enemy; in a free for all all three are ALL PLAYERS; in
+Firefight (every player on _game_team_player) all three are that */
+#define FORGE_AI_TEAM_ALL_PLAYERS 6
+#define FORGE_AI_TEAM_RED 7
+#define FORGE_AI_TEAM_BLUE 8
+
 extern int g_forge_session_enabled;
 long forge_get_network_version(void);
 

@@ -195,9 +195,11 @@ overshield (each pod's player, kind and use in Firefight's state); 106
 the enemy drop points' kinds (Forge marker types 8-10), the Flood's drop out
 of Keyes' Flood form (its time and place in Firefight's state, the form and
 its gore copied into Firefight's levels from d20, which moves the tags after
-them). A Firefight game is always of this signature
+them); 107 Forge's GRAVITY volumes (!FW:'s effect 5, its STRENGTH in the
+damage's place, pulling every machine's physics) and an AI spawn's PLAYERS'
+teams (!FA:'s team 6-8: ALL PLAYERS, RED, BLUE). A Firefight game is always of this signature
 (network_server_message_handler.c) */
-#define HALO_PORT_MOD_NETWORK_VERSION 106
+#define HALO_PORT_MOD_NETWORK_VERSION 107
 #define HALO_PORT_MODDED_VERSION_MARK 0xFF00
 #define HALO_PORT_ADVERTISED_MODDED_VERSION (HALO_PORT_MODDED_VERSION_MARK | HALO_PORT_MOD_NETWORK_VERSION)
 

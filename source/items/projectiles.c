@@ -143,6 +143,11 @@ symbols in this file:
 #include "units/units.h"
 #include "camera/observer.h"
 #include "network_replay.h" /* port: port/linux/game/network_replay_playback.c */
+
+/* port: Forge's GRAVITY volumes (port/forge/src/forge_volumes.c): FALSE
+outside them, else the pull there in units of global_gravity, the way
+things fall */
+extern int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
 /* port: port/linux/game/overshield_effect.c */
 boolean overshield_effect_active(long object_index);
 /* port: port/linux/game/infection.c */
@@ -746,6 +751,9 @@ boolean projectile_update(
 		struct collision_result collision;
 		boolean moved = FALSE;
 		real gravity_acceleration;
+		/* port: the way it falls: down, or a GRAVITY volume's pull where it
+		is (as strong as that is) */
+		float gravity_pull[3] = { 0.0f, 0.0f, -1.0f };
 		real final_speed = speed;
 		real average_speed = speed;
 		real_vector3d average_velocity = projectile->object.translational_velocity;
@@ -756,6 +764,8 @@ boolean projectile_update(
 			"c:\\halo\\SOURCE\\items\\projectiles.c",
 			326,
 			&projectile->object.translational_velocity);
+		forge_volumes_gravity_at(projectile->object.position.x, projectile->object.position.y,
+			projectile->object.position.z, gravity_pull);
 
 		if (projectile->projectile.ignore_object_index != NONE &&
 			!object_try_and_get(projectile->projectile.ignore_object_index))
@@ -893,8 +903,12 @@ boolean projectile_update(
 			gravity_acceleration = global_gravity * definition->projectile.water_gravity_scale;
 		else
 			gravity_acceleration = global_gravity * definition->projectile.air_gravity_scale;
-		new_velocity.k -= gravity_acceleration * time_remaining;
-		average_velocity.k -= gravity_acceleration * time_remaining * 0.5f;
+		new_velocity.i += gravity_pull[0] * gravity_acceleration * time_remaining;
+		new_velocity.j += gravity_pull[1] * gravity_acceleration * time_remaining;
+		new_velocity.k += gravity_pull[2] * gravity_acceleration * time_remaining;
+		average_velocity.i += gravity_pull[0] * gravity_acceleration * time_remaining * 0.5f;
+		average_velocity.j += gravity_pull[1] * gravity_acceleration * time_remaining * 0.5f;
+		average_velocity.k += gravity_pull[2] * gravity_acceleration * time_remaining * 0.5f;
 
 		match_vassert(
 			"c:\\halo\\SOURCE\\items\\projectiles.c",
@@ -941,7 +955,9 @@ boolean projectile_update(
 			projectile_collision_test_line(projectile_index, &new_position, &collision))
 		{
 			time_remaining = 1.0f - collision.t;
-			new_velocity.k += gravity_acceleration * time_remaining;
+			new_velocity.i -= gravity_pull[0] * gravity_acceleration * time_remaining;
+			new_velocity.j -= gravity_pull[1] * gravity_acceleration * time_remaining;
+			new_velocity.k -= gravity_pull[2] * gravity_acceleration * time_remaining;
 			if (final_speed != 0.0f)
 			{
 				real restored_speed = time_remaining * projectile->projectile.deceleration + final_speed;

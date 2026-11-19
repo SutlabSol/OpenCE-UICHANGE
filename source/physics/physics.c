@@ -773,6 +773,38 @@ static void friction_evaluate(
 	return;
 }
 
+/* port: Forge's GRAVITY volumes (port/forge/src/forge_volumes.c): FALSE
+outside them, else the pull there in units of global_gravity, the way
+things fall */
+extern int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
+
+/* port: the gravity on an object: its force (the world's, straight down, or
+a GRAVITY volume's pull at its middle, times its mass and its gravity scale),
+and how hard the ground holds it up, as stiff as that pull is strong, so a
+strong one sinks it no deeper */
+static void physics_object_gravity(
+	long object_index,
+	struct physics_definition const *physics,
+	real_vector3d *force,
+	real *ground_gravity)
+{
+	struct object_datum *object = object_get(object_index);
+	real gravity = physics->gravity_scale*global_gravity;
+	float pull[3];
+
+	set_real_vector3d(force, 0.0f, 0.0f, -physics->mass*gravity);
+	*ground_gravity = global_gravity;
+	if (forge_volumes_gravity_at(object->object.bounding_sphere_center.x, object->object.bounding_sphere_center.y,
+		object->object.bounding_sphere_center.z, pull))
+	{
+		real strength = (real)sqrt((double)(pull[0]*pull[0] + pull[1]*pull[1] + pull[2]*pull[2]));
+
+		set_real_vector3d(force, physics->mass*gravity*pull[0], physics->mass*gravity*pull[1],
+			physics->mass*gravity*pull[2]);
+		*ground_gravity = global_gravity*MAX(1.0f, strength);
+	}
+}
+
 void physics_compute_new(
 	struct physics_instance const *instance,
 	struct powered_mass_point_datum const *powered_mass_points,
@@ -783,13 +815,15 @@ void physics_compute_new(
 	struct object_datum *object = object_get(instance->object_index);
 	struct physics_definition const *physics = instance->physics;
 	real gravity = physics->gravity_scale*global_gravity;
+	real ground_gravity;
 	short mass_point_index;
 	/* port: no more mass points than the caller's arrays hold, nor a
 	powered one the physics does not have (physics_mass_point_count,
 	physics_powered_mass_point_index) */
 	short mass_point_count = physics_mass_point_count(physics);
 
-	set_real_vector3d(total_force, 0.0f, 0.0f, -physics->mass*gravity);
+	/* port: a GRAVITY volume's pull (physics_object_gravity) */
+	physics_object_gravity(instance->object_index, physics, total_force, &ground_gravity);
 	set_real_vector3d(total_torque, 0.0f, 0.0f, 0.0f);
 
 	memset(mass_points, 0, sizeof(struct mass_point_datum)*mass_point_count);
@@ -869,7 +903,7 @@ void physics_compute_new(
 
 			normal_velocity = dot_product3d(&mass_point->velocity, &mass_point->ground_plane.n);
 			mass_point->normal_force_magnitude = physics->mass*
-				(global_gravity/ground_depth*mass_point->ground_depth - normal_velocity*ground_damp_fraction);
+				(ground_gravity/ground_depth*mass_point->ground_depth - normal_velocity*ground_damp_fraction);
 			scale_vector3d(&mass_point->ground_plane.n, mass_point->normal_force_magnitude, &mass_point->normal_force);
 
 			scale_vector3d(&mass_point->ground_plane.n, -normal_velocity, &mass_point->velocity_relative_to_ground);
@@ -1732,6 +1766,7 @@ static void physics_update_old(
 	struct physics_definition const *physics = physics_definition_get(
 		object_definition->object.physics.index);
 	real gravity = physics->gravity_scale*global_gravity;
+	real ground_gravity;
 	real_matrix4x3 world_matrix;
 	real_vector3d total_force = { 0.0f, 0.0f, -physics->mass*gravity };
 	real_vector3d total_torque = { 0.0f, 0.0f, 0.0f };
@@ -1744,6 +1779,9 @@ static void physics_update_old(
 	short mass_point_index;
 	/* port: (as in physics_compute_new) */
 	short mass_point_count = physics_mass_point_count(physics);
+
+	/* port: a GRAVITY volume's pull (physics_object_gravity) */
+	physics_object_gravity(object_index, physics, &total_force, &ground_gravity);
 
 	matrix4x3_from_point_and_vectors(
 		&world_matrix,
@@ -1873,7 +1911,7 @@ static void physics_update_old(
 			real ground_scale = -mass_point_definition->mass*physics->ground_friction;
 
 			mass_point->normal_force_magnitude = physics->mass*(
-				global_gravity/physics->ground_depth*mass_point->ground_depth -
+				ground_gravity/physics->ground_depth*mass_point->ground_depth -
 				normal_velocity*physics->ground_damp_fraction);
 			scale_vector3d(
 				&mass_point->ground_plane.n,

@@ -1,11 +1,12 @@
 /*
 FORGE_VOLUMES.C
 
-Forge's damage and kill volumes (forge_volumes.h): what each is, kept by its
-live instance's index; their rows in Object Settings, their saved lines and
-packets; the map's deadly trigger volumes adopted and written back; the units
-in them hurt each tick; their edges drawn in Forge mode; and the emitters
-whose DEAL DAMAGE is off.
+Forge's damage, kill and gravity volumes (forge_volumes.h): what each is,
+kept by its live instance's index; their rows in Object Settings, their saved
+lines and packets; the map's deadly trigger volumes adopted and written back;
+the units in them hurt each tick; the gravity at a point, for the engine's
+physics; their edges drawn in Forge mode; and the emitters whose DEAL DAMAGE
+is off.
 */
 
 #include "cseries.h"
@@ -48,8 +49,16 @@ enum
 {
 	_volume_color_damage = 0,
 	_volume_color_kill,
-	_volume_color_off
+	_volume_color_off,
+	_volume_color_gravity
 };
+
+/* GRAVITY's STRENGTH (hundredths of the world's gravity): a new one's, and
+the most */
+#define VOLUME_GRAVITY_DEFAULT 50.0f
+#define VOLUME_GRAVITY_MAXIMUM 1000.0f
+/* (the GRAVITY volumes the engine's physics asks of, a tick) */
+#define MAXIMUM_GRAVITY_VOLUMES 256
 
 /* ---------- globals */
 
@@ -63,9 +72,29 @@ static struct
 static int s_occupant_count;
 static long s_last_tick = -1;
 
+/* the GRAVITY volumes, as the physics asks of them: their frames and pulls,
+made again each tick (or when one changes), since everything that moves
+asks */
+static struct gravity_volume
+{
+	uint8_t shape;
+	float middle[3];
+	float forward[3], left[3], up[3];
+	float half[3];
+	float bound;
+	/* (units of the world's gravity, the way things fall) */
+	float pull[3];
+} s_gravity[MAXIMUM_GRAVITY_VOLUMES];
+static int s_gravity_count;
+static long s_gravity_time = -1;
+static int s_gravity_dirty = 1;
+/* (things at rest in them woken: when one changes, and once a second) */
+static int s_gravity_wake = 1;
+static long s_gravity_wake_time = -1;
+
 static char const *const s_shape_names[NUMBER_OF_FORGE_VOLUME_SHAPES] = { "CUBE", "CYLINDER", "SPHERE", "MAP'S OWN" };
 static char const *const s_effect_names[NUMBER_OF_FORGE_VOLUME_EFFECTS] = {
-	"APPLY DAMAGE", "CONSTANT DAMAGE", "INSTA KILL", "MAP SCRIPT", "OFF"
+	"APPLY DAMAGE", "CONSTANT DAMAGE", "INSTA KILL", "MAP SCRIPT", "OFF", "GRAVITY"
 };
 
 /* ---------- private code */
@@ -236,6 +265,8 @@ static void map_volume_write(int32_t live_idx)
 static void volume_changed(int32_t live_idx)
 {
 	s_volumes[live_idx].edited = 1;
+	s_gravity_dirty = 1;
+	s_gravity_wake = 1;
 	if (s_volumes[live_idx].map_index >= 0)
 		map_volume_write(live_idx);
 }
@@ -408,7 +439,7 @@ void forge_volume_apply(int32_t live_idx, int shape, int effect, float damage, f
 	{
 		volume->effect = (uint8_t)effect;
 	}
-	volume->damage = PIN(damage, 0.0f, 1000.0f);
+	volume->damage = PIN(damage, 0.0f, VOLUME_GRAVITY_MAXIMUM);
 	for (k = 0; k < 3; k++)
 		volume->size[k] = size_clamp(size[k]);
 	volume_changed(live_idx);
@@ -428,6 +459,11 @@ void forge_volumes_level_reset(void)
 	memset(s_volumes, 0, sizeof(s_volumes));
 	s_occupant_count = 0;
 	s_last_tick = -1;
+	s_gravity_count = 0;
+	s_gravity_time = -1;
+	s_gravity_dirty = 1;
+	s_gravity_wake = 1;
+	s_gravity_wake_time = -1;
 }
 
 void forge_volumes_adopt_map(void)
@@ -522,6 +558,11 @@ void forge_volume_describe(int32_t live_idx, char *text, unsigned long size)
 		snprintf(text, size, "MAP VOLUME %s%s(%s)", inst->label, inst->label[0] ? " " : "", s_effect_names[volume->effect]);
 		return;
 	}
+	if (volume->effect == _forge_volume_gravity)
+	{
+		snprintf(text, size, "GRAVITY X%.2f %s", (double)(volume->damage / 100.0f), s_shape_names[volume->shape]);
+		return;
+	}
 	snprintf(text, size, "%s %s", s_effect_names[volume->effect], s_shape_names[volume->shape]);
 }
 
@@ -546,8 +587,10 @@ void forge_volume_row_text(int32_t live_idx, int row, char *label, unsigned long
 		snprintf(value, value_size, "%s", s_effect_names[volume->effect]);
 		break;
 	case _forge_volume_row_damage:
-		snprintf(label, label_size, "DAMAGE:");
-		if (volume->effect == _forge_volume_apply_damage)
+		snprintf(label, label_size, volume->effect == _forge_volume_gravity ? "STRENGTH:" : "DAMAGE:");
+		if (volume->effect == _forge_volume_gravity)
+			snprintf(value, value_size, "X%.2f", (double)(volume->damage / 100.0f));
+		else if (volume->effect == _forge_volume_apply_damage)
 			snprintf(value, value_size, "%.0f%% ONCE", (double)volume->damage);
 		else if (volume->effect == _forge_volume_constant_damage)
 			snprintf(value, value_size, "%.0f%% A SECOND", (double)volume->damage);
@@ -570,6 +613,16 @@ void forge_volume_row_text(int32_t live_idx, int row, char *label, unsigned long
 	default:
 		break;
 	}
+}
+
+/* GRAVITY's next STRENGTH (hundredths): x0.05 to x1, x0.1 to x2, x0.5 past */
+static float gravity_step(float strength, int dir)
+{
+	float step = strength < 100.0f - 0.01f || (dir < 0 && strength <= 100.0f + 0.01f) ? 5.0f :
+		strength < 200.0f - 0.01f || (dir < 0 && strength <= 200.0f + 0.01f) ? 10.0f : 50.0f;
+	float next = (float)floor((double)((strength + step * (float)dir) / step) + 0.5) * step;
+
+	return PIN(next, 0.0f, VOLUME_GRAVITY_MAXIMUM);
 }
 
 /* a size's next step: quarters to 4, halves to 10, wholes to 50, fives past */
@@ -611,13 +664,22 @@ int forge_volume_row_step(int32_t live_idx, int row, int dir)
 		{
 			effect = (effect + count + dir) % count;
 		} while (effect == _forge_volume_map_script && settings.map_index < 0);
+		/* (GRAVITY's STRENGTH and the damage share a field: each starts at
+		its own default) */
+		if ((effect == _forge_volume_gravity) != (settings.effect == _forge_volume_gravity))
+			settings.damage = effect == _forge_volume_gravity ? VOLUME_GRAVITY_DEFAULT : 25.0f;
 		settings.effect = (uint8_t)effect;
 		break;
 	}
 	case _forge_volume_row_damage:
+		if (settings.effect == _forge_volume_gravity)
+		{
+			settings.damage = gravity_step(settings.damage, dir);
+			break;
+		}
 		if (settings.effect != _forge_volume_apply_damage && settings.effect != _forge_volume_constant_damage)
 		{
-			forge_set_status("Only APPLY DAMAGE and CONSTANT DAMAGE have an amount");
+			forge_set_status("Only APPLY DAMAGE, CONSTANT DAMAGE and GRAVITY have an amount");
 			return 0;
 		}
 		settings.damage = PIN(settings.damage + (float)dir * (settings.damage < 10.0f || (dir < 0 && settings.damage <= 10.0f) ?
@@ -713,6 +775,152 @@ int forge_volume_packet(int32_t live_idx, char *text, unsigned long size)
 	return 1;
 }
 
+/* the GRAVITY volumes made again: their frames, and their pulls along their
+own down */
+static void gravity_volumes_make(void)
+{
+	int32_t i;
+
+	s_gravity_count = 0;
+	for (i = 0; i < g_forge.live_instance_count && s_gravity_count < MAXIMUM_GRAVITY_VOLUMES; i++)
+	{
+		struct forge_live_instance const *inst = volume_instance(i);
+		struct forge_volume const *volume = &s_volumes[i];
+		struct gravity_volume *gravity;
+		real_vector3d forward, left, up;
+		float strength;
+
+		if (!inst || volume->effect != _forge_volume_gravity)
+			continue;
+		gravity = &s_gravity[s_gravity_count++];
+		euler_basis(inst->yaw, inst->pitch, inst->roll, &forward, &left, &up);
+		strength = volume->damage / 100.0f;
+		gravity->shape = volume->shape;
+		gravity->middle[0] = inst->x;
+		gravity->middle[1] = inst->y;
+		gravity->middle[2] = inst->z;
+		gravity->forward[0] = forward.i;
+		gravity->forward[1] = forward.j;
+		gravity->forward[2] = forward.k;
+		gravity->left[0] = left.i;
+		gravity->left[1] = left.j;
+		gravity->left[2] = left.k;
+		gravity->up[0] = up.i;
+		gravity->up[1] = up.j;
+		gravity->up[2] = up.k;
+		gravity->half[0] = volume->size[0] * 0.5f;
+		gravity->half[1] = volume->size[1] * 0.5f;
+		gravity->half[2] = volume->size[2] * 0.5f;
+		gravity->bound = MAX(gravity->half[0], MAX(gravity->half[1], gravity->half[2])) * 1.75f;
+		gravity->pull[0] = -up.i * strength;
+		gravity->pull[1] = -up.j * strength;
+		gravity->pull[2] = -up.k * strength;
+	}
+}
+
+static int gravity_volume_contains(struct gravity_volume const *gravity, float x, float y, float z)
+{
+	float dx = x - gravity->middle[0], dy = y - gravity->middle[1], dz = z - gravity->middle[2];
+	float a, b, c;
+
+	if (fabs((double)dx) > gravity->bound || fabs((double)dy) > gravity->bound || fabs((double)dz) > gravity->bound)
+		return 0;
+	a = (dx * gravity->forward[0] + dy * gravity->forward[1] + dz * gravity->forward[2]) / gravity->half[0];
+	b = (dx * gravity->left[0] + dy * gravity->left[1] + dz * gravity->left[2]) / gravity->half[1];
+	c = (dx * gravity->up[0] + dy * gravity->up[1] + dz * gravity->up[2]) / gravity->half[2];
+	switch (gravity->shape)
+	{
+	case _forge_volume_cylinder:
+		return a * a + b * b <= 1.0f && fabs((double)c) <= 1.0f;
+	case _forge_volume_sphere:
+		return a * a + b * b + c * c <= 1.0f;
+	default:
+		return fabs((double)a) <= 1.0f && fabs((double)b) <= 1.0f && fabs((double)c) <= 1.0f;
+	}
+}
+
+/* how many GRAVITY volumes there are, made again once a tick or after a
+change */
+static int gravity_volumes_refresh(void)
+{
+	long now;
+
+	if (!g_forge.initialized || g_forge.live_instance_count <= 0)
+		return 0;
+	now = game_time_get();
+	if (s_gravity_dirty || now != s_gravity_time)
+	{
+		gravity_volumes_make();
+		s_gravity_dirty = 0;
+		s_gravity_time = now;
+	}
+	return s_gravity_count;
+}
+
+int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3])
+{
+	int inside = 0;
+	int k;
+	float sum[3] = { 0.0f, 0.0f, 0.0f };
+
+	if (!gravity_volumes_refresh())
+		return 0;
+	for (k = 0; k < s_gravity_count; k++)
+	{
+		struct gravity_volume const *gravity = &s_gravity[k];
+
+		if (!gravity_volume_contains(gravity, x, y, z))
+			continue;
+		inside = 1;
+		sum[0] += gravity->pull[0];
+		sum[1] += gravity->pull[1];
+		sum[2] += gravity->pull[2];
+	}
+	/* (outside them all, out_pull is left as it was) */
+	if (inside)
+	{
+		out_pull[0] = sum[0];
+		out_pull[1] = sum[1];
+		out_pull[2] = sum[2];
+	}
+	return inside;
+}
+
+/* vehicles, items and grenades at rest in a GRAVITY volume that pulls them other than
+down woken, so they fall its way (a volume placed or turned over them, a
+weapon spawned in one) */
+static void gravity_volumes_wake(void)
+{
+	struct object_iterator iterator;
+	struct object_datum *object;
+	long now = game_time_get();
+
+	if (!s_gravity_wake && s_gravity_wake_time >= 0 && now >= s_gravity_wake_time &&
+		now - s_gravity_wake_time < TICKS_PER_SECOND)
+	{
+		return;
+	}
+	s_gravity_wake = 0;
+	s_gravity_wake_time = now;
+	object_iterator_new(&iterator, _object_mask_vehicle | _object_mask_item | _object_mask_projectile, 0);
+	while ((object = (struct object_datum *)object_iterator_next(&iterator)) != NULL)
+	{
+		float pull[3];
+		float magnitude;
+
+		if (!TEST_FLAG(object->object.flags, _object_at_rest_bit) ||
+			!forge_volumes_gravity_at(object->object.bounding_sphere_center.x, object->object.bounding_sphere_center.y,
+				object->object.bounding_sphere_center.z, pull))
+		{
+			continue;
+		}
+		magnitude = (float)sqrt((double)(pull[0] * pull[0] + pull[1] * pull[1] + pull[2] * pull[2]));
+		/* (still, it stays: no pull, or one mostly down holds it where it lies) */
+		if (magnitude > 0.01f && -pull[2] < 0.9f * magnitude)
+			SET_FLAG(object->object.flags, _object_at_rest_bit, FALSE);
+	}
+}
+
 void forge_volumes_update(void)
 {
 	long now = game_time_get();
@@ -735,6 +943,9 @@ void forge_volumes_update(void)
 	/* (a pause, a load: one tick's) */
 	if (ticks > TICKS_PER_SECOND)
 		ticks = 1;
+	/* (every machine: its own copies move) */
+	if (gravity_volumes_refresh())
+		gravity_volumes_wake();
 	/* (the host hurts; the network carries the units' health) */
 	if (game_connection() == _game_connection_network_client)
 		return;
@@ -1037,11 +1248,31 @@ void forge_volumes_render(
 		draw.draw_line = draw_line;
 		draw.draw_face = draw_face;
 		draw.color = volume->effect == _forge_volume_insta_kill || volume->effect == _forge_volume_map_script ?
-			_volume_color_kill : volume->effect == _forge_volume_off ? _volume_color_off : _volume_color_damage;
+			_volume_color_kill : volume->effect == _forge_volume_off ? _volume_color_off :
+			volume->effect == _forge_volume_gravity ? _volume_color_gravity : _volume_color_damage;
 		draw.highlighted = i == g_forge.grabbed_live_index || i == g_forge.hovered_live_index;
 		if (draw_face)
 			volume_faces(volume, &frame, volume_draw_face, &draw);
 		volume_edges(volume, &frame, volume_draw_edge, &draw);
+		/* (GRAVITY: an arrow down its own down, the way things fall in it) */
+		if (volume->effect == _forge_volume_gravity && volume->damage > 0.0f)
+		{
+			float length = MIN(frame.hz, 2.0f);
+			float head = length * 0.35f;
+			float tail[3], tip[3], barb[3];
+
+			frame_point(&frame, 0.0f, 0.0f, length, tail);
+			frame_point(&frame, 0.0f, 0.0f, -length, tip);
+			draw_line(tail, tip, draw.color, draw.highlighted);
+			frame_point(&frame, head, 0.0f, head - length, barb);
+			draw_line(barb, tip, draw.color, draw.highlighted);
+			frame_point(&frame, -head, 0.0f, head - length, barb);
+			draw_line(barb, tip, draw.color, draw.highlighted);
+			frame_point(&frame, 0.0f, head, head - length, barb);
+			draw_line(barb, tip, draw.color, draw.highlighted);
+			frame_point(&frame, 0.0f, -head, head - length, barb);
+			draw_line(barb, tip, draw.color, draw.highlighted);
+		}
 	}
 }
 

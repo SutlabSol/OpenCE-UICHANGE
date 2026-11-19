@@ -1439,6 +1439,10 @@ static void ragdoll_solve(
 /* half a tick: gravity and the speeds move the particles as far as the world
 lets them, the bones pull them back together, as far as the world lets
 them, and what they ran into slows them */
+/* Forge's GRAVITY volumes (port/forge/src/forge_volumes.c): FALSE outside
+them, else the pull there in units of global_gravity, the way things fall */
+extern int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
+
 static void ragdoll_substep(
 	struct ragdoll *ragdoll)
 {
@@ -1453,8 +1457,14 @@ static void ragdoll_substep(
 	{
 		real_vector3d *velocity = &ragdoll->velocities[index];
 		real_point3d destination;
+		real_point3d const *at = &ragdoll->positions[index];
+		float pull[3] = { 0.0f, 0.0f, -1.0f };
 
-		velocity->k -= global_gravity * step;
+		/* (or a GRAVITY volume's pull where it is) */
+		forge_volumes_gravity_at(at->x, at->y, at->z, pull);
+		velocity->i += pull[0] * global_gravity * step;
+		velocity->j += pull[1] * global_gravity * step;
+		velocity->k += pull[2] * global_gravity * step;
 		scale_vector3d(velocity, RAGDOLL_DAMPING, velocity);
 		ragdoll_clamp_speed(velocity);
 		starts[index] = ragdoll->positions[index];

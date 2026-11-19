@@ -16,7 +16,15 @@ index. Its effect:
 - CONSTANT DAMAGE: the amount each second while a unit is in it;
 - INSTA KILL: a unit in it dies;
 - and a map's volume's own MAP SCRIPT (the map's scripts do as they did), or
-  OFF.
+  OFF;
+- GRAVITY: whatever is in it falls towards the volume's own down (its
+  bottom face, as it is turned), at STRENGTH times the world's gravity (x0
+  to x10): turned over, things fall up; on its side, sideways. Where gravity
+  volumes overlap their pulls add up; out of every one, the world's gravity
+  again. Players and AI (in the air, or pulled off the ground they stand on),
+  vehicles, dropped weapons and equipment, grenades and other arcing
+  projectiles, and ragdolls (forge_volumes_gravity_at, asked by the engine's
+  physics). Every machine runs it on its own copy of the volumes.
 
 Every unit is a biped here: one in a vehicle is in a volume if it is. The
 host (or a game with no network) hurts them, each tick of a game on the map,
@@ -69,6 +77,8 @@ enum forge_volume_effect
 	/* (a map's volume's alone: its scripts kill in it, as they did) */
 	_forge_volume_map_script,
 	_forge_volume_off,
+	/* (after the others: saved maps and older peers keep their numbers) */
+	_forge_volume_gravity,
 	NUMBER_OF_FORGE_VOLUME_EFFECTS
 };
 
@@ -104,7 +114,9 @@ struct forge_volume
 	height, a sphere's three diameters (world units) */
 	float size[3];
 	/* a percentage of a unit's health: once (APPLY DAMAGE) or each second
-	(CONSTANT DAMAGE) */
+	(CONSTANT DAMAGE); GRAVITY's STRENGTH in hundredths of the world's
+	gravity (100 is x1, 0 to 1000), so the saved line and !FW: carry it as
+	they carry damage */
 	float damage;
 };
 
@@ -149,6 +161,13 @@ int forge_volume_packet(int32_t live_idx, char *text, unsigned long size);
 /* each frame of a level (forge_3d_update): the units in the volumes hurt
 (the host's), the map's volumes written back */
 void forge_volumes_update(void);
+
+/* the gravity at a point (the engine's physics): FALSE when it is in no
+GRAVITY volume (the world's own, straight down, applies); TRUE and the pull,
+in units of the world's gravity (global_gravity), as a vector pointing the
+way things fall: the GRAVITY volumes it is in, added up (out_pull is left
+as it was when FALSE) */
+int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
 
 /* their shapes in the world, in Forge mode (forge_runtime_tags.c's world
 pass): each edge a line drawn by `draw_line`, and their faces tinted by

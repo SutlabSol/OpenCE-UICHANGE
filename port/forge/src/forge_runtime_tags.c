@@ -8162,8 +8162,12 @@ static int resolve_marker_kind_and_color(
 	if (group_tag == FORGE_GROUP_AI_SPAWN)
 	{
 		*out_mesh_kind = _marker_mesh_firefight_spawn;
-		*out_color_preset = team_designator == 1 || team_designator == 2 ? _marker_color_tele_green :
-			team_designator == 3 ? _marker_color_red_team :
+		/* (the players' teams: ALL PLAYERS green as PLAYER is, RED and BLUE
+		their own, FORGE_AI_TEAM_* of forge_engine.h) */
+		*out_color_preset = team_designator == 1 || team_designator == 2 ||
+			team_designator == FORGE_AI_TEAM_ALL_PLAYERS ? _marker_color_tele_green :
+			team_designator == FORGE_AI_TEAM_BLUE ? _marker_color_blue_team :
+			team_designator == 3 || team_designator == FORGE_AI_TEAM_RED ? _marker_color_red_team :
 			team_designator == 4 ? _marker_color_race_orange : _marker_color_koth_gold;
 		return 1;
 	}
@@ -8489,10 +8493,12 @@ static void draw_dropship_route_piece(float const *from, float const *to, int ki
 }
 
 /* a volume's edge (forge_volumes_render): red where it kills, gold where it
-hurts, grey-blue where it does nothing; thicker for the one held or pointed at */
+hurts, grey-blue where it does nothing, purple where it pulls (GRAVITY, and
+its arrow); thicker for the one held or pointed at */
 static void draw_volume_line(float const *from, float const *to, int color, int highlighted)
 {
-	static int const colors[] = { _marker_color_koth_gold, _marker_color_red_team, _marker_color_blue_team };
+	static int const colors[] = { _marker_color_koth_gold, _marker_color_red_team, _marker_color_blue_team,
+		_marker_color_oddball_purple };
 	union real_point3d p0, p1, middle;
 	float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
 
@@ -8510,15 +8516,16 @@ static void draw_volume_line(float const *from, float const *to, int color, int 
 	{
 		return;
 	}
-	draw_translucent_beam_3d(&p0, &p1, colors[color >= 0 && color < 3 ? color : 0], highlighted ? 2.5f : 1.25f);
+	draw_translucent_beam_3d(&p0, &p1, colors[color >= 0 && color < 4 ? color : 0], highlighted ? 2.5f : 1.25f);
 }
 
 /* a volume's face, faintly tinted in its edges' color */
 static void draw_volume_face(float const *corner, float const *side_a, float const *side_b, int color, int highlighted)
 {
-	static int const colors[] = { _marker_color_koth_gold, _marker_color_red_team, _marker_color_blue_team };
+	static int const colors[] = { _marker_color_koth_gold, _marker_color_red_team, _marker_color_blue_team,
+		_marker_color_oddball_purple };
 
-	draw_translucent_face_3d(corner, side_a, side_b, colors[color >= 0 && color < 3 ? color : 0], highlighted);
+	draw_translucent_face_3d(corner, side_a, side_b, colors[color >= 0 && color < 4 ? color : 0], highlighted);
 }
 
 /* the model of a Firefight generator, as a match shows it

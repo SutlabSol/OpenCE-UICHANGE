@@ -29,6 +29,7 @@
 #include "ai/ai_scenario_definitions.h"
 #include "ai/encounters.h"
 #include "game/game_engine.h"
+#include "game/players.h"
 #include "scenario/scenario.h"
 #include "math/real_math.h"
 #include "scenario/scenario_definitions.h"
@@ -590,15 +591,60 @@ static int forge_ai_entry_own_squad(struct forge_ai_spawn_entry const *entry)
 	return entry->encounter_index < 0 || entry->detached || (entry->gametype_flags & FORGE_AI_RANDOM_RANK);
 }
 
+/* whether a team is a player's in this match: a team game's red or blue, or
+any team a player of a free for all is on */
+static boolean forge_ai_players_team(short team_index)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+
+	if (game_engine_has_teams())
+		return team_index == 0 || team_index == 1;
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		if (player->team_index == team_index)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+int forge_ai_team_enmity(short our_team_index, short other_team_index)
+{
+	short other;
+
+	if ((our_team_index == FORGE_AI_TEAM_ALL_PLAYERS) == (other_team_index == FORGE_AI_TEAM_ALL_PLAYERS))
+		return NONE;
+	/* (a match of a multiplayer map's, not Firefight's: its players are all
+	on one team there, and a campaign's team 6 is its own) */
+	if (!g_forge.initialized || !game_engine_running() || firefight_active())
+		return NONE;
+	other = our_team_index == FORGE_AI_TEAM_ALL_PLAYERS ? other_team_index : our_team_index;
+	return forge_ai_players_team(other) ? FALSE : NONE;
+}
+
+/* the team an AI spawn plays on in this match: its own, or the players'
+teams as the match has them (FORGE_AI_TEAM_*) */
+static short forge_ai_match_team(short team)
+{
+	if (team != FORGE_AI_TEAM_ALL_PLAYERS && team != FORGE_AI_TEAM_RED && team != FORGE_AI_TEAM_BLUE)
+		return team;
+	if (!game_engine_running() || firefight_active())
+		return _game_team_player;
+	if (game_engine_has_teams() && team != FORGE_AI_TEAM_ALL_PLAYERS)
+		return team == FORGE_AI_TEAM_RED ? 0 : 1;
+	return FORGE_AI_TEAM_ALL_PLAYERS;
+}
+
 static short forge_ai_entry_team(struct forge_ai_spawn_entry const *entry, long variant)
 {
-	if (entry->team == _game_team_default)
-	{
-		struct actor_variant_definition *definition = (struct actor_variant_definition *)tag_get('actv', variant);
+	struct actor_variant_definition *definition;
 
-		if (definition->unit_reference.index != NONE)
-			return unit_definition_get(definition->unit_reference.index)->unit.default_team;
-	}
+	if (entry->team != _game_team_default)
+		return forge_ai_match_team(entry->team);
+	definition = (struct actor_variant_definition *)tag_get('actv', variant);
+	if (definition->unit_reference.index != NONE)
+		return unit_definition_get(definition->unit_reference.index)->unit.default_team;
 	return entry->team;
 }
 
@@ -2160,9 +2206,19 @@ static char const *forge_ai_team_name(int team)
 	case _game_team_covenant: return "COVENANT";
 	case _game_team_flood:    return "FLOOD";
 	case _game_team_sentinel: return "SENTINEL";
+	case FORGE_AI_TEAM_ALL_PLAYERS: return "ALL PLAYERS";
+	case FORGE_AI_TEAM_RED:   return "RED TEAM";
+	case FORGE_AI_TEAM_BLUE:  return "BLUE TEAM";
 	default:                  return "OTHER";
 	}
 }
+
+/* the TEAM row's order: the players' teams beside PLAYER */
+static int16_t const s_ai_team_order[] =
+{
+	_game_team_default, _game_team_player, FORGE_AI_TEAM_RED, FORGE_AI_TEAM_BLUE, FORGE_AI_TEAM_ALL_PLAYERS,
+	_game_team_human, _game_team_covenant, _game_team_flood, _game_team_sentinel
+};
 
 static uint16_t const s_ai_gametypes[] =
 {
@@ -2380,12 +2436,19 @@ void forge_ai_spawn_row_step(int32_t live_idx, int row, int dir)
 		forge_ai_tag_step('weap', entry->weapon_path, sizeof(entry->weapon_path), dir, 1);
 		break;
 	case _forge_ai_row_team:
-		index = entry->team + dir;
-		entry->team = (int16_t)(index < _game_team_default ? _game_team_sentinel :
-			index > _game_team_sentinel ? _game_team_default : index);
+	{
+		int count = (int)NUMBEROF(s_ai_team_order);
+		int at = 0;
+
+		while (at < count && s_ai_team_order[at] != entry->team)
+			at++;
+		if (at == count)
+			at = 0;
+		entry->team = s_ai_team_order[(at + count + dir) % count];
 		inst->team_designator = entry->team;
 		entry->detached = 1;
 		break;
+	}
 	case _forge_ai_row_start_count:
 		entry->unit_count = (int16_t)((entry->unit_count + 17 + dir) % 17);
 		entry->detached = 1;

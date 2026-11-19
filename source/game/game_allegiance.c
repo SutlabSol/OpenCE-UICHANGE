@@ -189,6 +189,10 @@ void game_allegiance_dispose_from_old_map(
 	return;
 }
 
+/* port: a Forge AI spawn on ALL PLAYERS' team, and every player's team
+(port/forge/src/forge_ai.c): NONE, or whether they are enemies */
+extern int forge_ai_team_enmity(short our_team_index, short other_team_index);
+
 boolean game_team_is_enemy(
 	short our_team_index,
 	short other_team_index)
@@ -198,6 +202,9 @@ boolean game_team_is_enemy(
 	player's enemies not each other's (port/linux/game/skulls_custom.c) */
 	int skull_enmity = skulls_team_enmity(our_team_index, other_team_index);
 
+	if (skull_enmity != NONE)
+		return (boolean)skull_enmity;
+	skull_enmity = forge_ai_team_enmity(our_team_index, other_team_index);
 	if (skull_enmity != NONE)
 		return (boolean)skull_enmity;
 
@@ -231,6 +238,10 @@ boolean game_team_is_ally(
 
 	if (skull_alliance != NONE)
 		return (boolean)skull_alliance;
+	/* port: (and a Forge AI spawn of ALL PLAYERS' team the players' ally) */
+	skull_alliance = forge_ai_team_enmity(our_team_index, other_team_index);
+	if (skull_alliance != NONE)
+		return (boolean)!skull_alliance;
 
 	if (VALID_INDEX(our_team_index, NUMBER_OF_GAME_TEAMS) &&
 		VALID_INDEX(other_team_index, NUMBER_OF_GAME_TEAMS))

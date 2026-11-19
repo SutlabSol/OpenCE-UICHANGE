@@ -670,6 +670,9 @@ static struct distributed_host_speed
 	real top_height;
 	/* the last tick it had the unit on the ground (or where it started) */
 	long ground_time;
+	/* pulled by a Forge GRAVITY volume since it last had it on the ground
+	out of every one (forge_volumes.c): no bound on its rise or fall */
+	boolean gravity;
 } distributed_host_speeds[MAXIMUM_TRACKED_PLAYERS];
 /* a client: where each of its own players' units was at its last ticks,
 and how long the host takes to have them (ticks) */
@@ -3012,6 +3015,8 @@ a jump's: a client that says it goes faster than that gains nothing by it
 (its gravity on a copy said to hover and fall, its turn at a wall), nor
 any height. */
 static void distributed_riding_transition(short player_index, long unit_index, struct vehicle_riding_state const *host);
+/* Forge's GRAVITY volumes (port/forge/src/forge_volumes.c) */
+extern int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
 
 static void distributed_on_foot_bound(
 	short player_index,
@@ -3067,6 +3072,7 @@ static void distributed_on_foot_bound(
 		noted->grounded = FALSE;
 		noted->flight_speed = 0.0f;
 		noted->flight_rise = 0.0f;
+		noted->gravity = FALSE;
 		noted->ground_height = object->object.position.z;
 		noted->ground_frame_k = frame_velocity->k;
 		noted->top_height = object->object.position.z;
@@ -3194,6 +3200,29 @@ static void distributed_on_foot_bound(
 	bound->airborne_ticks = noted->grounded ? 0 : now - noted->ground_time;
 	if (!(bound->rise >= 0.0f))
 		bound->rise = UNIT_WORLD_BOUND;
+	/* (a Forge GRAVITY volume's pull, or its throw since: it may fall any
+	way at any speed the game lets it, and rise as high; the volumes are
+	the map's, the same on every machine) */
+	{
+		float pull[3];
+
+		if (forge_volumes_gravity_at(object->object.position.x, object->object.position.y, object->object.position.z,
+			pull))
+		{
+			noted->gravity = TRUE;
+		}
+		else if (noted->grounded)
+		{
+			noted->gravity = FALSE;
+		}
+	}
+	if (noted->gravity)
+	{
+		bound->speed = MAXIMUM_PREDICTED_SPEED + bound->frame_speed;
+		bound->rise = UNIT_WORLD_BOUND;
+		bound->top_height = UNIT_WORLD_BOUND;
+		bound->airborne_ticks = 0;
+	}
 }
 
 /* (the host) how fast a client's player's unit on foot may fall at a

@@ -2317,12 +2317,19 @@ static void biped_find_nearby_support_surface(
 	return;
 }
 
+/* port: Forge's GRAVITY volumes (port/forge/src/forge_volumes.c): FALSE
+outside them, else the pull there in units of global_gravity, the way
+things fall */
+extern int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
+
 static void biped_update_physics(
 	struct biped_physics *physics)
 {
 	real_vector2d facing = { 0.f, 0.f };
 	boolean climbing = TEST_FLAG(physics->in_flags, _biped_physics_in_climb_anything_bit);
 	word in_flags;
+	float pull[3];
+	boolean pulled;
 	real_point3d position;
 	real_vector3d velocity;
 	real_point3d clipped_position;
@@ -2337,6 +2344,21 @@ static void biped_update_physics(
 	in_flags = physics->in_flags;
 	physics->out_flags = 0;
 	physics->port_support_object_index = NONE;
+	/* port: in a GRAVITY volume, its pull in place of the world's: in the
+	air, and slipping; one pulling it off the ground it stands on (turned
+	over, or past its side) moves it as in the air, so it leaves it. It
+	walks as it did (a pull along the ground does nothing to it there) */
+	pulled = (boolean)forge_volumes_gravity_at(physics->position.x, physics->position.y, physics->position.z, pull);
+	if (pulled &&
+		!TEST_FLAG(in_flags, _biped_physics_in_flying_bit) &&
+		!TEST_FLAG(in_flags, _biped_physics_in_absolute_movement_bit) &&
+		!TEST_FLAG(in_flags, _biped_physics_in_airborne_bit) &&
+		!climbing &&
+		pull[0] * physics->ground_plane.n.i + pull[1] * physics->ground_plane.n.j +
+			pull[2] * physics->ground_plane.n.k > 0.001f)
+	{
+		SET_FLAG(in_flags, _biped_physics_in_airborne_bit, TRUE);
+	}
 	if (TEST_FLAG(in_flags, _biped_physics_in_flying_bit))
 	{
 		real_vector3d up;
@@ -2406,6 +2428,12 @@ static void biped_update_physics(
 		physics->new_velocity.i = velocity_change.i + physics->velocity.i;
 		physics->new_velocity.j = velocity_change.j + physics->velocity.j;
 		physics->new_velocity.k = physics->velocity.k - global_gravity;
+		if (pulled)
+		{
+			physics->new_velocity.i += pull[0] * global_gravity;
+			physics->new_velocity.j += pull[1] * global_gravity;
+			physics->new_velocity.k = physics->velocity.k + pull[2] * global_gravity;
+		}
 		physics->out_flags = TEST_FLAG(in_flags, _biped_physics_in_slipping_bit) ?
 			FLAG(_biped_physics_out_slipping_bit) : 0;
 	}
@@ -2541,7 +2569,18 @@ static void biped_update_physics(
 			physics->out_flags = slipping ? FLAG(_biped_physics_out_slipping_bit) : 0;
 			add_vectors3d(&velocity_change, &physics->velocity, &physics->new_velocity);
 			if (TEST_FLAG(physics->out_flags, _biped_physics_out_slipping_bit))
-				physics->new_velocity.k -= global_gravity;
+			{
+				if (pulled)
+				{
+					physics->new_velocity.i += pull[0] * global_gravity;
+					physics->new_velocity.j += pull[1] * global_gravity;
+					physics->new_velocity.k += pull[2] * global_gravity;
+				}
+				else
+				{
+					physics->new_velocity.k -= global_gravity;
+				}
+			}
 		}
 	}
 

@@ -442,7 +442,17 @@ static struct
 	real_point3d rest_position;
 	real ground_height;
 	real ground_rise_speed;
+	/* the vehicle last pulled by a Forge GRAVITY volume (NONE: none), and
+	when: no ceiling for it till it has been out of them a while */
+	long gravity_vehicle_index;
+	long gravity_time;
 } objects_host_vehicle_predictions[MAXIMUM_TRACKED_PLAYERS];
+
+/* Forge's GRAVITY volumes (port/forge/src/forge_volumes.c) */
+extern int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
+/* (the ticks a vehicle out of GRAVITY volumes still has no ceiling: as long
+as a throw out of one may still carry it up) */
+#define VEHICLE_GRAVITY_CEILING_GRACE_TICKS (8 * TICKS_PER_SECOND)
 /* a client: the host's objects it has, by absolute index */
 static long objects_client_has[MAXIMUM_TRACKED_OBJECTS];
 /* a client: the vehicle (its datum index) whose pose the netcode last wrote,
@@ -2143,6 +2153,23 @@ static boolean network_objects_vehicle_below_ceiling(
 	short type = vehicle_specific_definition_get(vehicle->definition_index)->vehicle_type;
 	real ticks;
 	real ceiling;
+	float pull[3];
+
+	/* (a Forge GRAVITY volume's pull, or its throw lately: the volumes are
+	the map's, and the host's copy is pulled as the client's is) */
+	if (forge_volumes_gravity_at(vehicle->object.bounding_sphere_center.x, vehicle->object.bounding_sphere_center.y,
+		vehicle->object.bounding_sphere_center.z, pull))
+	{
+		objects_host_vehicle_predictions[player_index].gravity_vehicle_index = vehicle_index;
+		objects_host_vehicle_predictions[player_index].gravity_time = game_time_get();
+		return TRUE;
+	}
+	if (objects_host_vehicle_predictions[player_index].gravity_vehicle_index == vehicle_index &&
+		game_time_get() - objects_host_vehicle_predictions[player_index].gravity_time >= 0 &&
+		game_time_get() - objects_host_vehicle_predictions[player_index].gravity_time < VEHICLE_GRAVITY_CEILING_GRACE_TICKS)
+	{
+		return TRUE;
+	}
 
 	if (type == _vehicle_type_human_boat || type == _vehicle_type_human_plane ||
 		type == _vehicle_type_alien_fighter || type == _vehicle_type_turret ||
@@ -3993,6 +4020,7 @@ void network_objects_reverted(
 		objects_host_vehicle_predictions[index].accepted_vehicle_index = NONE;
 		objects_host_vehicle_predictions[index].ground_vehicle_index = NONE;
 		objects_host_vehicle_predictions[index].rest_vehicle_index = NONE;
+		objects_host_vehicle_predictions[index].gravity_vehicle_index = NONE;
 	}
 	objects_client_synchronized = FALSE;
 	objects_client_ready_time = NONE;
