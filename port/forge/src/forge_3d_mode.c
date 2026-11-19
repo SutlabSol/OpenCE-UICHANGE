@@ -3612,6 +3612,7 @@ int32_t forge_3d_spawn_object_at_slot(
 			po->gametype_flags = inst->gametype_flags;
 			po->always_spawn = inst->always_spawn;
 			po->no_damage = inst->no_damage;
+			po->no_collision = inst->no_collision;
 			po->scale = inst->scale;
 			po->category = (group_tag == 'vehi') ? _forge_object_vehicle :
 				(group_tag == 'weap') ? _forge_object_weapon :
@@ -6044,6 +6045,56 @@ void forge_3d_no_damage_apply(int32_t live_idx, int no_damage)
 		g_forge.edit_state.placed_objects[inst->edit_entry_index].no_damage = inst->no_damage;
 }
 
+/* a placed scenery's COLLISION set (the Object Settings row, a peer's !FK:, a
+saved map's OBJECT_NO_COLLISION): kept in the map's record for the save, and
+on its object now (held, it collides with nothing anyway) */
+void forge_3d_no_collision_apply(int32_t live_idx, int no_collision)
+{
+	struct forge_live_instance *inst;
+	struct object_datum *obj;
+
+	if (live_idx < 0 || live_idx >= g_forge.live_instance_count)
+		return;
+	inst = &g_forge.live_instances[live_idx];
+	if (!inst->active || inst->group_tag != 'scen')
+		return;
+	inst->no_collision = (uint8_t)(no_collision != 0);
+	if (inst->edit_entry_index >= 0 && inst->edit_entry_index < (int)g_forge.edit_state.placed_object_count)
+		g_forge.edit_state.placed_objects[inst->edit_entry_index].no_collision = inst->no_collision;
+	obj = forge_valid_object_get(inst->object_index);
+	if (obj && live_idx != g_forge.grabbed_live_index)
+		SET_FLAG(obj->object.flags, _object_no_collisions_bit, inst->no_collision ? TRUE : FALSE);
+}
+
+/* each frame, in Forge and in a match of the map: the scenery with COLLISION
+off kept so (a release, a peer's hold and release, a respawn of the object
+give it its collision back) */
+static void forge_3d_no_collision_update(void)
+{
+	int32_t i;
+
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *inst = &g_forge.live_instances[i];
+		struct object_datum *obj;
+
+		if (!inst->active || !inst->no_collision || inst->object_index == NONE)
+			continue;
+		obj = forge_valid_object_get(inst->object_index);
+		if (obj)
+			SET_FLAG(obj->object.flags, _object_no_collisions_bit, TRUE);
+	}
+}
+
+/* Object Settings' COLLISION row: a placed scenery's (not a teleporter's),
+after its DEAL DAMAGE, else after its SCALE; else -1 */
+static int forge_props_collision_row(struct forge_live_instance const *inst, int scale_row, int damage_row)
+{
+	if (scale_row < 0 || inst->group_tag != 'scen')
+		return -1;
+	return (damage_row >= 0 ? damage_row : scale_row) + 1;
+}
+
 extern int forge_runtime_is_particle_emitter(uint32_t group_tag, char const *tag_path);
 
 /* Object Settings' DEAL DAMAGE row: a placed emitter's (fire, plasma fire),
@@ -6935,7 +6986,30 @@ static boolean forge_collision_test_vector(
 		}
 	}
 
+	/* (scenery with COLLISION off is still pointed at, and placed on) */
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *inst = &g_forge.live_instances[i];
+		struct object_datum *o;
+
+		if (inst->active && inst->no_collision && i != g_forge.grabbed_live_index &&
+			(o = forge_valid_object_get(inst->object_index)) != NULL)
+		{
+			SET_FLAG(o->object.flags, _object_no_collisions_bit, FALSE);
+		}
+	}
 	hit = collision_test_vector(flags, point, vector, ignore_object_index, collision);
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *inst = &g_forge.live_instances[i];
+		struct object_datum *o;
+
+		if (inst->active && inst->no_collision && i != g_forge.grabbed_live_index &&
+			(o = forge_valid_object_get(inst->object_index)) != NULL)
+		{
+			SET_FLAG(o->object.flags, _object_no_collisions_bit, TRUE);
+		}
+	}
 
 	for (i = 0; i < hidden_count; i++)
 	{
@@ -7477,6 +7551,11 @@ static void forge_props_restore(int32_t live_idx, struct forge_props_snapshot co
 			forge_3d_no_damage_apply(live_idx, was->no_damage);
 			forge_network_send_no_damage(live_idx, was->no_damage);
 		}
+		if (inst->no_collision != was->no_collision)
+		{
+			forge_3d_no_collision_apply(live_idx, was->no_collision);
+			forge_network_send_no_collision(live_idx, was->no_collision);
+		}
 		if (inst->group_tag == 'spwn')
 		{
 			sync_live_player_spawns_to_scenario();
@@ -7655,7 +7734,8 @@ static int forge_history_same(struct forge_props_snapshot const *a, struct forge
 	if (forge_history_moved(a, b))
 		return 0;
 	if (ia->team_designator != ib->team_designator || ia->gametype_flags != ib->gametype_flags ||
-		ia->always_spawn != ib->always_spawn || ia->no_damage != ib->no_damage || ia->scale != ib->scale ||
+		ia->always_spawn != ib->always_spawn || ia->no_damage != ib->no_damage ||
+		ia->no_collision != ib->no_collision || ia->scale != ib->scale ||
 		ia->tele_dz != ib->tele_dz || ia->tele_dyaw != ib->tele_dyaw || strcmp(ia->tag_path, ib->tag_path) != 0)
 		return 0;
 	if (a->has_ai != b->has_ai || (a->has_ai && memcmp(&a->ai, &b->ai, sizeof(a->ai)) != 0))
@@ -7963,6 +8043,8 @@ void forge_3d_update(float dt)
 	/* (the map's volumes hurt whoever is in them, in a match of the map too:
 	forge_volumes.c) */
 	forge_volumes_update();
+	/* (the scenery with COLLISION off, the same) */
+	forge_3d_no_collision_update();
 	/* (the AI spawns' CLOAKED and HEIGHT, in a match of the map too: forge_ai.c) */
 	forge_ai_units_update();
 
@@ -8896,6 +8978,8 @@ void forge_3d_update(float dt)
 		int scale_row = forge_props_scale_row(inst, snap_row, test_drop_row);
 		/* (a placed emitter's DEAL DAMAGE, after its SCALE) */
 		int damage_row = forge_props_damage_row(inst, scale_row);
+		/* (a placed scenery's COLLISION, after those) */
+		int collision_row = forge_props_collision_row(inst, scale_row, damage_row);
 		/* (a volume's own rows: forge_volumes.h's) */
 		int is_volume = forge_volume_is(g_forge.grabbed_live_index);
 		int zone_rows[FORGE_FF_ZONE_MAX_ROWS];
@@ -8903,8 +8987,8 @@ void forge_3d_update(float dt)
 		int max_props_row = is_volume ? NUMBER_OF_FORGE_VOLUME_ROWS - 1 :
 			is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS - 1 : is_tele ? (snap_row ? 6 : 5) :
 			(is_zone ? FORGE_FF_ZONE_FIRST_ROW - 1 + zone_row_count :
-				(is_route_point ? 6 : (always_row >= 0 ? always_row : damage_row >= 0 ? damage_row :
-					scale_row >= 0 ? scale_row :
+				(is_route_point ? 6 : (always_row >= 0 ? always_row : collision_row >= 0 ? collision_row :
+					damage_row >= 0 ? damage_row : scale_row >= 0 ? scale_row :
 					(test_drop_row >= 0 ? test_drop_row : ((is_ff_spawn || snap_row) ? 5 : 4)))));
 		/* (DONE and UNDO, side by side under the rows) */
 		int props_done = max_props_row + 1;
@@ -9300,6 +9384,13 @@ void forge_3d_update(float dt)
 
 				forge_3d_scale_apply(g_forge.grabbed_live_index, scale);
 				forge_network_send_scale(g_forge.grabbed_live_index, forge_inst_scale(inst));
+			}
+			else if (g_forge.props_cursor == collision_row && collision_row >= 0)
+			{
+				forge_3d_no_collision_apply(g_forge.grabbed_live_index, !inst->no_collision);
+				forge_network_send_no_collision(g_forge.grabbed_live_index, inst->no_collision);
+				forge_set_status("Collision %s", inst->no_collision ?
+					"off: seen, but nothing stands on it or hits it" : "on");
 			}
 			else if (g_forge.props_cursor == damage_row && damage_row >= 0)
 			{
@@ -10089,6 +10180,11 @@ void forge_3d_update(float dt)
 					{
 						forge_3d_no_damage_apply(dup_idx, 1);
 						forge_network_send_no_damage(dup_idx, 1);
+					}
+					if (dup_idx >= 0 && src_copy.no_collision)
+					{
+						forge_3d_no_collision_apply(dup_idx, 1);
+						forge_network_send_no_collision(dup_idx, 1);
 					}
 					if (dup_idx >= 0 && g_forge.live_instances[dup_idx].scale > 0.0f)
 						forge_network_send_scale(dup_idx, g_forge.live_instances[dup_idx].scale);
@@ -11298,6 +11394,7 @@ void forge_3d_draw_hud(
 			int always_row = forge_props_always_spawn_row(inst, snap_row, test_drop_row);
 			int scale_row = forge_props_scale_row(inst, snap_row, test_drop_row);
 			int damage_row = forge_props_damage_row(inst, scale_row);
+			int collision_row = forge_props_collision_row(inst, scale_row, damage_row);
 			int is_volume = forge_volume_is(g_forge.grabbed_live_index);
 			int zone_rows[FORGE_FF_ZONE_MAX_ROWS];
 			int zone_row_count = is_zone ? forge_ff_zone_rows(inst, zone_rows) : 0;
@@ -11306,8 +11403,8 @@ void forge_3d_draw_hud(
 			int row_count = factions_page ? 3 : is_volume ? NUMBER_OF_FORGE_VOLUME_ROWS :
 				is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS : is_tele ? (snap_row ? 7 : 6) :
 				(is_zone ? FORGE_FF_ZONE_FIRST_ROW + zone_row_count :
-					(is_route_point ? 7 : (always_row >= 0 ? always_row + 1 : damage_row >= 0 ? damage_row + 1 :
-						scale_row >= 0 ? scale_row + 1 :
+					(is_route_point ? 7 : (always_row >= 0 ? always_row + 1 : collision_row >= 0 ? collision_row + 1 :
+						damage_row >= 0 ? damage_row + 1 : scale_row >= 0 ? scale_row + 1 :
 						(test_drop_row >= 0 ? test_drop_row + 1 : ((is_ff_spawn || snap_row) ? 6 : 5)))));
 			short box_w = (short)(is_ai_spawn ? 372 : 312);
 			short box_h = (short)(34 + row_count * 28 + 50);
@@ -11556,6 +11653,11 @@ void forge_3d_draw_hud(
 				{
 					snprintf(labels[damage_row], sizeof(labels[0]), "DEAL DAMAGE:");
 					snprintf(values[damage_row], sizeof(values[0]), "%s", inst->no_damage ? "OFF" : "ON");
+				}
+				if (collision_row >= 0)
+				{
+					snprintf(labels[collision_row], sizeof(labels[0]), "COLLISION:");
+					snprintf(values[collision_row], sizeof(values[0]), "%s", inst->no_collision ? "OFF" : "ON");
 				}
 			}
 

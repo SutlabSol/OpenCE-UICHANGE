@@ -5417,6 +5417,13 @@ static int append_forge_map_metadata_and_preview_trailer(
 				uint32_t o = buf_alloc(&state_buf, (uint32_t)(sizeof(no_damage_line) - 1u), 1);
 				if (state_buf.data) memcpy(state_buf.data + o, no_damage_line, sizeof(no_damage_line) - 1u);
 			}
+			/* (a scenery's COLLISION off, the same way) */
+			if (po->no_collision && state_buf.data)
+			{
+				static char const no_collision_line[] = "OBJECT_NO_COLLISION\r\n";
+				uint32_t o = buf_alloc(&state_buf, (uint32_t)(sizeof(no_collision_line) - 1u), 1);
+				if (state_buf.data) memcpy(state_buf.data + o, no_collision_line, sizeof(no_collision_line) - 1u);
+			}
 			/* (and a scenery's SCALE, the same way) */
 			if (po->scale > 0.0f && state_buf.data)
 			{

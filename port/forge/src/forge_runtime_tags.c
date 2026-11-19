@@ -5957,6 +5957,7 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 	SCALE, 0 for none) */
 	int always_spawn = 0;
 	int no_damage = 0;
+	int no_collision = 0;
 	float scale = 0.0f;
 
 	if (!cur)
@@ -5995,6 +5996,11 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 		{
 			no_damage = 1;
 		}
+		/* (a scenery's COLLISION off, the same way) */
+		else if (in_forge_state && strcmp(line, "OBJECT_NO_COLLISION") == 0)
+		{
+			no_collision = 1;
+		}
 		/* (a damage or kill volume: forge_volumes.c) */
 		else if (in_forge_state && strncmp(line, "VOLUME|", 7) == 0)
 		{
@@ -6012,10 +6018,13 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 			char tpath[256];
 			int object_always_spawn = always_spawn;
 			int object_no_damage = no_damage;
+			int object_no_collision = no_collision;
 			float object_scale = scale;
+			int32_t made_idx;
 
 			always_spawn = 0;
 			no_damage = 0;
+			no_collision = 0;
 			scale = 0.0f;
 			tpath[0] = 0;
 			if (sscanf(line + 7, "%u|%d|%d|%f|%f|%f|%f|%f|%f|%d|%255[^\r\n]",
@@ -6026,9 +6035,10 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 					/* Cached tag object not baked into base_map: spawn live now! */
 					g_forge_next_spawn_always = object_always_spawn;
 					g_forge_next_spawn_scale = object_scale;
-					forge_3d_no_damage_apply(
-						forge_3d_spawn_object_at((uint32_t)grp, tpath, (uint8_t)src_cache, x, y, z, yaw, pitch, roll, (int16_t)team, 0),
-						object_no_damage);
+					made_idx = forge_3d_spawn_object_at((uint32_t)grp, tpath, (uint8_t)src_cache, x, y, z, yaw, pitch, roll,
+						(int16_t)team, 0);
+					forge_3d_no_damage_apply(made_idx, object_no_damage);
+					forge_3d_no_collision_apply(made_idx, object_no_collision);
 				}
 				else
 				{
@@ -6088,9 +6098,10 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 						/* Not yet spawned by scenario: spawn live and record in placed_objects */
 						g_forge_next_spawn_always = object_always_spawn;
 						g_forge_next_spawn_scale = object_scale;
-						forge_3d_no_damage_apply(
-							forge_3d_spawn_object_at((uint32_t)grp, tpath, (uint8_t)src_cache, x, y, z, yaw, pitch, roll, (int16_t)team, 0),
-							object_no_damage);
+						made_idx = forge_3d_spawn_object_at((uint32_t)grp, tpath, (uint8_t)src_cache, x, y, z, yaw, pitch, roll,
+							(int16_t)team, 0);
+						forge_3d_no_damage_apply(made_idx, object_no_damage);
+						forge_3d_no_collision_apply(made_idx, object_no_collision);
 					}
 					else if (g_forge.edit_state.placed_object_count < FORGE_MAX_PLACED_OBJECTS)
 					{
@@ -6148,6 +6159,7 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 							if (object_scale > 0.0f)
 								forge_3d_scale_apply(li_idx, object_scale);
 							forge_3d_no_damage_apply(li_idx, object_no_damage);
+							forge_3d_no_collision_apply(li_idx, object_no_collision);
 						}
 					}
 				}

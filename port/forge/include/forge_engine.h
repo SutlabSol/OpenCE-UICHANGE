@@ -324,6 +324,10 @@ struct forge_live_instance
 	parts do nothing (forge_volumes.c, effects.c); saved as OBJECT_NO_DAMAGE,
 	sent as !FN: */
 	uint8_t no_damage;
+	/* a placed scenery's Object Settings COLLISION off: seen, but nothing
+	collides with it (forge_3d_no_collision_*); saved as OBJECT_NO_COLLISION,
+	sent as !FK: */
+	uint8_t no_collision;
 	uint16_t gametype_flags;   /* 0 = All Modes, bit0=CTF, bit1=Slayer, bit2=Oddball, bit3=KOTH, bit4=Race */
 	int16_t netgame_flag_type; /* Scenario netgame_flag type (6=tele_from, 7=tele_to, 8=hill, 2=oddball, 0=ctf) or -1 */
 	int16_t team_designator;   /* Reference/Channel ID or Team Index */

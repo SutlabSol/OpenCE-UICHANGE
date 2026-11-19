@@ -748,6 +748,11 @@ static void biped_bumped_object(
 	return;
 }
 
+/* port: Forge's GRAVITY volumes with FALL DAMAGE OFF (port/forge/src/
+forge_volumes.c): TRUE while a biped is kept from falling damage, from its
+time in one until it lands */
+extern int forge_volumes_fall_protected(long biped_index, float x, float y, float z, int airborne);
+
 static void biped_falling_damage(
 	long biped_index,
 	real collision_velocity)
@@ -763,6 +768,17 @@ static void biped_falling_damage(
 		TEST_FLAG(definition->biped.flags, _biped_immune_to_falling_damage_bit);
 	/* port: relative to the deck while riding or falling from it (vehicle_riding.c) */
 	real falling_velocity = biped_riding_falling_velocity(biped);
+
+	/* port: (asked each tick, so it knows when the biped lands) */
+	if (forge_volumes_fall_protected(
+			biped_index,
+			biped->object.bounding_sphere_center.x,
+			biped->object.bounding_sphere_center.y,
+			biped->object.bounding_sphere_center.z,
+			TEST_FLAG(biped->biped.flags, _biped_airborne_bit)))
+	{
+		immune = TRUE;
+	}
 
 	/* port: MCC clients predict only the effect received from the host. */
 	if (!(cheat.jetpack || mcc_script_effect_enabled(MCC_EFFECT_JETPACK)) || biped->unit.player_index == NONE)
@@ -2321,6 +2337,10 @@ static void biped_find_nearby_support_surface(
 outside them, else the pull there in units of global_gravity, the way
 things fall */
 extern int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
+/* port: Forge's ONE WAY volumes: TRUE when the top of one stops the pill's
+move coming down onto it (`to` and `velocity` set on it), and its plane */
+extern int forge_volumes_one_way_floor(float const from[3], float to[3], float velocity[3], float radius,
+	float out_normal[3], float *out_d);
 
 static void biped_update_physics(
 	struct biped_physics *physics)
@@ -2635,6 +2655,51 @@ static void biped_update_physics(
 			&clipped_velocity,
 			16,
 			collisions);
+	}
+
+	/* port: Forge's ONE WAY volumes: their tops a floor from above, which
+	the pill's move came down onto (the original's collision knows nothing of
+	them): it stops on it, and stands on it as on the ground (its plane one
+	of the move's collisions, of no surface, as debug_biped_skip_collision's) */
+	if (!TEST_FLAG(physics->in_flags, _biped_physics_in_no_collision_bit) &&
+		!TEST_FLAG(physics->in_flags, _biped_physics_in_flying_bit) &&
+		collision_count < 16)
+	{
+		float from[3], to[3], moved[3], normal[3], d;
+
+		from[0] = position.x;
+		from[1] = position.y;
+		from[2] = position.z;
+		to[0] = clipped_position.x;
+		to[1] = clipped_position.y;
+		to[2] = clipped_position.z;
+		moved[0] = clipped_velocity.i;
+		moved[1] = clipped_velocity.j;
+		moved[2] = clipped_velocity.k;
+		if (forge_volumes_one_way_floor(from, to, moved, physics->width, normal, &d))
+		{
+			struct collision_plane *collision = &collisions[collision_count++];
+
+			clipped_position.x = to[0];
+			clipped_position.y = to[1];
+			clipped_position.z = to[2];
+			clipped_velocity.i = moved[0];
+			clipped_velocity.j = moved[1];
+			clipped_velocity.k = moved[2];
+			collision->t = 1.f;
+			collision->plane.n.i = normal[0];
+			collision->plane.n.j = normal[1];
+			collision->plane.n.k = normal[2];
+			collision->plane.d = d;
+			collision->point.x = to[0] - normal[0] * physics->width;
+			collision->point.y = to[1] - normal[1] * physics->width;
+			collision->point.z = to[2] - normal[2] * physics->width;
+			collision->object_index = NONE;
+			collision->surface_index = NONE;
+			collision->flags = 0;
+			collision->breakable_surface_index = 0;
+			collision->material_index = NONE;
+		}
 	}
 
 	if (debug_biped_physics &&

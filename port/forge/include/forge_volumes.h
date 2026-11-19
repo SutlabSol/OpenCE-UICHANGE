@@ -24,7 +24,16 @@ index. Its effect:
   again. Players and AI (in the air, or pulled off the ground they stand on),
   vehicles, dropped weapons and equipment, grenades and other arcing
   projectiles, and ragdolls (forge_volumes_gravity_at, asked by the engine's
-  physics). Every machine runs it on its own copy of the volumes.
+  physics). Every machine runs it on its own copy of the volumes. Its FALL
+  DAMAGE OFF keeps a biped that was in it from falling damage until it next
+  stands on the ground (forge_volumes_fall_protected, asked by bipeds.c's
+  biped_falling_damage): a launcher's;
+- ONE WAY: its top face (its own up, as it is turned; a sphere's that of
+  the cylinder around it) is a floor bipeds stand on when they come down on
+  it, and pass through from under it, or from its sides
+  (forge_volumes_one_way_floor, asked by bipeds.c's biped_update_physics
+  after the pill's move): a grav lift's top. Bipeds alone: vehicles, items
+  and projectiles pass through it, and AI find no path on it.
 
 Every unit is a biped here: one in a vehicle is in a volume if it is. The
 host (or a game with no network) hurts them, each tick of a game on the map,
@@ -79,6 +88,7 @@ enum forge_volume_effect
 	_forge_volume_off,
 	/* (after the others: saved maps and older peers keep their numbers) */
 	_forge_volume_gravity,
+	_forge_volume_one_way,
 	NUMBER_OF_FORGE_VOLUME_EFFECTS
 };
 
@@ -88,6 +98,8 @@ enum forge_volume_row
 	_forge_volume_row_shape = 0,
 	_forge_volume_row_effect,
 	_forge_volume_row_damage,
+	/* (GRAVITY's FALL DAMAGE: FORGE_VOLUME_FLAG_NO_FALL_DAMAGE) */
+	_forge_volume_row_fall_damage,
 	_forge_volume_row_size_x,
 	_forge_volume_row_size_y,
 	_forge_volume_row_size_z,
@@ -95,6 +107,14 @@ enum forge_volume_row
 	_forge_volume_row_floor,
 	_forge_volume_row_delete,
 	NUMBER_OF_FORGE_VOLUME_ROWS
+};
+
+/* a volume's flags (forge_volume.flags) */
+enum
+{
+	/* GRAVITY: no falling damage for a biped in it, until it lands */
+	FORGE_VOLUME_FLAG_NO_FALL_DAMAGE = 1 << 0,
+	FORGE_VOLUME_FLAGS_ALL = FORGE_VOLUME_FLAG_NO_FALL_DAMAGE
 };
 
 /* ---------- structures */
@@ -109,7 +129,9 @@ struct forge_volume
 	uint8_t edited;
 	/* the map's trigger volume it is (NONE: one of Forge's) */
 	int16_t map_index;
-	int16_t pad;
+	/* FORGE_VOLUME_FLAG_* */
+	uint8_t flags;
+	uint8_t pad;
 	/* each axis's size: a box's edges, a cylinder's two diameters and its
 	height, a sphere's three diameters (world units) */
 	float size[3];
@@ -132,8 +154,8 @@ void forge_volume_spawned(int32_t live_idx, char const *tag_path);
 void forge_volume_moved(int32_t live_idx);
 /* a volume's settings set, and sent to the session's others (broadcast) */
 void forge_volume_set(int32_t live_idx, struct forge_volume const *volume, int broadcast);
-/* a peer's !FW: fields, or a saved line's */
-void forge_volume_apply(int32_t live_idx, int shape, int effect, float damage, float const size[3]);
+/* a peer's !FW: fields, or a saved line's (flags: FORGE_VOLUME_FLAG_*) */
+void forge_volume_apply(int32_t live_idx, int shape, int effect, float damage, float const size[3], int flags);
 
 /* the map's deadly trigger volumes, as volumes of its own (once a level,
 forge_init_map_scenario_entities, on a multiplayer map) */
@@ -169,10 +191,23 @@ way things fall: the GRAVITY volumes it is in, added up (out_pull is left
 as it was when FALSE) */
 int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
 
+/* a biped's falling damage held off (bipeds.c's biped_falling_damage, each
+tick): TRUE while it is in a GRAVITY volume with FALL DAMAGE OFF, and after,
+until (and on the tick) it stands on the ground again (`airborne` FALSE) */
+int forge_volumes_fall_protected(long biped_index, float x, float y, float z, int airborne);
+
+/* a biped's move (its pill's bottom sphere's middle, `from` to `to`, of
+`radius`) against the ONE WAY volumes' tops (bipeds.c, after the pill's
+move): TRUE when one stops it coming down, `to` set on it and `velocity`'s
+part into it taken away, and the top's plane (the normal, the way it is let
+through, and d: n.x = d on it) */
+int forge_volumes_one_way_floor(float const from[3], float to[3], float velocity[3], float radius, float out_normal[3],
+	float *out_d);
+
 /* their shapes in the world, in Forge mode (forge_runtime_tags.c's world
 pass): each edge a line drawn by `draw_line`, and their faces tinted by
 `draw_face` as parallelograms (a corner and its two sides); `color` is the
-effect's (0 hurts, 1 kills, 2 does nothing), `highlighted` the one held or
+effect's (0 hurts, 1 kills, 2 does nothing, 3 pulls, 4 is ONE WAY), `highlighted` the one held or
 pointed at */
 void forge_volumes_render(
 	void (*draw_line)(float const *from, float const *to, int color, int highlighted),
@@ -193,6 +228,12 @@ int forge_volumes_effect_damage_blocked(long object_index);
 its record for the save (Object Settings, a peer's !FN:) */
 void forge_3d_no_damage_apply(int32_t live_idx, int no_damage);
 void forge_network_send_no_damage(int32_t live_idx, int no_damage);
+/* a placed scenery's COLLISION off (no_collision on its live instance): seen,
+but nothing collides with it (_object_no_collisions_bit, kept on it each
+frame by forge_3d_no_collision_update; Forge's own pointing still finds it).
+Saved as OBJECT_NO_COLLISION, sent as !FK: */
+void forge_3d_no_collision_apply(int32_t live_idx, int no_collision);
+void forge_network_send_no_collision(int32_t live_idx, int no_collision);
 void forge_network_send_volume(int32_t live_idx);
 
 #endif

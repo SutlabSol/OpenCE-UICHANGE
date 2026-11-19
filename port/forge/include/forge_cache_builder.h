@@ -71,6 +71,9 @@ struct forge_placed_object_entry
 	/* (an emitter's DEAL DAMAGE off: forge_live_instance's, saved as the
 	OBJECT_NO_DAMAGE line before its OBJECT line) */
 	uint8_t no_damage;
+	/* (a scenery's COLLISION off, saved as the OBJECT_NO_COLLISION line before
+	its OBJECT line) */
+	uint8_t no_collision;
 	/* (its SCALE, 0 for none: forge_live_instance's, saved as the
 	OBJECT_SCALE line before its OBJECT line) */
 	float scale;
