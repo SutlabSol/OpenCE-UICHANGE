@@ -1387,7 +1387,10 @@ static void cache_file_get_map_path(
 		{
 			char custom_path[MAXIMUM_MAP_PATH_LENGTH];
 
-			if (custom_edition_map_file_named(map_name, custom_path))
+			/* port: (in a network game, the file of the host's version:
+			a map Forge saved that was downloaded beside another of its
+			name, custom_edition_map_find_version) */
+			if (custom_edition_map_file_path(map_name, custom_path))
 			{
 				strncpy(path, custom_path, MAXIMUM_MAP_PATH_LENGTH - 1);
 				path[MAXIMUM_MAP_PATH_LENGTH - 1] = 0;

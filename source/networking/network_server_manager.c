@@ -496,6 +496,7 @@ void p2p_set_game_listing(const char *name, const char *map, const char *gametyp
 p2p.h's P2P_LISTING_MAP_SOURCE_*; the server browser's filters) */
 void p2p_set_game_listing_map_source(int source);
 boolean custom_edition_level_name(char const *level_name);
+boolean custom_edition_shared_level_name(char const *level_name);
 boolean mcc_level_name(char const *name);
 
 /* ---------- constants */
@@ -1652,7 +1653,7 @@ static void network_game_server_list(
 		extern boolean tag_multiplayer_hosted(void);
 
 		p2p_set_game_listing_map_source(mcc_level_name(game->map.name) ? 3 :
-			custom_edition_level_name(game->map.name) ? 2 : 1);
+			custom_edition_shared_level_name(game->map.name) ? 2 : 1);
 		/* (a modded game, listed only to builds with the mod: p2p_lobby.c) */
 		p2p_set_game_listing(name, map_label, gametype, game->variant.game_engine_index,
 			game_modes_kind(&game->variant, &game->variant_options), open, in_progress,

@@ -17083,8 +17083,8 @@ static short campaign_level_of(char const *map_name)
 	if (mcc_level_name(map_name))
 		return NONE;
 
-	/* (a Custom Edition map, custom_maps\a30, is never one) */
-	if (custom_edition_level_name(map_name))
+	/* (a Custom Edition map, custom_maps\a30, is never one; nor a Forge one) */
+	if (custom_edition_shared_level_name(map_name))
 		return NONE;
 	for (level = 0; level < NUMBER_OF_SINGLE_PLAYER_LEVELS; level++)
 	{
@@ -17141,8 +17141,9 @@ static void map_display_name(char const *map_name, wchar_t *text)
 		return;
 	}
 
-	/* (a Custom Edition map's, if this machine has it: custom_edition_maps.c) */
-	if (custom_edition_level_name(map_name))
+	/* (a Custom Edition map's, if this machine has it: custom_edition_maps.c;
+	a map Forge saved too, custom_forge_map_level, once downloaded) */
+	if (custom_edition_shared_level_name(map_name))
 	{
 		short display_index = custom_edition_maps_display_index(map_name);
 		wchar_t const *name = display_index != NONE ? custom_edition_maps_name(display_index) : NULL;
@@ -17639,7 +17640,7 @@ static int lobby_browser_map_state(char const *map)
 	short index;
 	short count;
 
-	if (custom_edition_level_name(map))
+	if (custom_edition_shared_level_name(map))
 	{
 		if (custom_edition_maps_display_index(map) != NONE)
 			return P2P_LOBBY_MAP_INSTALLED;
@@ -19957,7 +19958,7 @@ static void lobby_map_show(struct widget_instance *description, char const *map_
 	}
 	/* (a Custom Edition map's picture and name, multiplayer or campaign, by
 	its display index, if this machine has it: custom_edition_maps.c) */
-	if (custom_edition_level_name(map_name) && custom_edition_maps_display_index(map_name) != NONE)
+	if (custom_edition_shared_level_name(map_name) && custom_edition_maps_display_index(map_name) != NONE)
 		map = custom_edition_maps_display_index(map_name);
 	/* (a network co-op game's level: its picture and name, sp_levels' and
 	map_list's, in the place of the map's) */

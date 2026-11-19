@@ -824,7 +824,7 @@ boolean map_share_game_map_version(
 	struct network_game *game = map_share_network_game();
 
 	/* (by the map's name: the loader asks by its file's, hugeass) */
-	if (!game || !level_name || !custom_edition_level_name(game->map.name) ||
+	if (!game || !level_name || !custom_edition_shared_level_name(game->map.name) ||
 		csstrcasecmp(tag_name_strip_path(game->map.name), tag_name_strip_path(level_name)))
 	{
 		return FALSE;
@@ -918,7 +918,7 @@ static boolean map_share_sending_live(
 	struct network_game *game = map_share_network_game();
 
 	if (!game || network_game_client_get_local_machine_index() == NONE ||
-		(!custom_edition_level_name(game->map.name) && !tag_multiplayer_share_file(NULL, 0, NULL, NULL)))
+		(!custom_edition_shared_level_name(game->map.name) && !tag_multiplayer_share_file(NULL, 0, NULL, NULL)))
 	{
 		return FALSE;
 	}
@@ -1012,7 +1012,7 @@ static void current_files_update(
 		Edition map's) */
 		if (kind == _map_share_file_tags)
 			present = tag_multiplayer_share_file(path, sizeof(path), NULL, NULL);
-		else if (!custom_edition_level_name(level_name))
+		else if (!custom_edition_shared_level_name(level_name))
 			present = FALSE;
 		else
 			present = kind == _map_share_file_map ? custom_edition_map_file_path(level_name, path) :
@@ -2037,7 +2037,7 @@ static boolean map_share_download_begin_unlocked(
 	char const *name;
 	byte wanted;
 
-	if (!level_name || !custom_edition_level_name(level_name) || csstrlen(level_name) >= LEVEL_NAME_BYTES ||
+	if (!level_name || !custom_edition_shared_level_name(level_name) || csstrlen(level_name) >= LEVEL_NAME_BYTES ||
 		!config_boolean("network.map_download") || map_share_host() || !global_network_game_client_get() ||
 		!halo_custom_edition_tag_cache())
 	{
@@ -4487,7 +4487,7 @@ static void host_request(
 	/* (the game's map alone, a Custom Edition map's, of the game's version
 	if it is asked for; or the game's shared weapons alone, whatever its map) */
 	if (!game || csstrcmp(game->map.name, request->level_name) ||
-		(request->wanted != FLAG(_map_share_file_tags) && (!custom_edition_level_name(request->level_name) ||
+		(request->wanted != FLAG(_map_share_file_tags) && (!custom_edition_shared_level_name(request->level_name) ||
 		!custom_edition_map_file_path(request->level_name, path) ||
 		(TEST_FLAG(request->wanted, _map_share_file_map) && !game->map.version))))
 	{
@@ -4503,7 +4503,7 @@ static void host_request(
 		host_offer(machine_index, _offer_unavailable);
 		return;
 	}
-	needed = custom_edition_level_name(request->level_name) ?
+	needed = custom_edition_shared_level_name(request->level_name) ?
 		custom_edition_map_resource_maps_needed(request->level_name) | FLAG(_map_share_file_map) : 0;
 	if (tag_multiplayer_share_file(NULL, 0, NULL, NULL))
 		needed |= FLAG(_map_share_file_tags);

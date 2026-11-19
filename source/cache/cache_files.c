@@ -1191,8 +1191,9 @@ boolean cache_files_map_plays_multiplayer(
 		return TRUE;
 	/* port: a Halo Custom Edition map (custom_maps\<name>) is converted for
 	this build as it loads (port/linux/game/custom_edition_cache.c): its
-	header's build is Halo PC's, not one to check */
-	if (custom_edition_level_name(map_name))
+	header's build is Halo PC's, not one to check; a map Forge saved
+	(custom_forge_map_level) holds all its tags, the host's file's */
+	if (custom_edition_shared_level_name(map_name))
 		return TRUE;
 	for (index = 0; index < MAP_PLAYS_KEPT; index++)
 	{
@@ -1284,7 +1285,7 @@ unsigned long cache_files_map_version(
 	/* port: an MCC map's version is its checksum (mcc_cache.c) */
 	if (mcc_level_name(map_name))
 		return mcc_cache_checksum(map_name);
-	return custom_edition_level_name(map_name) ? custom_edition_map_version(map_name) : 0;
+	return custom_edition_shared_level_name(map_name) ? custom_edition_map_version(map_name) : 0;
 }
 
 /* port: whether this machine has the map a network game is on (a client
@@ -1320,7 +1321,9 @@ boolean cache_files_map_present(
 			return TRUE;
 		return mcc_cache_require(map_name, version);
 	}
-	if (custom_edition_level_name(map_name))
+	/* (a map Forge saved too, custom_forge_map_level: one of custom_maps, of
+	the host's version, downloaded as a Custom Edition map is) */
+	if (custom_edition_shared_level_name(map_name))
 	{
 		if (custom_edition_cache_present(map_name, version, message, sizeof(message)) ||
 			map_share_download_begin(map_name, version, message))
