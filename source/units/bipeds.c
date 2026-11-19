@@ -2341,6 +2341,9 @@ extern int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]
 move coming down onto it (`to` and `velocity` set on it), and its plane */
 extern int forge_volumes_one_way_floor(float const from[3], float to[3], float velocity[3], float radius,
 	float out_normal[3], float *out_d);
+/* port: Forge's volumes with REMOVE INERTIA: TRUE on the tick a biped comes
+into one */
+extern int forge_volumes_stop_inertia(long biped_index, float x, float y, float z);
 
 static void biped_update_physics(
 	struct biped_physics *physics)
@@ -2364,6 +2367,14 @@ static void biped_update_physics(
 	in_flags = physics->in_flags;
 	physics->out_flags = 0;
 	physics->port_support_object_index = NONE;
+	/* port: come into a REMOVE INERTIA volume, it stops dead: its move this
+	tick starts from rest (its legs, a jump and gravity take it on from
+	there) */
+	if (!TEST_FLAG(in_flags, _biped_physics_in_dead_bit) &&
+		forge_volumes_stop_inertia(physics->biped_index, physics->position.x, physics->position.y, physics->position.z))
+	{
+		physics->velocity = *global_zero_vector3d;
+	}
 	/* port: in a GRAVITY volume, its pull in place of the world's: in the
 	air, and slipping; one pulling it off the ground it stands on (turned
 	over, or past its side) moves it as in the air, so it leaves it. It

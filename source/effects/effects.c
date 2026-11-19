@@ -806,6 +806,31 @@ long effect_new_attached_from_markers(
 		scale_b>=0.f && scale_b<=1.f,
 		csprintf(temporary, "scale_b %f not in [0,1]", scale_b));
 
+	/* port: an impact on a scaled object (a Forge scenery's SCALE) is made
+	where it struck, in the world, as on an object of its own size: on the
+	object, its node matrix's scale would make its particles as big, as fast
+	and as spread as the object is (the object's own effects grow with it) */
+	{
+		struct object_datum *object = object_try_and_get(object_index);
+
+		if (object && object->object.scale > 0.0f && fabs(object->object.scale - 1.0f) > 0.001f)
+		{
+			return effect_new_unattached_from_markers(
+				definition_index,
+				owner_object_index,
+				&object->object.translational_velocity,
+				marker_count,
+				marker_names,
+				marker_points,
+				marker_forwards,
+				scale_a,
+				scale_b,
+				color,
+				impulse_field,
+				FALSE);
+		}
+	}
+
 	effect_index = effect_allocate(definition_index, owner_object_index, TRUE);
 	if (effect_index != NONE)
 	{

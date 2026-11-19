@@ -64,6 +64,11 @@ WAY ones) */
 #define MAXIMUM_ONE_WAY_VOLUMES 256
 /* (the bipeds kept from falling damage till they land) */
 #define MAXIMUM_FALL_PROTECTED 64
+/* (the volumes with a FALL DAMAGE or REMOVE INERTIA of their own; and the
+bipeds in REMOVE INERTIA ones, each with the volume and the tick it was last
+in it) */
+#define MAXIMUM_FLAGGED_VOLUMES 256
+#define MAXIMUM_INERTIA_OCCUPANTS 128
 /* (how far under a ONE WAY top a biped's pill may start and still be on it:
 a walk's push into the ground, a slope's step) */
 #define ONE_WAY_TOLERANCE 0.06f
@@ -94,9 +99,17 @@ static struct gravity_volume
 	float pull[3];
 	/* (FORGE_VOLUME_FLAG_*) */
 	uint8_t flags;
-} s_gravity[MAXIMUM_GRAVITY_VOLUMES], s_one_way[MAXIMUM_ONE_WAY_VOLUMES];
+	int32_t live_idx;
+} s_gravity[MAXIMUM_GRAVITY_VOLUMES], s_one_way[MAXIMUM_ONE_WAY_VOLUMES], s_flagged[MAXIMUM_FLAGGED_VOLUMES];
 static int s_gravity_count;
 static int s_one_way_count;
+static int s_flagged_count;
+static struct
+{
+	long biped_index;
+	int32_t live_idx;
+	long tick;
+} s_inertia_occupants[MAXIMUM_INERTIA_OCCUPANTS];
 /* the bipeds out of a FALL DAMAGE OFF volume, not yet landed (their
 indices; NONE: a free slot) */
 static long s_fall_protected[MAXIMUM_FALL_PROTECTED];
@@ -409,6 +422,12 @@ static void fall_protected_clear(void)
 	for (k = 0; k < MAXIMUM_FALL_PROTECTED; k++)
 		s_fall_protected[k] = NONE;
 	s_fall_protected_next = 0;
+	for (k = 0; k < MAXIMUM_INERTIA_OCCUPANTS; k++)
+	{
+		s_inertia_occupants[k].biped_index = NONE;
+		s_inertia_occupants[k].live_idx = -1;
+		s_inertia_occupants[k].tick = -1;
+	}
 	s_fall_protected_ready = 1;
 }
 
@@ -489,6 +508,7 @@ void forge_volumes_level_reset(void)
 	s_last_tick = -1;
 	s_gravity_count = 0;
 	s_one_way_count = 0;
+	s_flagged_count = 0;
 	s_gravity_time = -1;
 	s_gravity_dirty = 1;
 	s_gravity_wake = 1;
@@ -588,13 +608,21 @@ void forge_volume_describe(int32_t live_idx, char *text, unsigned long size)
 		snprintf(text, size, "MAP VOLUME %s%s(%s)", inst->label, inst->label[0] ? " " : "", s_effect_names[volume->effect]);
 		return;
 	}
-	if (volume->effect == _forge_volume_gravity)
 	{
-		snprintf(text, size, "GRAVITY X%.2f %s%s", (double)(volume->damage / 100.0f), s_shape_names[volume->shape],
-			volume->flags & FORGE_VOLUME_FLAG_NO_FALL_DAMAGE ? " (NO FALL DAMAGE)" : "");
-		return;
+		int fall = volume->flags & FORGE_VOLUME_FALL_MASK;
+		char extra[48];
+
+		snprintf(extra, sizeof(extra), "%s%s", fall == FORGE_VOLUME_FALL_LANDING ? " (SAFE TILL LANDING)" :
+			fall == FORGE_VOLUME_FALL_EXIT ? " (SAFE INSIDE)" : "",
+			volume->flags & FORGE_VOLUME_FLAG_STOP_INERTIA ? " (STOPS)" : "");
+		if (volume->effect == _forge_volume_gravity)
+		{
+			snprintf(text, size, "GRAVITY X%.2f %s%s", (double)(volume->damage / 100.0f), s_shape_names[volume->shape],
+				extra);
+			return;
+		}
+		snprintf(text, size, "%s %s%s", s_effect_names[volume->effect], s_shape_names[volume->shape], extra);
 	}
-	snprintf(text, size, "%s %s", s_effect_names[volume->effect], s_shape_names[volume->shape]);
 }
 
 void forge_volume_row_text(int32_t live_idx, int row, char *label, unsigned long label_size, char *value,
@@ -629,11 +657,17 @@ void forge_volume_row_text(int32_t live_idx, int row, char *label, unsigned long
 			snprintf(value, value_size, "-");
 		break;
 	case _forge_volume_row_fall_damage:
+	{
+		int fall = volume->flags & FORGE_VOLUME_FALL_MASK;
+
 		snprintf(label, label_size, "FALL DAMAGE:");
-		if (volume->effect == _forge_volume_gravity)
-			snprintf(value, value_size, "%s", volume->flags & FORGE_VOLUME_FLAG_NO_FALL_DAMAGE ? "OFF TILL LANDING" : "ON");
-		else
-			snprintf(value, value_size, "-");
+		snprintf(value, value_size, "%s", fall == FORGE_VOLUME_FALL_LANDING ? "LANDING" :
+			fall == FORGE_VOLUME_FALL_EXIT ? "EXIT" : "VANILLA");
+		break;
+	}
+	case _forge_volume_row_inertia:
+		snprintf(label, label_size, "REMOVE INERTIA:");
+		snprintf(value, value_size, "%s", volume->flags & FORGE_VOLUME_FLAG_STOP_INERTIA ? "ON" : "OFF");
 		break;
 	case _forge_volume_row_size_x:
 	case _forge_volume_row_size_y:
@@ -724,14 +758,21 @@ int forge_volume_row_step(int32_t live_idx, int row, int dir)
 			1.0f : 5.0f), 1.0f, 100.0f);
 		break;
 	case _forge_volume_row_fall_damage:
-		if (settings.effect != _forge_volume_gravity)
-		{
-			forge_set_status("Only GRAVITY volumes can turn off fall damage");
-			return 0;
-		}
-		settings.flags ^= FORGE_VOLUME_FLAG_NO_FALL_DAMAGE;
-		forge_set_status(settings.flags & FORGE_VOLUME_FLAG_NO_FALL_DAMAGE ?
-			"Fall damage off: whoever was in it takes none until they land" : "Fall damage on");
+	{
+		int fall = ((settings.flags & FORGE_VOLUME_FALL_MASK) + NUMBER_OF_FORGE_VOLUME_FALL_MODES + dir) %
+			NUMBER_OF_FORGE_VOLUME_FALL_MODES;
+
+		settings.flags = (uint8_t)((settings.flags & ~FORGE_VOLUME_FALL_MASK) | fall);
+		forge_set_status("%s", fall == FORGE_VOLUME_FALL_LANDING ?
+			"Fall damage LANDING: whoever was in it takes none until they next land" :
+			fall == FORGE_VOLUME_FALL_EXIT ? "Fall damage EXIT: none while they are in it" :
+			"Fall damage VANILLA: as the game does");
+		break;
+	}
+	case _forge_volume_row_inertia:
+		settings.flags ^= FORGE_VOLUME_FLAG_STOP_INERTIA;
+		forge_set_status("%s", settings.flags & FORGE_VOLUME_FLAG_STOP_INERTIA ?
+			"Remove inertia on: a player coming into it stops dead" : "Remove inertia off");
 		break;
 	case _forge_volume_row_size_x:
 	case _forge_volume_row_size_y:
@@ -825,55 +866,67 @@ int forge_volume_packet(int32_t live_idx, char *text, unsigned long size)
 	return 1;
 }
 
+/* a volume's frame as the physics asks of it, pulling `strength` times the
+world's gravity down its own down */
+static void gravity_volume_fill(struct gravity_volume *gravity, int32_t live_idx, struct forge_live_instance const *inst,
+	struct forge_volume const *volume, int shape, float strength)
+{
+	real_vector3d forward, left, up;
+
+	euler_basis(inst->yaw, inst->pitch, inst->roll, &forward, &left, &up);
+	gravity->live_idx = live_idx;
+	gravity->flags = volume->flags;
+	gravity->shape = (uint8_t)shape;
+	gravity->middle[0] = inst->x;
+	gravity->middle[1] = inst->y;
+	gravity->middle[2] = inst->z;
+	gravity->forward[0] = forward.i;
+	gravity->forward[1] = forward.j;
+	gravity->forward[2] = forward.k;
+	gravity->left[0] = left.i;
+	gravity->left[1] = left.j;
+	gravity->left[2] = left.k;
+	gravity->up[0] = up.i;
+	gravity->up[1] = up.j;
+	gravity->up[2] = up.k;
+	gravity->half[0] = volume->size[0] * 0.5f;
+	gravity->half[1] = volume->size[1] * 0.5f;
+	gravity->half[2] = volume->size[2] * 0.5f;
+	gravity->bound = MAX(gravity->half[0], MAX(gravity->half[1], gravity->half[2])) * 1.75f;
+	gravity->pull[0] = -up.i * strength;
+	gravity->pull[1] = -up.j * strength;
+	gravity->pull[2] = -up.k * strength;
+}
+
 /* the GRAVITY volumes made again: their frames, and their pulls along their
-own down; and the ONE WAY volumes' frames */
+own down; the ONE WAY volumes' frames; and those with a FALL DAMAGE or
+REMOVE INERTIA of their own, whatever their effect */
 static void gravity_volumes_make(void)
 {
 	int32_t i;
 
 	s_gravity_count = 0;
 	s_one_way_count = 0;
+	s_flagged_count = 0;
 	for (i = 0; i < g_forge.live_instance_count; i++)
 	{
 		struct forge_live_instance const *inst = volume_instance(i);
 		struct forge_volume const *volume = &s_volumes[i];
-		struct gravity_volume *gravity;
-		real_vector3d forward, left, up;
-		float strength;
 
 		if (!inst)
 			continue;
 		if (volume->effect == _forge_volume_gravity && s_gravity_count < MAXIMUM_GRAVITY_VOLUMES)
-			gravity = &s_gravity[s_gravity_count++];
+		{
+			gravity_volume_fill(&s_gravity[s_gravity_count++], i, inst, volume, volume->shape, volume->damage / 100.0f);
+		}
 		else if (volume->effect == _forge_volume_one_way && s_one_way_count < MAXIMUM_ONE_WAY_VOLUMES)
-			gravity = &s_one_way[s_one_way_count++];
-		else
-			continue;
-		euler_basis(inst->yaw, inst->pitch, inst->roll, &forward, &left, &up);
-		strength = volume->effect == _forge_volume_gravity ? volume->damage / 100.0f : 0.0f;
-		gravity->flags = volume->flags;
-		/* (a ONE WAY sphere is the cylinder around it) */
-		gravity->shape = volume->effect == _forge_volume_one_way && volume->shape == _forge_volume_sphere ?
-			_forge_volume_cylinder : volume->shape;
-		gravity->middle[0] = inst->x;
-		gravity->middle[1] = inst->y;
-		gravity->middle[2] = inst->z;
-		gravity->forward[0] = forward.i;
-		gravity->forward[1] = forward.j;
-		gravity->forward[2] = forward.k;
-		gravity->left[0] = left.i;
-		gravity->left[1] = left.j;
-		gravity->left[2] = left.k;
-		gravity->up[0] = up.i;
-		gravity->up[1] = up.j;
-		gravity->up[2] = up.k;
-		gravity->half[0] = volume->size[0] * 0.5f;
-		gravity->half[1] = volume->size[1] * 0.5f;
-		gravity->half[2] = volume->size[2] * 0.5f;
-		gravity->bound = MAX(gravity->half[0], MAX(gravity->half[1], gravity->half[2])) * 1.75f;
-		gravity->pull[0] = -up.i * strength;
-		gravity->pull[1] = -up.j * strength;
-		gravity->pull[2] = -up.k * strength;
+		{
+			/* (a ONE WAY sphere is the cylinder around it) */
+			gravity_volume_fill(&s_one_way[s_one_way_count++], i, inst, volume,
+				volume->shape == _forge_volume_sphere ? _forge_volume_cylinder : volume->shape, 0.0f);
+		}
+		if ((volume->flags & FORGE_VOLUME_FLAGS_ALL) && s_flagged_count < MAXIMUM_FLAGGED_VOLUMES)
+			gravity_volume_fill(&s_flagged[s_flagged_count++], i, inst, volume, volume->shape, 0.0f);
 	}
 }
 
@@ -906,7 +959,7 @@ static int gravity_volumes_refresh(void)
 
 	if (!g_forge.initialized || g_forge.live_instance_count <= 0)
 	{
-		s_gravity_count = s_one_way_count = 0;
+		s_gravity_count = s_one_way_count = s_flagged_count = 0;
 		return 0;
 	}
 	now = game_time_get();
@@ -951,6 +1004,7 @@ int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3])
 int forge_volumes_fall_protected(long biped_index, float x, float y, float z, int airborne)
 {
 	int inside = 0;
+	int exit_safe = 0;
 	int found = -1;
 	int k;
 
@@ -958,18 +1012,30 @@ int forge_volumes_fall_protected(long biped_index, float x, float y, float z, in
 		return 0;
 	if (!s_fall_protected_ready)
 		fall_protected_clear();
-	if (gravity_volumes_refresh())
+	gravity_volumes_refresh();
+	for (k = 0; k < s_flagged_count && !inside; k++)
 	{
-		for (k = 0; k < s_gravity_count && !inside; k++)
+		int fall = s_flagged[k].flags & FORGE_VOLUME_FALL_MASK;
+
+		if (fall != FORGE_VOLUME_FALL_VANILLA && gravity_volume_contains(&s_flagged[k], x, y, z))
 		{
-			inside = (s_gravity[k].flags & FORGE_VOLUME_FLAG_NO_FALL_DAMAGE) &&
-				gravity_volume_contains(&s_gravity[k], x, y, z);
+			if (fall == FORGE_VOLUME_FALL_LANDING)
+				inside = 1;
+			else
+				exit_safe = 1;
 		}
 	}
 	for (k = 0; k < MAXIMUM_FALL_PROTECTED && found < 0; k++)
 	{
 		if (s_fall_protected[k] == biped_index)
 			found = k;
+	}
+	/* (EXIT: safe in it, and no more once out of it) */
+	if (exit_safe && !inside)
+	{
+		if (found >= 0 && !airborne)
+			s_fall_protected[found] = NONE;
+		return 1;
 	}
 	if (inside)
 	{
@@ -996,6 +1062,56 @@ int forge_volumes_fall_protected(long biped_index, float x, float y, float z, in
 	if (!airborne)
 		s_fall_protected[found] = NONE;
 	return 1;
+}
+
+int forge_volumes_stop_inertia(long biped_index, float x, float y, float z)
+{
+	long now;
+	int stop = 0;
+	int k;
+
+	if (biped_index == NONE)
+		return 0;
+	if (!s_fall_protected_ready)
+		fall_protected_clear();
+	gravity_volumes_refresh();
+	if (!s_flagged_count)
+		return 0;
+	now = game_time_get();
+	for (k = 0; k < s_flagged_count; k++)
+	{
+		struct gravity_volume const *volume = &s_flagged[k];
+		int slot = -1, free_slot = -1, oldest = 0;
+		int j;
+
+		if (!(volume->flags & FORGE_VOLUME_FLAG_STOP_INERTIA) || !gravity_volume_contains(volume, x, y, z))
+			continue;
+		for (j = 0; j < MAXIMUM_INERTIA_OCCUPANTS; j++)
+		{
+			if (s_inertia_occupants[j].biped_index == biped_index && s_inertia_occupants[j].live_idx == volume->live_idx)
+				slot = j;
+			else if (free_slot < 0 && (s_inertia_occupants[j].biped_index == NONE ||
+				s_inertia_occupants[j].tick < now - 1 || s_inertia_occupants[j].tick > now))
+			{
+				free_slot = j;
+			}
+			if (s_inertia_occupants[j].tick < s_inertia_occupants[oldest].tick)
+				oldest = j;
+		}
+		/* (in it last tick too: it came in before, and was stopped then) */
+		if (slot >= 0 && s_inertia_occupants[slot].tick >= now - 1 && s_inertia_occupants[slot].tick <= now)
+		{
+			s_inertia_occupants[slot].tick = now;
+			continue;
+		}
+		stop = 1;
+		if (slot < 0)
+			slot = free_slot >= 0 ? free_slot : oldest;
+		s_inertia_occupants[slot].biped_index = biped_index;
+		s_inertia_occupants[slot].live_idx = volume->live_idx;
+		s_inertia_occupants[slot].tick = now;
+	}
+	return stop;
 }
 
 int forge_volumes_one_way_floor(float const from[3], float to[3], float velocity[3], float radius, float out_normal[3],

@@ -24,16 +24,23 @@ index. Its effect:
   again. Players and AI (in the air, or pulled off the ground they stand on),
   vehicles, dropped weapons and equipment, grenades and other arcing
   projectiles, and ragdolls (forge_volumes_gravity_at, asked by the engine's
-  physics). Every machine runs it on its own copy of the volumes. Its FALL
-  DAMAGE OFF keeps a biped that was in it from falling damage until it next
-  stands on the ground (forge_volumes_fall_protected, asked by bipeds.c's
-  biped_falling_damage): a launcher's;
+  physics). Every machine runs it on its own copy of the volumes;
 - ONE WAY: its top face (its own up, as it is turned; a sphere's that of
   the cylinder around it) is a floor bipeds stand on when they come down on
   it, and pass through from under it, or from its sides
   (forge_volumes_one_way_floor, asked by bipeds.c's biped_update_physics
   after the pill's move): a grav lift's top. Bipeds alone: vehicles, items
   and projectiles pass through it, and AI find no path on it.
+
+Any volume also has (FORGE_VOLUME_FLAG_*):
+
+- FALL DAMAGE: VANILLA (as the game does), LANDING (a biped that was in it
+  takes none until it next stands on the ground: a launcher's), or EXIT (a
+  biped takes none while it is in it: a landing zone's)
+  (forge_volumes_fall_protected, asked by bipeds.c's biped_falling_damage);
+- REMOVE INERTIA: a biped coming into it stops dead, and moves on from
+  there as its gravity and its legs take it (forge_volumes_stop_inertia,
+  asked by bipeds.c's biped_update_physics).
 
 Every unit is a biped here: one in a vehicle is in a volume if it is. The
 host (or a game with no network) hurts them, each tick of a game on the map,
@@ -98,8 +105,9 @@ enum forge_volume_row
 	_forge_volume_row_shape = 0,
 	_forge_volume_row_effect,
 	_forge_volume_row_damage,
-	/* (GRAVITY's FALL DAMAGE: FORGE_VOLUME_FLAG_NO_FALL_DAMAGE) */
+	/* (FALL DAMAGE: FORGE_VOLUME_FALL_*; REMOVE INERTIA) */
 	_forge_volume_row_fall_damage,
+	_forge_volume_row_inertia,
 	_forge_volume_row_size_x,
 	_forge_volume_row_size_y,
 	_forge_volume_row_size_z,
@@ -112,9 +120,17 @@ enum forge_volume_row
 /* a volume's flags (forge_volume.flags) */
 enum
 {
-	/* GRAVITY: no falling damage for a biped in it, until it lands */
-	FORGE_VOLUME_FLAG_NO_FALL_DAMAGE = 1 << 0,
-	FORGE_VOLUME_FLAGS_ALL = FORGE_VOLUME_FLAG_NO_FALL_DAMAGE
+	/* its FALL DAMAGE (the low two bits): VANILLA; LANDING, none for a biped
+	that was in it until it lands (1, a GRAVITY volume's FALL DAMAGE OFF of
+	before); EXIT, none while it is in it */
+	FORGE_VOLUME_FALL_MASK = 3,
+	FORGE_VOLUME_FALL_VANILLA = 0,
+	FORGE_VOLUME_FALL_LANDING = 1,
+	FORGE_VOLUME_FALL_EXIT = 2,
+	NUMBER_OF_FORGE_VOLUME_FALL_MODES = 3,
+	/* REMOVE INERTIA: a biped coming into it stops */
+	FORGE_VOLUME_FLAG_STOP_INERTIA = 1 << 2,
+	FORGE_VOLUME_FLAGS_ALL = FORGE_VOLUME_FALL_MASK | FORGE_VOLUME_FLAG_STOP_INERTIA
 };
 
 /* ---------- structures */
@@ -192,9 +208,14 @@ as it was when FALSE) */
 int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
 
 /* a biped's falling damage held off (bipeds.c's biped_falling_damage, each
-tick): TRUE while it is in a GRAVITY volume with FALL DAMAGE OFF, and after,
-until (and on the tick) it stands on the ground again (`airborne` FALSE) */
+tick): TRUE while it is in a volume with FALL DAMAGE LANDING or EXIT, and,
+after a LANDING one, until (and on the tick) it stands on the ground again
+(`airborne` FALSE) */
 int forge_volumes_fall_protected(long biped_index, float x, float y, float z, int airborne);
+/* a biped's inertia taken (bipeds.c's biped_update_physics, each tick): TRUE
+on the tick it comes into a volume with REMOVE INERTIA (each one it comes
+into, once, till it leaves it) */
+int forge_volumes_stop_inertia(long biped_index, float x, float y, float z);
 
 /* a biped's move (its pill's bottom sphere's middle, `from` to `to`, of
 `radius`) against the ONE WAY volumes' tops (bipeds.c, after the pill's
