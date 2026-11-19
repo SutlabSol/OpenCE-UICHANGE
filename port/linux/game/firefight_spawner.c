@@ -1143,6 +1143,59 @@ static long reach_ground(real_point3d const *point, real_point3d *ground)
 	return NONE;
 }
 
+/* port: where to bring the players something (the ordnance pods, the friendly
+reinforcements): a player on foot, `first` before the rest; with all of them
+flying (an aircraft in air support, many storeys up) the floor under the
+first that has floor under it, not a kill volume's, rather than the air
+beside them. FALSE: none of them has any */
+#define FF_FLOOR_DEPTH 150.0f
+#define FF_FLOOR_ON_FOOT 2.5f
+static boolean players_floor_anchor(real_point3d const *positions, long const *units, short count, short first,
+	real_point3d *out, long *out_unit)
+{
+	short pass, n;
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		for (n = 0; n < count; n++)
+		{
+			short i = (short)((first + n) % count);
+			struct collision_result collision;
+			real_point3d start = positions[i];
+			real_vector3d down = { 0.0f, 0.0f, -FF_FLOOR_DEPTH };
+			real height;
+
+			start.z += 0.4f;
+			if (!collision_test_vector(FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
+					&start, &down, NONE, &collision) ||
+				collision.type != _collision_result_structure)
+			{
+				continue;
+			}
+			height = positions[i].z - collision.point.z;
+			if (pass == 0 && height > FF_FLOOR_ON_FOOT)
+				continue;
+			if (pass == 0)
+			{
+				*out = positions[i];
+			}
+			else
+			{
+				if (death_volume_column(&collision.point, 2.0f))
+					continue;
+				*out = collision.point;
+				out->z += 0.3f;
+				error(_error_silent, "firefight: the players are all %.1f units or more over the floor: "
+					"brought to the floor under one, %.1f units down", FF_FLOOR_ON_FOOT, height);
+			}
+			if (out_unit)
+				*out_unit = units ? units[i] : NONE;
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 /* port: how far an actor walks a straight line on the level (the AI's
 fallback when its path search fails: actor_moving.c), towards a point, at
 most most units: on while the ground at each half unit is no more than
@@ -2423,6 +2476,10 @@ static short select_wave_spawn_zones(
 	if (selected == 0 && human_count > 0)
 	{
 		short tries;
+
+		/* port: about a player on foot, else the floor under them (a pilot's
+		ring was in the air) */
+		players_floor_anchor(player_positions, NULL, human_count, 0, &player_positions[0], NULL);
 
 		for (s = 0; s < desired_zones; s++)
 		{
@@ -5799,12 +5856,16 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 			central = central_player_index(human_positions, human_count);
 			anchor = human_positions[central];
 			anchor_unit = human_units[central];
+			/* port: one on foot, else the floor under them (a pilot's
+			pods came down at the aircraft's height) */
+			players_floor_anchor(human_positions, human_units, human_count, central, &anchor, &anchor_unit);
 		}
 		else
 		{
 			central = central_player_index(player_positions, player_count);
 			anchor = player_positions[central];
 			anchor_unit = player_units[central];
+			players_floor_anchor(player_positions, player_units, player_count, central, &anchor, &anchor_unit);
 		}
 	}
 
@@ -7346,6 +7407,7 @@ void firefight_spawn_friendly_reinforcements(short count)
 {
 	real_point3d player_positions[16];
 	short player_count = get_living_player_positions(player_positions, NULL, 16);
+	real_point3d anchor;
 	short living_friendlies = 0;
 	long candidate_variants[MAX_ROSTER_VARIANTS];
 	short candidate_count = 0;
@@ -7390,15 +7452,33 @@ void firefight_spawn_friendly_reinforcements(short count)
 	if (candidate_count == 0)
 		return;
 
+	/* port: by a player on foot, else on the floor under them, not at a
+	pilot's height (they fell from the aircraft's); none, a spawn point */
+	{
+		real facing = 0.0f;
+
+		if (!players_floor_anchor(player_positions, NULL, player_count, 0, &anchor, NULL) &&
+			!firefight_select_player_spawn_point(0, &anchor, &facing))
+		{
+			return;
+		}
+	}
+
 	for (i = living_friendlies; i < count; i++)
 	{
 		long variant = candidate_variants[spawner_rand() % (unsigned long)candidate_count];
-		real_point3d spawn_pt = player_positions[0];
+		real_point3d spawn_pt = anchor;
+		real_point3d ground;
 		short ally_team = ff_state.elite_player_mode ? _game_team_covenant : _game_team_human;
 		long unit_index;
 
 		spawn_pt.x += spawner_rand_range(-3.5f, 3.5f);
 		spawn_pt.y += spawner_rand_range(-3.5f, 3.5f);
+		/* (on the ground there, this side of any wall; else where the anchor is) */
+		if (spot_reachable_from(&anchor, &spawn_pt) && reach_ground(&spawn_pt, &ground) != NONE)
+			spawn_pt = ground;
+		else
+			spawn_pt = anchor;
 		unit_index = spawn_single_actor_at(variant, _ff_tier_infantry, &spawn_pt, 0.0f, ally_team, FALSE);
 		if (unit_index != NONE && g_friendly_unit_count < MAX_FRIENDLY_UNITS)
 		{
