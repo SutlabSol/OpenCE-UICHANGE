@@ -579,6 +579,14 @@ boolean mcc_tag_preview_mesh(unsigned long group, char const *tag_name, struct t
 	memset(&build, 0, sizeof(build));
 	if (!mcc_preview.map || !tag_name)
 		return FALSE;
+	/* (an object's or an actor variant's model alone: another tag's fields
+	are not an object's) */
+	if (group != ACTOR_VARIANT_DEFINITION_TAG && group != 'weap' && group != 'eqip' && group != 'vehi' &&
+		group != 'bipd' && group != 'scen' && group != 'mach' && group != 'ctrl' && group != 'lifi' &&
+		group != 'garb' && group != 'proj')
+	{
+		return FALSE;
+	}
 	root = mcc_preview_tag_named(group, tag_name, sizeof(struct object_definition));
 	if (root && group == ACTOR_VARIANT_DEFINITION_TAG)
 	{
