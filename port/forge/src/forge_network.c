@@ -1222,6 +1222,7 @@ static void forge_client_handle_host_spawn(
 					g_forge.grabbed_live_index = host_live_idx;
 				if (g_forge.hovered_live_index == match_idx)
 					g_forge.hovered_live_index = host_live_idx;
+				forge_3d_history_remap(match_idx, host_live_idx);
 				match_idx = host_live_idx;
 			}
 		}

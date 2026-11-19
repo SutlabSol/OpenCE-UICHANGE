@@ -6,8 +6,9 @@ into forge_3d_mode.c for its menus' drawing and input: the palette's button
 held opens it (forge_3d_update). Its pages:
 
 - MAP SETTINGS: DISPLAY NAME, SKYBOX, FOG SETTINGS, PLAYER BIPEDS, RENDER
-  DISTANCE (how far a big map is drawn) and MONITOR SPEED (how fast Forge's
-  Monitor flies over it);
+  DISTANCE (how far a big map is drawn), MONITOR SPEED (how fast Forge's
+  Monitor flies over it), and UNDO and REDO (the undo history's, any player's:
+  forge_3d_history_step);
 - FOG SETTINGS: the atmosphere and its fog's values;
 - PLAYER BIPEDS: RED TEAM, BLUE TEAM, FREE FOR ALL, each a page of its own
   (its CONFIG: CUSTOM, or another team's settings played; with CUSTOM its
@@ -48,6 +49,9 @@ enum
 	_map_settings_row_bipeds_menu,
 	_map_settings_row_render_distance,
 	_map_settings_row_monitor_speed,
+	/* (the undo history's, forge_3d_history_step: anyone's) */
+	_map_settings_row_undo,
+	_map_settings_row_redo,
 
 	_map_settings_row_atmosphere,
 	_map_settings_row_fog_red,
@@ -118,7 +122,7 @@ static int map_settings_page_rows(int page, int *rows)
 	switch (page)
 	{
 	case _map_settings_page_main:
-		for (row = _map_settings_row_name; row <= _map_settings_row_monitor_speed; row++)
+		for (row = _map_settings_row_name; row <= _map_settings_row_redo; row++)
 			rows[count++] = row;
 		break;
 	case _map_settings_page_fog:
@@ -484,6 +488,13 @@ static void map_settings_row_act(int row, int dir, int enter)
 			forge_set_status("Test spawn: %s. %s FORGE ends it", map_settings_slot_name(s_map_settings_menu.team_slot),
 				forge_action_prompt(FORGE_BIND_TOGGLE_MODE));
 		}
+		return;
+	}
+	if (row == _map_settings_row_undo || row == _map_settings_row_redo)
+	{
+		/* (the menu stays open, for another step) */
+		if (enter)
+			forge_3d_history_step(row == _map_settings_row_redo);
 		return;
 	}
 	if (map_settings_refuse())
@@ -855,6 +866,18 @@ static void map_settings_row_text(int row, char *label, size_t label_size, char 
 	case _map_settings_row_test_spawn:
 		snprintf(label, label_size, "TEST SPAWN");
 		break;
+	case _map_settings_row_undo:
+	case _map_settings_row_redo:
+	{
+		int steps = forge_3d_history_steps(row == _map_settings_row_redo);
+
+		snprintf(label, label_size, "%s", row == _map_settings_row_redo ? "REDO" : "UNDO");
+		if (steps > 0)
+			snprintf(value, value_size, "%d STEP%s", steps, steps == 1 ? "" : "S");
+		else
+			snprintf(value, value_size, "NONE");
+		break;
+	}
 	default:
 		label[0] = 0;
 		break;
@@ -883,6 +906,8 @@ static char const *map_settings_row_help(int row)
 	case _map_settings_row_team_config: return "CUSTOM: its own. A team: plays that one's.";
 	case _map_settings_row_team_movement: return "SPARTAN: strafing, jumps, slopes as the map's player.";
 	case _map_settings_row_test_spawn: return "Play as it here, with a mirrored copy to watch.";
+	case _map_settings_row_undo: return "Puts back your last move, turn, settings or placing.";
+	case _map_settings_row_redo: return "Does again what UNDO put back.";
 	default: return "Left/right changes it.";
 	}
 }

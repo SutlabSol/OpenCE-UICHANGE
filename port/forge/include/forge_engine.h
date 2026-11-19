@@ -719,6 +719,14 @@ void forge_init_map_scenario_entities(void);
 void forge_3d_reset_session_tracking(void);
 void forge_cancel_or_release_held_item(void);
 int forge_has_held_item_to_cancel(void);
+/* the undo history (moves, turns, properties, placings; UNDO/REDO in MAP
+SETTINGS, ctrl+z/ctrl+y on a desktop): a step undone (`redo` FALSE) or
+redone, TRUE when one was; how many each way; emptied with a level; an
+instance moved to another slot */
+int forge_3d_history_step(int redo);
+int forge_3d_history_steps(int redo);
+void forge_3d_history_clear(void);
+void forge_3d_history_remap(int32_t from_idx, int32_t to_idx);
 
 /* ---------- Prototypes: forge_network.c */
 

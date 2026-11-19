@@ -3358,6 +3358,13 @@ its OBJECT_ALWAYS_SPAWN line read just before its OBJECT line
 int g_forge_next_spawn_always = 0;
 float g_forge_next_spawn_scale = 0.0f;
 
+/* the undo history (UNDO/REDO, ctrl+z/ctrl+y: forge_history_*, after the
+properties' UNDO) */
+static void forge_history_forget(int32_t live_idx);
+static void forge_history_begin(int32_t live_idx);
+static void forge_history_end(int32_t live_idx);
+static void forge_history_note_placed(int32_t live_idx, int new_group);
+
 int32_t forge_3d_spawn_object_at_slot(
 	int32_t forced_live_idx,
 	uint32_t group_tag,
@@ -3419,6 +3426,9 @@ int32_t forge_3d_spawn_object_at_slot(
 		}
 	}
 
+	/* (a slot taken by something else: the history's steps of what was there go) */
+	if (!g_forge.live_instances[live_idx].active || g_forge.live_instances[live_idx].group_tag != group_tag)
+		forge_history_forget(live_idx);
 	inst = &g_forge.live_instances[live_idx];
 	memset(inst, 0, sizeof(*inst));
 	inst->active = 1;
@@ -3919,6 +3929,9 @@ void forge_3d_delete_instance(int32_t live_idx, int broadcast_net)
 		forge_set_status("A map's volume can't be deleted: it is turned OFF");
 		return;
 	}
+
+	/* (deleted: not undone, so the history's steps of it go) */
+	forge_history_forget(live_idx);
 
 	/* A dropship zone takes its route with it (other machines hear of each point) */
 	route_id = (broadcast_net && forge_ff_is_dropship_zone(inst)) ? FF_ROUTE_ID(inst->team_designator) : 0;
@@ -6133,6 +6146,8 @@ void forge_cancel_or_release_held_item(void)
 				g_forge.grabbed_orig_roll,
 				0,
 				1);
+			/* (its settings may have changed while it was held) */
+			forge_history_end(restore_live);
 			forge_set_status("Restored Item Position");
 		}
 	}
@@ -6150,6 +6165,7 @@ static void forge_place_held_item(void)
 	{
 		int32_t released_live_idx = g_forge.grabbed_live_index;
 		struct forge_live_instance *released = &g_forge.live_instances[released_live_idx];
+		int was_new_spawn = g_forge.grabbed_is_new_spawn;
 		g_forge.grabbed_live_index = -1;
 		g_forge.grabbed_object_index = NONE;
 		g_forge.grabbed_is_new_spawn = 0;
@@ -6176,6 +6192,8 @@ static void forge_place_held_item(void)
 				{
 					struct forge_live_instance const *ni = &g_forge.live_instances[nidx];
 					forge_network_send_transform_ext(nidx, ni->object_index, ni->x, ni->y, ni->z, ni->yaw, ni->pitch, ni->roll, 0, 1);
+					/* (the hill's ten, one step of the history) */
+					forge_history_note_placed(nidx, k == 0);
 				}
 			}
 			forge_set_status("Placed KOTH Hill #%d", g_forge.koth_group_hill_id);
@@ -6194,6 +6212,10 @@ static void forge_place_held_item(void)
 				released->roll,
 				0,
 				1);
+			if (was_new_spawn)
+				forge_history_note_placed(released_live_idx, 1);
+			else
+				forge_history_end(released_live_idx);
 			forge_set_status("Placed '%s'", released->tag_path);
 		}
 	}
@@ -7146,6 +7168,7 @@ static int s_player_last_unit_init = 0;
 
 void forge_3d_reset_session_tracking(void)
 {
+	forge_3d_history_clear();
 	s_route_props_live_idx = -1;
 	g_forge.route_follow_live_index = -1;
 	if (s_route_test_flying)
@@ -7240,6 +7263,8 @@ static void forge_select_instance(int best)
 		if (g_forge.grab_distance < 1.0f) g_forge.grab_distance = 1.0f;
 		if (g_forge.grab_distance > 30.0f) g_forge.grab_distance = 30.0f;
 	}
+	/* (as it was, for the history's step when it is let go) */
+	forge_history_begin(best);
 }
 
 /* the settings closed on an instance that was not picked up: let go where it
@@ -7262,11 +7287,13 @@ static void forge_settings_selection_end(void)
 		forge_3d_move_instance_ext(live_idx, inst->x, inst->y, inst->z, inst->yaw, inst->pitch, inst->roll, 0, 0);
 		forge_network_send_transform_ext(
 			live_idx, inst->object_index, inst->x, inst->y, inst->z, inst->yaw, inst->pitch, inst->roll, 0, 1);
+		forge_history_end(live_idx);
 	}
 }
 
-/* what the properties were when they were opened, for UNDO */
-static struct
+/* an instance's settings and where it is: what the properties were when
+they were opened, for UNDO; and each side of a step of the history */
+struct forge_props_snapshot
 {
 	struct forge_live_instance inst;
 	enum forge_snap_angle_mode snap_mode;
@@ -7275,29 +7302,35 @@ static struct
 	int leg_style[2];
 	int has_volume;
 	struct forge_volume volume;
-} s_props_opened;
+};
+static struct forge_props_snapshot s_props_opened;
+
+static void forge_props_snapshot_take(int32_t live_idx, struct forge_props_snapshot *snap)
+{
+	struct forge_live_instance const *inst = &g_forge.live_instances[live_idx];
+	int route_id = FF_ROUTE_ID(inst->team_designator);
+
+	memset(snap, 0, sizeof(*snap));
+	snap->inst = *inst;
+	snap->snap_mode = g_forge.snap_mode;
+	snap->has_ai = inst->group_tag == FORGE_GROUP_AI_SPAWN && forge_ai_spawn_settings_get(live_idx, &snap->ai);
+	snap->has_volume = forge_volume_get(live_idx) != NULL;
+	if (snap->has_volume)
+		snap->volume = *forge_volume_get(live_idx);
+	if (forge_ff_is_dropship_zone(inst))
+	{
+		snap->leg_style[0] = forge_ff_route_leg_style(route_id, FF_ROUTE_APPROACH);
+		snap->leg_style[1] = forge_ff_route_leg_style(route_id, FF_ROUTE_DEPARTURE);
+	}
+}
 
 static void forge_props_open(void)
 {
-	struct forge_live_instance const *inst = &g_forge.live_instances[g_forge.grabbed_live_index];
-	int route_id = FF_ROUTE_ID(inst->team_designator);
-
 	g_forge.active_modal = _forge_modal_object_properties;
 	g_forge.props_cursor = 0;
 	s_props_factions_open = 0;
 	s_route_taken.count = 0;
-	s_props_opened.inst = *inst;
-	s_props_opened.snap_mode = g_forge.snap_mode;
-	s_props_opened.has_ai = inst->group_tag == FORGE_GROUP_AI_SPAWN &&
-		forge_ai_spawn_settings_get(g_forge.grabbed_live_index, &s_props_opened.ai);
-	s_props_opened.has_volume = forge_volume_get(g_forge.grabbed_live_index) != NULL;
-	if (s_props_opened.has_volume)
-		s_props_opened.volume = *forge_volume_get(g_forge.grabbed_live_index);
-	if (forge_ff_is_dropship_zone(inst))
-	{
-		s_props_opened.leg_style[0] = forge_ff_route_leg_style(route_id, FF_ROUTE_APPROACH);
-		s_props_opened.leg_style[1] = forge_ff_route_leg_style(route_id, FF_ROUTE_DEPARTURE);
-	}
+	forge_props_snapshot_take(g_forge.grabbed_live_index, &s_props_opened);
 }
 
 /* TELEPORT TO OTHER END: the camera behind the teleporter's other end, as
@@ -7388,21 +7421,19 @@ static void forge_tele_jump(int32_t live_idx)
 		forge_set_status("At %s #%d", forge_tele_role_name(forge_tele_role(dest)), forge_tele_channel(dest));
 }
 
-/* the properties back as forge_props_open found them, which stay open */
-static void forge_props_undo(void)
+/* an instance's settings put back as a snapshot has them (not where it is) */
+static void forge_props_restore(int32_t live_idx, struct forge_props_snapshot const *snap)
 {
-	int32_t live_idx = g_forge.grabbed_live_index;
 	struct forge_live_instance *inst = &g_forge.live_instances[live_idx];
-	struct forge_live_instance const *was = &s_props_opened.inst;
+	struct forge_live_instance const *was = &snap->inst;
 
-	g_forge.snap_mode = s_props_opened.snap_mode;
-	if (s_props_opened.has_ai)
+	if (snap->has_ai)
 	{
-		forge_ai_spawn_settings_set(live_idx, &s_props_opened.ai);
+		forge_ai_spawn_settings_set(live_idx, &snap->ai);
 	}
-	else if (s_props_opened.has_volume && forge_volume_get(live_idx))
+	else if (snap->has_volume && forge_volume_get(live_idx))
 	{
-		forge_volume_set(live_idx, &s_props_opened.volume, 1);
+		forge_volume_set(live_idx, &snap->volume, 1);
 	}
 	else if (inst->group_tag == 'ffsp')
 	{
@@ -7419,8 +7450,8 @@ static void forge_props_undo(void)
 			else if (route_now == 0 && route_was != 0)
 				forge_ff_route_set_custom(live_idx);
 			route_id = FF_ROUTE_ID(inst->team_designator);
-			forge_ff_route_set_leg_style(route_id, FF_ROUTE_APPROACH, s_props_opened.leg_style[0]);
-			forge_ff_route_set_leg_style(route_id, FF_ROUTE_DEPARTURE, s_props_opened.leg_style[1]);
+			forge_ff_route_set_leg_style(route_id, FF_ROUTE_APPROACH, snap->leg_style[0]);
+			forge_ff_route_set_leg_style(route_id, FF_ROUTE_DEPARTURE, snap->leg_style[1]);
 		}
 	}
 	else if (forge_tele_is(inst))
@@ -7466,10 +7497,320 @@ static void forge_props_undo(void)
 			g_forge.edit_state.default_edits[inst->edit_entry_index].gametype_flags = inst->gametype_flags;
 		}
 	}
+}
+
+/* the properties back as forge_props_open found them, which stay open */
+static void forge_props_undo(void)
+{
+	int32_t live_idx = g_forge.grabbed_live_index;
+	struct forge_live_instance const *was = &s_props_opened.inst;
+
+	g_forge.snap_mode = s_props_opened.snap_mode;
+	forge_props_restore(live_idx, &s_props_opened);
 	/* (an object in the player's hands is where they hold it) */
 	if (g_forge.grabbed_for_settings)
 		forge_3d_move_instance_ext(live_idx, was->x, was->y, was->z, was->yaw, was->pitch, was->roll, 0, 1);
 	forge_set_status("Properties Restored");
+}
+
+/* ---------- the undo history
+
+UNDO and REDO (the MAP SETTINGS menu's rows, everywhere; ctrl+z and ctrl+y on
+a desktop's keyboard): what was moved, turned or had its properties changed,
+and what was placed, a few steps back. A step is the object as it was and as
+it is after (each whole, so any step stands alone); a placing's undoing deletes
+it, its redoing places it again. Deleting stays the hold to delete's, not
+undone: a deleted object's steps go, as do those of a slot something else
+takes. Each machine has its own, of what it did; what it puts back goes to the
+others as a move, a placing or a delete does. */
+
+#define FORGE_HISTORY_STEPS 20
+
+enum
+{
+	_forge_history_undo = 0,
+	_forge_history_redo,
+	NUMBER_OF_FORGE_HISTORIES
+};
+
+enum
+{
+	_forge_step_change = 0, /* moved, turned, its properties */
+	_forge_step_place
+};
+
+struct forge_history_step
+{
+	int kind;
+	/* (steps of one group undone together: a KOTH hill's ten) */
+	int group;
+	int32_t live_idx;
+	/* (a placing's `before`: nothing) */
+	struct forge_props_snapshot before;
+	struct forge_props_snapshot after;
+};
+
+static struct forge_history_step s_history[NUMBER_OF_FORGE_HISTORIES][FORGE_HISTORY_STEPS];
+static int s_history_count[NUMBER_OF_FORGE_HISTORIES];
+static int s_history_group;
+/* (what an undo itself places, moves and deletes is no step) */
+static int s_history_applying;
+/* the object picked up (or turned where it is), as it was */
+static int32_t s_history_pending_idx = -1;
+static struct forge_props_snapshot s_history_pending;
+
+void forge_3d_history_clear(void)
+{
+	s_history_count[_forge_history_undo] = 0;
+	s_history_count[_forge_history_redo] = 0;
+	s_history_pending_idx = -1;
+}
+
+int forge_3d_history_steps(int redo)
+{
+	return s_history_count[redo ? _forge_history_redo : _forge_history_undo];
+}
+
+static void forge_history_push(int history, struct forge_history_step const *step)
+{
+	if (s_history_count[history] >= FORGE_HISTORY_STEPS)
+	{
+		/* (the oldest goes) */
+		memmove(&s_history[history][0], &s_history[history][1],
+			(size_t)(FORGE_HISTORY_STEPS - 1) * sizeof(s_history[history][0]));
+		s_history_count[history] = FORGE_HISTORY_STEPS - 1;
+	}
+	s_history[history][s_history_count[history]++] = *step;
+}
+
+/* a new step of the player's own: what was undone can't be redone after it */
+static void forge_history_record(struct forge_history_step const *step)
+{
+	forge_history_push(_forge_history_undo, step);
+	s_history_count[_forge_history_redo] = 0;
+}
+
+static void forge_history_forget(int32_t live_idx)
+{
+	int history;
+
+	if (s_history_applying || live_idx < 0)
+		return;
+	if (s_history_pending_idx == live_idx)
+		s_history_pending_idx = -1;
+	for (history = 0; history < NUMBER_OF_FORGE_HISTORIES; history++)
+	{
+		int from, to = 0;
+
+		for (from = 0; from < s_history_count[history]; from++)
+		{
+			if (s_history[history][from].live_idx == live_idx)
+				continue;
+			if (to != from)
+				s_history[history][to] = s_history[history][from];
+			to++;
+		}
+		s_history_count[history] = to;
+	}
+}
+
+/* an instance moved to another slot (a client's placing, linked to the host's) */
+void forge_3d_history_remap(int32_t from_idx, int32_t to_idx)
+{
+	int history, k;
+
+	if (from_idx < 0 || to_idx < 0 || from_idx == to_idx)
+		return;
+	if (s_history_pending_idx == from_idx)
+		s_history_pending_idx = to_idx;
+	for (history = 0; history < NUMBER_OF_FORGE_HISTORIES; history++)
+	{
+		for (k = 0; k < s_history_count[history]; k++)
+		{
+			if (s_history[history][k].live_idx == from_idx)
+				s_history[history][k].live_idx = to_idx;
+		}
+	}
+}
+
+static int forge_history_float_same(float a, float b, float tolerance)
+{
+	return a - b <= tolerance && b - a <= tolerance;
+}
+
+static int forge_history_moved(struct forge_props_snapshot const *a, struct forge_props_snapshot const *b)
+{
+	struct forge_live_instance const *ia = &a->inst, *ib = &b->inst;
+
+	return !forge_history_float_same(ia->x, ib->x, 0.001f) || !forge_history_float_same(ia->y, ib->y, 0.001f) ||
+		!forge_history_float_same(ia->z, ib->z, 0.001f) || !forge_history_float_same(ia->yaw, ib->yaw, 0.0005f) ||
+		!forge_history_float_same(ia->pitch, ib->pitch, 0.0005f) ||
+		!forge_history_float_same(ia->roll, ib->roll, 0.0005f);
+}
+
+static int forge_history_same(struct forge_props_snapshot const *a, struct forge_props_snapshot const *b)
+{
+	struct forge_live_instance const *ia = &a->inst, *ib = &b->inst;
+
+	if (forge_history_moved(a, b))
+		return 0;
+	if (ia->team_designator != ib->team_designator || ia->gametype_flags != ib->gametype_flags ||
+		ia->always_spawn != ib->always_spawn || ia->no_damage != ib->no_damage || ia->scale != ib->scale ||
+		ia->tele_dz != ib->tele_dz || ia->tele_dyaw != ib->tele_dyaw || strcmp(ia->tag_path, ib->tag_path) != 0)
+		return 0;
+	if (a->has_ai != b->has_ai || (a->has_ai && memcmp(&a->ai, &b->ai, sizeof(a->ai)) != 0))
+		return 0;
+	if (a->has_volume != b->has_volume || (a->has_volume && memcmp(&a->volume, &b->volume, sizeof(a->volume)) != 0))
+		return 0;
+	return a->leg_style[0] == b->leg_style[0] && a->leg_style[1] == b->leg_style[1];
+}
+
+static int forge_history_live(int32_t live_idx)
+{
+	return live_idx >= 0 && live_idx < g_forge.live_instance_count && g_forge.live_instances[live_idx].active;
+}
+
+static void forge_history_begin(int32_t live_idx)
+{
+	if (s_history_applying || !forge_history_live(live_idx))
+		return;
+	forge_props_snapshot_take(live_idx, &s_history_pending);
+	s_history_pending_idx = live_idx;
+}
+
+/* let go of (or turned, or its properties closed): a step, if it changed */
+static void forge_history_end(int32_t live_idx)
+{
+	struct forge_history_step step;
+
+	if (s_history_applying || s_history_pending_idx != live_idx || !forge_history_live(live_idx))
+		return;
+	s_history_pending_idx = -1;
+	memset(&step, 0, sizeof(step));
+	step.kind = _forge_step_change;
+	step.group = ++s_history_group;
+	step.live_idx = live_idx;
+	step.before = s_history_pending;
+	forge_props_snapshot_take(live_idx, &step.after);
+	if (!forge_history_same(&step.before, &step.after))
+		forge_history_record(&step);
+}
+
+static void forge_history_note_placed(int32_t live_idx, int new_group)
+{
+	struct forge_history_step step;
+
+	if (s_history_applying || !forge_history_live(live_idx))
+		return;
+	memset(&step, 0, sizeof(step));
+	step.kind = _forge_step_place;
+	if (new_group)
+		++s_history_group;
+	step.group = s_history_group;
+	step.live_idx = live_idx;
+	forge_props_snapshot_take(live_idx, &step.after);
+	forge_history_record(&step);
+}
+
+/* an instance as a snapshot has it: its settings, then where it is */
+static void forge_history_put(int32_t live_idx, struct forge_props_snapshot const *snap)
+{
+	struct forge_live_instance const *was = &snap->inst;
+
+	forge_props_restore(live_idx, snap);
+	forge_3d_move_instance_ext(live_idx, was->x, was->y, was->z, was->yaw, was->pitch, was->roll, 0, 0);
+	forge_network_send_transform_ext(live_idx, g_forge.live_instances[live_idx].object_index,
+		was->x, was->y, was->z, was->yaw, was->pitch, was->roll, 0, 1);
+}
+
+/* a step undone (or redone): FALSE when what it was of is gone */
+static int forge_history_step_apply(struct forge_history_step *step, int undo)
+{
+	struct forge_live_instance const *was = &step->after.inst;
+	int32_t live_idx = step->live_idx;
+
+	if (step->kind == _forge_step_place && !undo)
+	{
+		int32_t placed = forge_3d_spawn_object_at(was->group_tag, was->tag_path, was->source_cache_id,
+			was->x, was->y, was->z, was->yaw, was->pitch, was->roll, was->team_designator, 1);
+
+		if (placed < 0)
+			return 0;
+		forge_3d_history_remap(live_idx, placed);
+		step->live_idx = placed;
+		forge_history_put(placed, &step->after);
+		return 1;
+	}
+	if (!forge_history_live(live_idx) || g_forge.live_instances[live_idx].group_tag != was->group_tag)
+		return 0;
+	if (step->kind == _forge_step_place)
+		forge_3d_delete_instance(live_idx, 1);
+	else
+		forge_history_put(live_idx, undo ? &step->before : &step->after);
+	return 1;
+}
+
+static void forge_history_short_name(char const *tag_path, char *text, size_t size)
+{
+	char const *name = tag_path;
+	char const *p;
+
+	for (p = tag_path; *p; p++)
+	{
+		if (*p == '\\' || *p == '/')
+			name = p + 1;
+	}
+	snprintf(text, size, "%s", name);
+}
+
+/* UNDO (`redo` FALSE) or REDO: the last group of steps that can be. TRUE when
+one was */
+int forge_3d_history_step(int redo)
+{
+	int from = redo ? _forge_history_redo : _forge_history_undo;
+	int to = redo ? _forge_history_undo : _forge_history_redo;
+
+	/* (what is held first goes back where it was, or a new one away) */
+	if (g_forge.grabbed_live_index >= 0)
+		forge_cancel_or_release_held_item();
+	while (s_history_count[from] > 0)
+	{
+		int group = s_history[from][s_history_count[from] - 1].group;
+		int applied = 0;
+		int last_kind = _forge_step_change, last_moved = 0;
+		char name[64];
+
+		name[0] = 0;
+		s_history_applying = 1;
+		while (s_history_count[from] > 0 && s_history[from][s_history_count[from] - 1].group == group)
+		{
+			struct forge_history_step step = s_history[from][--s_history_count[from]];
+
+			if (forge_history_step_apply(&step, !redo))
+			{
+				forge_history_push(to, &step);
+				last_kind = step.kind;
+				last_moved = step.kind == _forge_step_change && forge_history_moved(&step.before, &step.after);
+				forge_history_short_name(step.after.inst.tag_path, name, sizeof(name));
+				applied++;
+			}
+		}
+		s_history_applying = 0;
+		if (applied)
+		{
+			char count[16];
+
+			count[0] = 0;
+			if (applied > 1)
+				snprintf(count, sizeof(count), " x%d", applied);
+			forge_set_status("%s %s '%s'%s (%d left)", redo ? "Redid" : "Undid",
+				last_kind == _forge_step_place ? "placing" : last_moved ? "moving" : "the settings of", name,
+				count, s_history_count[from]);
+			return 1;
+		}
+	}
+	forge_set_status(redo ? "Nothing to redo" : "Nothing to undo");
+	return 0;
 }
 
 /* DROP TO FLOOR for what is not held, which the held object's update does not move */
@@ -8235,6 +8576,35 @@ void forge_3d_update(float dt)
 	cur_copy = (g_forge.active_modal == _forge_modal_none && !cur_rot) ? forge_action_down(FORGE_BIND_COPY_OBJECT) : 0;
 	cur_look_settings = (g_forge.active_modal == _forge_modal_none && !cur_rot) ?
 		forge_action_down(FORGE_BIND_LOOK_SETTINGS) : 0;
+#if !defined(HALO_ANDROID) && !defined(HALO_SWITCH) && !defined(HALO_PS5) && !defined(HALO_WEB)
+	/* UNDO and REDO on a desktop's keyboard: ctrl+z, ctrl+y (or ctrl+shift+z).
+	The Z of it is no DROP TO FLOOR while it is held */
+	{
+		static int s_prev_undo_key = 0, s_prev_redo_key = 0, s_chord_held = 0;
+		int ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+		int shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+		int z_down = (GetAsyncKeyState('Z') & 0x8000) != 0;
+		int y_down = (GetAsyncKeyState('Y') & 0x8000) != 0;
+		int undo_key = ctrl && z_down && !shift;
+		int redo_key = ctrl && (y_down || (z_down && shift));
+
+		if (undo_key || redo_key)
+			s_chord_held = 1;
+		else if (!z_down && !y_down)
+			s_chord_held = 0;
+		if (s_chord_held)
+			cur_z = 0;
+		if (g_forge.active_modal == _forge_modal_none && g_forge.mode == _forge_mode_3d_monitor)
+		{
+			if (undo_key && !s_prev_undo_key)
+				forge_3d_history_step(0);
+			else if (redo_key && !s_prev_redo_key)
+				forge_3d_history_step(1);
+		}
+		s_prev_undo_key = undo_key;
+		s_prev_redo_key = redo_key;
+	}
+#endif
 
 	/* MAP SETTINGS (the palette's button held: forge_map_settings_menu.inl) */
 	if (g_forge.active_modal == _forge_modal_map_settings)
@@ -9000,6 +9370,7 @@ void forge_3d_update(float dt)
 						g_forge.grab_yaw = inst->yaw;
 						g_forge.grab_pitch = inst->pitch;
 						g_forge.grab_roll = inst->roll;
+						forge_history_begin(cand);
 					}
 				}
 				if (s_hover_rot_live_idx >= 0)
@@ -9018,6 +9389,7 @@ void forge_3d_update(float dt)
 					inst->x, inst->y, inst->z,
 					inst->yaw, inst->pitch, inst->roll,
 					0, 1);
+				forge_history_end(s_hover_rot_live_idx);
 			}
 			s_hover_rot_live_idx = -1;
 		}

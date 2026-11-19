@@ -2705,6 +2705,7 @@ void menu_tags_unloaded(void)
 	g_last_forge_map_name[0] = 0;
 	g_forge.monitor_cam_initialized = 0;
 	g_forge.live_instance_count = 0;
+	forge_3d_history_clear();
 	g_forge.grabbed_live_index = -1;
 	g_forge.grabbed_object_index = NONE;
 	g_forge.hovered_live_index = -1;
@@ -2737,6 +2738,7 @@ void menu_tags_loaded(char const *map_name)
 	s_save_forge_btn_tag = NONE;
 	g_last_forge_map_name[0] = 0;
 	g_forge.live_instance_count = 0;
+	forge_3d_history_clear();
 
 	if (map_name && (_stricmp(map_name, "ui") == 0 || _stricmp(map_name, "levels\\ui\\ui") == 0))
 	{
