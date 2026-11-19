@@ -2756,11 +2756,43 @@ FLOOD_SCREENS = [
     ]),
 ]
 
+# the server browser's Filters' rows: the PC version's four (ce_menus.py's
+# CHILD_OFFSETS places them), then the port's (BROWSER_FILTER_ROWS), each
+# BROWSER_FILTER_STEP below the last, their help under them
+# (BROWSER_FILTER_HELP_TOP)
+BROWSER_FILTER_PC_ROWS = ["empty_servers", "full_servers", "game_type", "installed_maps"]
+BROWSER_FILTER_TOP = 73
+BROWSER_FILTER_STEP = 28
+# (each: its key, its label, its values' words, its setting and values, and
+# its help for each value, cap_filter_options' after the PC version's and
+# SHOW MISSING MAPS' third: menu_functions.c's filters_help)
+BROWSER_FILTER_ROWS = [
+    ("vanilla_maps", "VANILLA MAPS", "OFF|ON", "network.browser_vanilla_maps", "false|true", [
+        "Do not show games on the game's own maps.", "Show games on the game's own maps."]),
+    ("custom_edition_maps", "CUSTOM EDITION MAPS", "OFF|ON", "network.browser_custom_edition_maps", "false|true", [
+        "Do not show games on Custom Edition maps.", "Show games on Custom Edition maps."]),
+    ("mcc_maps", "MCC MAPS", "OFF|ON", "network.browser_mcc_maps", "false|true", [
+        "Do not show games on MCC maps.", "Show games on MCC maps."]),
+    ("game_mode", "GAME MODE", "ALL|MULTIPLAYER|CAMPAIGN", "network.browser_mode", "all|multiplayer|campaign", [
+        "Show both multiplayer and campaign co-op\\ngames.", "Show only multiplayer games.",
+        "Show only campaign co-op games."]),
+    ("hosts", "HOSTS", "ALL|DEDICATED|P2P", "network.browser_source", "all|dedicated|players", [
+        "Show dedicated servers and the games players\\nhost.", "Show only dedicated servers.",
+        "Show only the games players host (P2P)."]),
+    ("favorites_only", "FAVORITES ONLY", "NO|YES", "network.browser_favorites_only", "false|true", [
+        "Show every game. FAVORITE (the left trigger, F\\non a keyboard) stars the game chosen.",
+        "Show only your favorite servers."]),
+]
+BROWSER_FILTER_HELP_TOP = BROWSER_FILTER_TOP + BROWSER_FILTER_STEP * (
+    len(BROWSER_FILTER_PC_ROWS) + len(BROWSER_FILTER_ROWS)) + 5
+
 STRING_INSERTS = {
     # (Filters' SHOW MISSING MAPS' third value's help, after the PC version's:
     # menu_functions.c's filters_help)
     f"{MT}/join_game/filters/cap_filter_options": [(11, [
-        "Show servers on maps you do not have if their\\nhost shares them: they download as you join."])],
+        "Show servers on maps you do not have if their\\nhost shares them: they download as you join."]),
+        # (the port's rows' helps: BROWSER_FILTER_ROWS)
+        (12, [text for *_, helps in BROWSER_FILTER_ROWS for text in helps])],
     # (the gametype editor's OPENCE OPTIONS' words, after the PC version's:
     # menu_functions.c's playlist_edit_description)
     f"{PLAYLIST_EDIT}/playlist_edit_list_extended_dsc_text": [(8, [
@@ -3296,6 +3328,15 @@ WIDGET_PATCHES = {
     f"{MT}/join_game/filters/installed_maps_spinner": {"set": {
         "string_list": None, "strings": "NO|YES|IF DOWNLOADABLE", "setting": "network.browser_maps",
         "values": "no|yes|downloadable"}},
+    # (the port's rows after them: the map kinds, the game mode, the hosts -
+    # the source tab's setting - and favorites, BROWSER_FILTER_ROWS; the help
+    # under them all)
+    f"{MT}/join_game/filters/filters_options_menu": {"insert_before": {f"{MT}/join_game/filters/filters_button_bar": [
+        f'<child widget="{MT}/join_game/filters/op_{key}" x="64" '
+        f'y="{BROWSER_FILTER_TOP + BROWSER_FILTER_STEP * (len(BROWSER_FILTER_PC_ROWS) + index)}"/>'
+        for index, (key, *_) in enumerate(BROWSER_FILTER_ROWS)]}},
+    f"{MT}/join_game/filters/filters_help": {"set": {"top": BROWSER_FILTER_HELP_TOP,
+                                                     "height": 414 - BROWSER_FILTER_HELP_TOP}},
     f"{MT}/join_game/ticker_rules_info": {"set": {"text_y": 1}},
     # (Item Options' loadout rows, over its buttons)
     "main_menu/settings_select/multiplayer_setup/item_options_edit/item_options_menu": {"insert_before": {
@@ -3327,6 +3368,10 @@ WIDGET_PATCHES = {
         f"{MT}/join_game/join_game_button_refresh": f"{MT}/join_game/button_clipboard",
         f"{MT}/join_game/join_game_button_update": f"{MT}/join_game/join_game_button_refresh",
     },
+        # (the server browser's FAVORITE in the clipboard button's place,
+        # which Direct Link alone shows: menu_functions.c's browser_initialize)
+        "insert_before": {f"{MT}/join_game/join_game_button_filters": [
+            f'<child widget="{MT}/join_game/button_favorite" x="128" y="1" platform="desktop android web"/>']},
         # (the Switch's and the PS5's: hints of the buttons in their place,
         # browser_hints; a touchscreen keeps the buttons)
         "child_platforms": {f"{MT}/join_game/{button}": "desktop android web"
@@ -3345,7 +3390,10 @@ WIDGET_PATCHES = {
         # and the wheel go through the rows, as they are pressed as the d-pad)
         '<on event="left" run="port browser column previous"/>', '<on event="right" run="port browser column next"/>',
         '<on event="right_stick_up" run="port browser sort increasing"/>',
-        '<on event="right_stick_down" run="port browser sort decreasing"/>']},
+        '<on event="right_stick_down" run="port browser sort decreasing"/>',
+        # (the left trigger - F on a keyboard - stars the game chosen as a
+        # favorite, or takes its star: menu_functions.c's browser_shortcut)
+        '<on event="left_trigger" run="port browser favorite"/>']},
     # (Select Profile's buttons as hints on the Switch and the PS5,
     # PROFILE_HINTS; a touchscreen keeps them)
     f"{PROFILE}/profile_manager_button_bar": {"child_platforms": {
@@ -3583,6 +3631,32 @@ def _join_game_extras() -> list:
                                                   ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
                      ['<on event="a" run="direct ip connect go"/>', '<on event="start" run="direct ip connect go"/>',
                       '<on event="left_mouse" run="mouse emit accept event"/>'])
+    lines += _widget(f"{base}/button_favorite", [("type", "text"), ("width", 128), ("height", 24),
+                                                 ("bitmap", "bitmaps/text_button_background"),
+                                                 ("text", "FAVORITE"), ("font", "ui\\small_ui"),
+                                                 ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
+                     ['<on event="a" run="port browser favorite"/>', '<on event="start" run="port browser favorite"/>',
+                      '<on event="left_mouse" run="mouse emit accept event"/>'])
+    # (the Filters' rows of the port's, as the PC version's are: a label,
+    # then a spinner of the setting, BROWSER_FILTER_ROWS)
+    for key, label, strings, setting, values, _ in BROWSER_FILTER_ROWS:
+        row = f"{base}/filters/op_{key}"
+        lines += _widget(row, [("width", 512), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
+                               ("bitmap", "bitmaps/option_bkds"), ("color", "#FF2896FF")],
+                         [f'<child widget="{row}_label"/>', f'<child widget="{row}_spinner" x="300" y="1"/>'])
+        lines += _widget(f"{row}_label", [("type", "text"), ("width", 300), ("height", 22), ("text", label),
+                                          ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("text_x", 13),
+                                          ("text_y", 4)], [])
+        lines += _widget(f"{row}_spinner", [("type", "spinner"), ("left", 3), ("top", 2), ("width", 187),
+                                            ("height", 20),
+                                            ("flags", "pass_unhandled_to_focused_child left_right_tabs_items"),
+                                            ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("align", "center"),
+                                            ("list_flags", "items_from_strings"),
+                                            ("header_bitmap", "bitmaps/arrow_sm_left"),
+                                            ("footer_bitmap", "bitmaps/arrow_sm_right"),
+                                            ("header_bounds", "7 -6 19 0"), ("footer_bounds", "7 190 19 196"),
+                                            ("strings", strings), ("setting", setting), ("values", values)],
+                         ['<on event="left_mouse" run="mouse spinner 1wide click"/>'])
     return lines
 
 

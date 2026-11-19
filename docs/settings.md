@@ -192,6 +192,12 @@ The **Platforms** column says which platforms' `config.toml` has the setting.
 | `network.browser_show_full` | `true` | All | The server browser lists full games (its Filters screen). |
 | `network.browser_maps` | `"yes"` | All | The server browser lists games on maps this machine lacks: "yes", "no", or "downloadable" (those of a Custom Edition map its host shares). |
 | `network.browser_gametype` | `"any"` | All | The server browser lists games of one kind only: "any", "ctf", "slayer", "oddball", "king" or "race" (its Filters screen). |
+| `network.browser_vanilla_maps` | `true` | All | The server browser lists games on the game's own maps (its Filters screen's VANILLA MAPS). |
+| `network.browser_custom_edition_maps` | `true` | All | The server browser lists games on Custom Edition maps (its Filters screen's CUSTOM EDITION MAPS). |
+| `network.browser_mcc_maps` | `true` | All | The server browser lists games on MCC maps (its Filters screen's MCC MAPS). |
+| `network.browser_mode` | `"all"` | All | The server browser lists "all" games, "multiplayer" games or "campaign" co-op games alone (its Filters screen's GAME MODE). |
+| `network.browser_favorites_only` | `false` | All | The server browser lists your favorite servers alone (its Filters screen's FAVORITES ONLY). |
+| `network.browser_favorites` | `""` | All | The server browser's favorite servers, listed first with a star: their names' letters and digits in lower case, between bars. The browser's FAVORITE button (a controller's left trigger, F on a keyboard) adds the chosen one, or takes it out. |
 | `network.browser_sort` | `"players"` | All | The server browser's order: "players" (the most players first), "servers" (dedicated servers first, then by players), "name", "map", "type" or "locked" (a password's first); "-" before one reverses it ("-players"). A column title sorts by it, and again the other way. |
 | `network.stun_servers` | `"stun.l.google.com:19302,stun.cloudflare.com:3478"` | All | Public STUN servers that tell this machine its internet address; comma-separated host:port. |
 | `network.link_page` | `true` | Switch, PS5 | While Join Game &gt; Direct Link is open, serve a page on the local network (its QR code and address are on that page) where a phone or a computer pastes an invite link for the console to join; nothing is served otherwise. false: none. |

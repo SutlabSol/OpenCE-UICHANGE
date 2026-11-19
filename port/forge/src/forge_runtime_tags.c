@@ -1533,6 +1533,12 @@ static void forge_profile_catalog_add(long profile)
 		else if (grp == 'scen')
 			cat_id = is_forge_particle_emitter_tag(grp, tag_path) ? _forge_cat_effects :
 				is_forge_light_beacon_emitter_tag(grp, tag_path) ? _forge_cat_lights : _forge_cat_scenery;
+		/* (a map's effects and decals the Tag Injector took out: placed as the
+		pack's are, an effect spot and a decal with no object) */
+		else if (grp == 'effe')
+			cat_id = _forge_cat_effects;
+		else if (grp == 'deca')
+			cat_id = _forge_cat_decals;
 		else
 			continue;
 		custom_name = port_tag_profiles_tag_option(profile, t, "name");
@@ -8656,10 +8662,16 @@ static void render_world_objective_and_spawn_markers(void)
 		long unit_definition;
 		union real_vector3d fwd, up;
 
+		union real_point3d hover;
+		int hovers;
+
 		if (!inst->active || inst->group_tag != FORGE_GROUP_AI_SPAWN)
 			continue;
 		units = forge_ai_spawn_grid_count(i);
-		if (units < 2)
+		/* (a flyer with a HEIGHT: every unit where it will fly, the first
+		too, whose model stands on the marker) */
+		hovers = forge_ai_spawn_hover_point(i, 0, &hover);
+		if (units < 2 && !hovers)
 			continue;
 		unit_definition = forge_ai_actor_unit_definition(inst->tag_path);
 		if (unit_definition == NONE)
@@ -8670,12 +8682,33 @@ static void render_world_objective_and_spawn_markers(void)
 		up.i = 0.0f;
 		up.j = 0.0f;
 		up.k = 1.0f;
-		for (unit = 1; unit < units; unit++)
+		for (unit = hovers ? 0 : 1; unit < (units > 1 ? units : 1); unit++)
 		{
-			union real_point3d point;
+			union real_point3d point, start;
 
-			if (forge_ai_spawn_grid_point(i, unit, &point) &&
-				render_frustum_sphere_visible(&render.frustum, &point, 2.0f))
+			if (unit == 0)
+			{
+				start.x = inst->x;
+				start.y = inst->y;
+				start.z = inst->z;
+			}
+			else if (!forge_ai_spawn_grid_point(i, unit, &start))
+				continue;
+			point = start;
+			if (hovers && forge_ai_spawn_hover_point(i, unit, &point))
+			{
+				float from[3], to[3];
+
+				/* (the line from where it stands up to its height, gold) */
+				from[0] = start.x;
+				from[1] = start.y;
+				from[2] = start.z + 0.1f;
+				to[0] = point.x;
+				to[1] = point.y;
+				to[2] = point.z;
+				draw_volume_line(from, to, 0, i == g_forge.grabbed_live_index);
+			}
+			if (render_frustum_sphere_visible(&render.frustum, &point, 2.0f))
 			{
 				forge_model_look_use(unit_definition, inst->tag_path);
 				draw_native_object_model_at(unit_definition, NONE, NULL, &point, &fwd, &up, 0, 0, 0);

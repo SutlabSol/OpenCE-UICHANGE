@@ -145,6 +145,8 @@ struct forge_ai_spawn_entry
 	uint8_t detached;
 	uint8_t active;
 	uint8_t spawn_effect; /* forge_ai.c's s_ai_spawn_effects: as each unit appears */
+	uint8_t cloaked; /* its units cloaked as they appear, and kept so (they flicker as they fire, as a cloaked elite does) */
+	uint8_t hover_height; /* a flying unit kept this many world units over the ground (sentinels, drones), 0: as it flies */
 };
 
 /* a campaign tag a saved map's spawns use: copied into the level as it loads,

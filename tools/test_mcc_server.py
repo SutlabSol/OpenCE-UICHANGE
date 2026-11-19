@@ -139,6 +139,9 @@ enum {game_engine_firefight=9};
 int randomizer_show_prefix(void){return 0;}
 boolean tag_multiplayer_hosted(void){return 0;}
 static boolean skulls_hosted(void){return 0;}
+static void p2p_set_game_listing_map_source(int source){(void)source;}
+static boolean mcc_level_name(char const *name){(void)name;return 0;}
+static boolean custom_edition_level_name(char const *name){(void)name;return 0;}
 static void p2p_set_game_listing(char const *n,char const *m,char const *g,int e,int k,int o,int p,int t,int r,
     int modded){
     (void)n;(void)g;(void)e;(void)k;(void)o;(void)p;(void)t;(void)r;(void)modded;

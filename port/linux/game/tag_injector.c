@@ -517,6 +517,8 @@ static struct
 	{ "DOORS & DEVICES", 'mach', TRUE },
 	{ "SKIES", 'sky ', TRUE },
 	{ "FIRST PERSON HANDS", 'mod2', TRUE },
+	{ "EFFECTS", 'effe', TRUE },
+	{ "DECALS", 'deca', TRUE },
 };
 
 boolean tag_injector_group_in_category(

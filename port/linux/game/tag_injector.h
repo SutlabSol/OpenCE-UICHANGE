@@ -28,6 +28,11 @@ enum tag_injector_category
 	them, port/forge/src/forge_map_settings.c) */
 	_tag_injector_skies,
 	_tag_injector_hands,
+	/* (a map's effects and decals, for Forge's EFFECTS and DECALS tabs: an
+	effect spot replays it, a decal is laid on the ground looked at;
+	port/forge/src/forge_runtime_tags.c's forge_profile_catalog_add) */
+	_tag_injector_effects,
+	_tag_injector_decals,
 
 	NUMBER_OF_TAG_INJECTOR_CATEGORIES
 };

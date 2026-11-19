@@ -292,6 +292,20 @@
 		<string text="Show only servers with custom maps that are\ncurrently installed." map="9"/>
 		<string text="Show servers with custom maps that are not\ncurrently installed." map="10"/>
 		<string text="Show servers on maps you do not have if their\nhost shares them: they download as you join."/>
+		<string text="Do not show games on the game's own maps."/>
+		<string text="Show games on the game's own maps."/>
+		<string text="Do not show games on Custom Edition maps."/>
+		<string text="Show games on Custom Edition maps."/>
+		<string text="Do not show games on MCC maps."/>
+		<string text="Show games on MCC maps."/>
+		<string text="Show both multiplayer and campaign co-op\ngames."/>
+		<string text="Show only multiplayer games."/>
+		<string text="Show only campaign co-op games."/>
+		<string text="Show dedicated servers and the games players\nhost."/>
+		<string text="Show only dedicated servers."/>
+		<string text="Show only the games players host (P2P)."/>
+		<string text="Show every game. FAVORITE (the left trigger, F\non a keyboard) stars the game chosen."/>
+		<string text="Show only your favorite servers."/>
 	</strings>
 	<strings name="main_menu/multiplayer_type_select/join_game/filters/filter_options" map="ui\shell\main_menu\multiplayer_type_select\join_game\filters\filter_options">
 		<string text="SHOW EMPTY SERVERS" map="0"/>

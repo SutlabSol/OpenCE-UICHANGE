@@ -116,6 +116,17 @@ int p2p_hosting_password(void);
 /* the hosted game's details as listed (printable ASCII is kept; NULL leaves
 one as it was): the game's server calls it as they change (calling it with
 the same again costs little) */
+/* where the hosted game's map is from, as its listing tells the server
+browser (the stamp's second byte: unknown, a host from before it) */
+enum
+{
+	P2P_LISTING_MAP_SOURCE_UNKNOWN,
+	/* the game's own maps (the Xbox's and the PC's) */
+	P2P_LISTING_MAP_SOURCE_VANILLA,
+	P2P_LISTING_MAP_SOURCE_CUSTOM_EDITION,
+	P2P_LISTING_MAP_SOURCE_MCC,
+};
+void p2p_set_game_listing_map_source(int source);
 void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int kind,
 	int open, int in_progress, int has_teams, int randomized, int modded);
 /* the server browser: while on, the public games are gathered (asked for
@@ -157,6 +168,9 @@ struct p2p_listing
 	/* the game's kind: an OpenCE gametype's mode, and Hardcore
 	(port/linux/game/game_modes.h's game_modes_kind) */
 	unsigned char kind;
+	/* where its map is from: P2P_LISTING_MAP_SOURCE_*, unknown from a host
+	of a build before it */
+	unsigned char map_source;
 	unsigned char open, in_progress, has_teams;
 	/* joining it failed this run (p2p_lobby_mark_failed) */
 	unsigned char failed;

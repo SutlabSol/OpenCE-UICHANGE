@@ -22,8 +22,9 @@ false details:
 	printable ASCII), a stamp (8: the game's kind, an OpenCE gametype's mode
 	and Hardcore, port/linux/game/game_modes.h's game_modes_kind; a modded
 	game's first byte is instead its HALO_PORT_MOD_NETWORK_VERSION, browsers
-	hiding others, and its kind none, being a campaign; the rest reserved,
-	zero), and the signature (64) of "hceu-lobby-1" and all before it.
+	hiding others, and its kind none, being a campaign; the second its
+	map's source, P2P_LISTING_MAP_SOURCE_*, which a build from before it
+	leaves zero; the rest reserved, zero), and the signature (64) of "hceu-lobby-1" and all before it.
 
 A modded game is one randomized, or a campaign with skulls
 (halo_port_limits.h): only a build with the mod can play it, so only those
@@ -162,6 +163,8 @@ struct listing
 	/* (_listing_password: its token, sealed) */
 	unsigned char sealed_token[P2P_SEALED_TOKEN_SIZE];
 	int player_count, maximum_player_count, engine_type, kind;
+	/* (the stamp's second byte: P2P_LISTING_MAP_SOURCE_*) */
+	int map_source;
 	char name[P2P_LISTING_NAME_SIZE + 1];
 	char map[P2P_LISTING_MAP_SIZE + 1];
 	char gametype[P2P_LISTING_GAMETYPE_SIZE + 1];
@@ -226,6 +229,7 @@ static struct
 	char gametype[P2P_LISTING_GAMETYPE_SIZE + 1];
 	int engine_type;
 	int kind;
+	int map_source;
 	int flags;
 	/* a modded game: listed in LISTING_FORMAT_MODDED */
 	int modded;
@@ -388,6 +392,7 @@ static int listing_make_token(unsigned char *bytes, int flags, const unsigned ch
 	size += put_text(bytes + size, lobby.gametype, P2P_LISTING_GAMETYPE_SIZE);
 	memset(bytes + size, 0, STAMP_SIZE);
 	bytes[size] = lobby.modded ? (unsigned char)HALO_PORT_MOD_NETWORK_VERSION : (unsigned char)lobby.kind;
+	bytes[size + 1] = (unsigned char)lobby.map_source;
 	size += STAMP_SIZE;
 	memcpy(data, signature_label, sizeof(signature_label) - 1);
 	memcpy(data + sizeof(signature_label) - 1, signed_part, (size_t)size);
@@ -462,6 +467,7 @@ static int listing_read(const unsigned char *bytes, int size, struct listing *li
 	listing too short for it fails the size check below) */
 	listing->mod_version = listing->modded && offset < size ? bytes[offset] : 0;
 	listing->kind = !listing->modded && offset < size ? bytes[offset] : 0;
+	listing->map_source = offset + 1 < size && bytes[offset + 1] <= P2P_LISTING_MAP_SOURCE_MCC ? bytes[offset + 1] : 0;
 	offset += STAMP_SIZE;
 	if (offset + P2P_SIGNATURE_SIZE != size)
 		return 0;
@@ -821,6 +827,7 @@ static void listing_take(const struct queued *queued, const struct listing *list
 	shown->maximum_player_count = (unsigned char)listing->maximum_player_count;
 	shown->engine_type = (unsigned char)listing->engine_type;
 	shown->kind = (unsigned char)listing->kind;
+	shown->map_source = (unsigned char)listing->map_source;
 	shown->open = (listing->flags & _listing_open) != 0;
 	shown->in_progress = (listing->flags & _listing_in_progress) != 0;
 	shown->has_teams = (listing->flags & _listing_has_teams) != 0;
@@ -1212,6 +1219,18 @@ void p2p_set_game_listing(const char *name, const char *map, const char *gametyp
 	lobby.kind = kind & 0xFF;
 	lobby.flags = flags;
 	lobby.modded = modded ? 1 : 0;
+	if (lobby.listed)
+		republish_soon(0);
+	pthread_mutex_unlock(&p2p_lock);
+	server_master_changed();
+}
+
+void p2p_set_game_listing_map_source(int source)
+{
+	if (source < 0 || source > P2P_LISTING_MAP_SOURCE_MCC || source == lobby.map_source)
+		return;
+	pthread_mutex_lock(&p2p_lock);
+	lobby.map_source = source;
 	if (lobby.listed)
 		republish_soon(0);
 	pthread_mutex_unlock(&p2p_lock);

@@ -134,12 +134,14 @@ CHILD_OFFSETS = {
     ("ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\screen_stats_container",
      "ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\server_count_label"): (410, 60),
     # the server browser's Filters' rows, closed up where PING and TEAMPLAY
-    # OPTIONS were (LEFT_OUT)
+    # OPTIONS were (LEFT_OUT), and closer, for the port's after them
+    # (port_settings.BROWSER_FILTER_ROWS)
     # (and in by ten, the button bar where the port's screens have theirs:
     # Content Extended's)
     **{("ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\filters_options_menu",
-        f"ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\op_{row}"): (64, 73 + 30 * index)
-       for index, row in enumerate(("empty_servers", "full_servers", "game_type", "installed_maps"))},
+        f"ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\op_{row}"):
+       (64, port_settings.BROWSER_FILTER_TOP + port_settings.BROWSER_FILTER_STEP * index)
+       for index, row in enumerate(port_settings.BROWSER_FILTER_PC_ROWS)},
     ("ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\filters_options_menu",
      "ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\filters_button_bar"): (0, 414),
     # (OK left by ten, as the port's screens have it: Content Extended's)

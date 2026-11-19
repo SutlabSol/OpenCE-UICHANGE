@@ -1566,6 +1566,31 @@ static const struct config_setting config_settings[] =
 		_platform_all,
 		"The server browser lists games of one kind only: \"any\", \"ctf\",\n"
 		"\"slayer\", \"oddball\", \"king\" or \"race\" (its Filters screen)." },
+	{ "network.browser_vanilla_maps", _config_boolean, "true", "HALO_NET_BROWSER_VANILLA_MAPS", _environment_value,
+		_platform_all,
+		"The server browser lists games on the game's own maps (its Filters\n"
+		"screen's VANILLA MAPS)." },
+	{ "network.browser_custom_edition_maps", _config_boolean, "true", "HALO_NET_BROWSER_CUSTOM_EDITION_MAPS",
+		_environment_value, _platform_all,
+		"The server browser lists games on Custom Edition maps (its Filters\n"
+		"screen's CUSTOM EDITION MAPS)." },
+	{ "network.browser_mcc_maps", _config_boolean, "true", "HALO_NET_BROWSER_MCC_MAPS", _environment_value,
+		_platform_all,
+		"The server browser lists games on MCC maps (its Filters screen's MCC\n"
+		"MAPS)." },
+	{ "network.browser_mode", _config_string, "\"all\"", "HALO_NET_BROWSER_MODE", _environment_value, _platform_all,
+		"The server browser lists \"all\" games, \"multiplayer\" games or\n"
+		"\"campaign\" co-op games alone (its Filters screen's GAME MODE)." },
+	{ "network.browser_favorites_only", _config_boolean, "false", "HALO_NET_BROWSER_FAVORITES_ONLY",
+		_environment_value, _platform_all,
+		"The server browser lists your favorite servers alone (its Filters\n"
+		"screen's FAVORITES ONLY)." },
+	{ "network.browser_favorites", _config_string, "\"\"", "HALO_NET_BROWSER_FAVORITES", _environment_value,
+		_platform_all,
+		"The server browser's favorite servers, listed first with a star: their\n"
+		"names' letters and digits in lower case, between bars. The browser's\n"
+		"FAVORITE button (a controller's left trigger, F on a keyboard) adds\n"
+		"the chosen one, or takes it out." },
 	{ "network.browser_sort", _config_string, "\"players\"", "HALO_NET_BROWSER_SORT", _environment_value,
 		_platform_all,
 		"The server browser's order: \"players\" (the most players first),\n"

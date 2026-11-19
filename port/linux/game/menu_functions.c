@@ -9373,7 +9373,8 @@ static char const *tags_group_name(unsigned long group)
 {
 	return group == 'weap' ? "WEAPON" : group == 'actv' ? "AI" : group == 'eqip' ? "EQUIPMENT" :
 		group == 'vehi' ? "VEHICLE" : group == 'bipd' ? "BIPED" : group == 'scen' ? "SCENERY" :
-		group == 'mach' ? "DOOR" : group == 'ctrl' ? "CONTROL" : group == 'lifi' ? "LIGHT" : "TAG";
+		group == 'mach' ? "DOOR" : group == 'ctrl' ? "CONTROL" : group == 'lifi' ? "LIGHT" :
+		group == 'effe' ? "EFFECT" : group == 'deca' ? "DECAL" : "TAG";
 }
 
 /* MAPS' row at `place`: a folder (its name), or a map (its index of
@@ -17035,6 +17036,8 @@ static boolean browser_initialize(struct widget_instance *screen, struct event_r
 	visible_set(named(screen, "button_clipboard", 0), multiplayer.mode == _multiplayer_mode_direct_link);
 #endif
 	visible_set(named(screen, "join_game_button_refresh", 0), multiplayer.mode == _multiplayer_mode_server_browser);
+	/* (FAVORITE in the clipboard's place, the server browser's alone) */
+	visible_set(named(screen, "button_favorite", 0), multiplayer.mode == _multiplayer_mode_server_browser);
 	/* (the Switch's and the PS5's hints in the buttons' place: the mode's) */
 	browser_list_show(screen, TRUE);
 	{
@@ -17651,6 +17654,188 @@ static int lobby_browser_map_state(char const *map)
 	return campaign_level_of(map) != NONE ? P2P_LOBBY_MAP_INSTALLED : P2P_LOBBY_MAP_MISSING;
 }
 
+/* ---------- the server browser's favorites and its other filters
+
+A favorite is a game's name, kept as its letters and digits alone, in
+lower case (its host's key is new each run, and a dedicated server keeps its
+name): network.browser_favorites, those keys between bars. Favorites are
+listed first, whatever the order, marked with a star; Filters' FAVORITES
+ONLY lists them alone. Filters' VANILLA, CUSTOM EDITION and MCC MAPS list
+the games on each kind of map, GAME MODE campaign co-op or multiplayer's */
+#define BROWSER_FAVORITES_MAXIMUM 64
+#define BROWSER_FAVORITE_KEY_SIZE (P2P_LISTING_NAME_SIZE + 1)
+
+/* the game made a favorite or not, whose row the focus follows to its new
+place (lobby_browser_update) */
+static unsigned char browser_follow_identifier[6];
+static boolean browser_follow_wanted;
+
+static void browser_favorite_key(char const *name, char *key)
+{
+	short length = 0;
+
+	for (; *name && length < BROWSER_FAVORITE_KEY_SIZE - 1; name++)
+	{
+		char character = *name >= 'A' && *name <= 'Z' ? (char)(*name - 'A' + 'a') : *name;
+
+		if ((character >= 'a' && character <= 'z') || (character >= '0' && character <= '9'))
+			key[length++] = character;
+	}
+	key[length] = 0;
+}
+
+/* whether the key is one of network.browser_favorites's */
+static boolean browser_favorite_key_listed(char const *key)
+{
+	char const *favorites = config_string("network.browser_favorites");
+	size_t length = strlen(key);
+	char const *at;
+
+	if (!length)
+		return FALSE;
+	for (at = favorites; (at = strstr(at, key)) != NULL; at += length)
+	{
+		if ((at == favorites || at[-1] == '|') && (at[length] == '|' || !at[length]))
+			return TRUE;
+	}
+	return FALSE;
+}
+
+static boolean browser_favorite(struct p2p_listing const *game)
+{
+	char key[BROWSER_FAVORITE_KEY_SIZE];
+
+	browser_favorite_key(game->name, key);
+	return browser_favorite_key_listed(key);
+}
+
+/* the game made a favorite, or one no longer; FALSE if its name has nothing
+to know it by */
+static boolean browser_favorite_toggle(struct p2p_listing const *game, boolean *now_favorite)
+{
+	char key[BROWSER_FAVORITE_KEY_SIZE];
+	char written[BROWSER_FAVORITES_MAXIMUM * BROWSER_FAVORITE_KEY_SIZE + 1];
+	char const *favorites = config_string("network.browser_favorites");
+	boolean listed;
+	short kept = 0;
+	size_t length = 0;
+	char const *at = favorites;
+
+	browser_favorite_key(game->name, key);
+	if (!key[0])
+		return FALSE;
+	listed = browser_favorite_key_listed(key);
+	written[0] = 0;
+	/* (the others kept, the oldest dropped past the most there are) */
+	while (*at)
+	{
+		char other[BROWSER_FAVORITE_KEY_SIZE];
+		size_t other_length = strcspn(at, "|");
+
+		if (other_length && other_length < sizeof(other))
+		{
+			memcpy(other, at, other_length);
+			other[other_length] = 0;
+			if (strcmp(other, key) && length + other_length + 2 < sizeof(written))
+			{
+				if (length)
+					written[length++] = '|';
+				memcpy(written + length, other, other_length + 1);
+				length += other_length;
+				kept++;
+			}
+		}
+		at += other_length;
+		if (*at == '|')
+			at++;
+	}
+	while (!listed && kept >= BROWSER_FAVORITES_MAXIMUM && length)
+	{
+		size_t first = strcspn(written, "|");
+
+		memmove(written, written + first + (written[first] ? 1 : 0), length - first);
+		length = strlen(written);
+		kept--;
+	}
+	if (!listed && length + strlen(key) + 2 < sizeof(written))
+	{
+		if (length)
+			written[length++] = '|';
+		strcpy(written + length, key);
+	}
+	config_write("network.browser_favorites", written);
+	*now_favorite = !listed;
+	return TRUE;
+}
+
+/* where a game's map is from, as its host says; a host from before it said,
+the game's own maps by their names, and Custom Edition's the rest */
+static int lobby_browser_map_source(struct p2p_listing const *game)
+{
+	char const *const *names;
+	short index, count;
+
+	if (game->map_source != P2P_LISTING_MAP_SOURCE_UNKNOWN)
+		return game->map_source;
+	if (campaign_level_of(game->map) != NONE)
+		return P2P_LISTING_MAP_SOURCE_VANILLA;
+	count = xbox_multiplayer_map_count(ui_widget_port_multiplayer_maps(&names, NULL));
+	for (index = 0; index < count; index++)
+	{
+		if (!_stricmp(scenario_name(names[index]), scenario_name(game->map)))
+			return P2P_LISTING_MAP_SOURCE_VANILLA;
+	}
+	return P2P_LISTING_MAP_SOURCE_CUSTOM_EDITION;
+}
+
+/* the games Filters' map kinds, game mode and FAVORITES ONLY show, kept at
+the front in their order (p2p_lobby_filter's are already out); how many */
+static short lobby_browser_more_filters(struct p2p_listing *games, short count)
+{
+	char const *mode = config_string("network.browser_mode");
+	boolean kinds[P2P_LISTING_MAP_SOURCE_MCC + 1];
+	boolean favorites_only = config_boolean("network.browser_favorites_only");
+	short read, written = 0;
+
+	kinds[P2P_LISTING_MAP_SOURCE_UNKNOWN] = TRUE;
+	kinds[P2P_LISTING_MAP_SOURCE_VANILLA] = config_boolean("network.browser_vanilla_maps");
+	kinds[P2P_LISTING_MAP_SOURCE_CUSTOM_EDITION] = config_boolean("network.browser_custom_edition_maps");
+	kinds[P2P_LISTING_MAP_SOURCE_MCC] = config_boolean("network.browser_mcc_maps");
+	for (read = 0; read < count; read++)
+	{
+		/* (a campaign's co-op: no game engine) */
+		boolean campaign = games[read].engine_type == 0;
+
+		if (!kinds[lobby_browser_map_source(&games[read])])
+			continue;
+		if ((!strcmp(mode, "campaign") && !campaign) || (!strcmp(mode, "multiplayer") && campaign))
+			continue;
+		if (favorites_only && !browser_favorite(&games[read]))
+			continue;
+		if (written != read)
+			games[written] = games[read];
+		written++;
+	}
+	return written;
+}
+
+/* the favorites first, each part in the order it had */
+static void lobby_browser_favorites_first(struct p2p_listing *games, short count)
+{
+	short index, favorites = 0;
+
+	for (index = 0; index < count; index++)
+	{
+		if (browser_favorite(&games[index]))
+		{
+			struct p2p_listing favorite = games[index];
+
+			memmove(&games[favorites + 1], &games[favorites], (size_t)(index - favorites) * sizeof(*games));
+			games[favorites++] = favorite;
+		}
+	}
+}
+
 /* the settings' choices of games shown (the tab's source: source) */
 static void lobby_browser_choices(struct p2p_lobby_choices *choices, short source)
 {
@@ -17865,7 +18050,16 @@ static void filters_show(struct widget_instance *screen, boolean show, boolean s
 	if (show)
 		settings_each(filters, setting_shown_load);
 	else if (save && filters->visible)
+	{
+		struct widget_instance *tab = named(screen, "browser_mode_spinner", 0);
+
 		settings_each(filters, setting_changed_save);
+		/* (HOSTS is the source tab's setting: the tab shows it) */
+		if (tab)
+			setting_load(tab);
+		lobby_browser.first = 0;
+		lobby_browser.chosen = 0;
+	}
 	filters->visible = show;
 	browser_list_show(screen, !show);
 	if (show)
@@ -18004,6 +18198,24 @@ static boolean browser_shortcut(struct widget_instance *widget, char const *name
 		ui_play_audio_feedback_sound(SOUND_CURSOR);
 		return TRUE;
 	}
+	if (!strcmp(name, "port browser favorite"))
+	{
+		boolean now_favorite = FALSE;
+
+		/* (the chosen game's star comes or goes: lobby_browser_update; it
+		moves to the favorites at the top, or back among the rest) */
+		if (lobby_browser.chosen < 0 || lobby_browser.chosen >= lobby_browser.count ||
+			!browser_favorite_toggle(&lobby_browser.games[lobby_browser.chosen], &now_favorite))
+		{
+			ui_play_audio_feedback_sound(SOUND_ERROR);
+			return TRUE;
+		}
+		memcpy(browser_follow_identifier, lobby_browser.games[lobby_browser.chosen].identifier,
+			sizeof(browser_follow_identifier));
+		browser_follow_wanted = TRUE;
+		ui_play_audio_feedback_sound(now_favorite ? SOUND_FORWARD : SOUND_BACK);
+		return TRUE;
+	}
 	if (!strcmp(name, "port browser refresh"))
 	{
 		p2p_lobby_refresh();
@@ -18049,6 +18261,13 @@ static void filters_help(struct widget_instance *list)
 		{ "op_full_servers", 2, TRUE },
 		{ "op_game_type", 5, FALSE },
 		{ "op_installed_maps", 9, TRUE },
+		/* (the port's: tools/port_settings.py's BROWSER_FILTER_ROWS) */
+		{ "op_vanilla_maps", 12, TRUE },
+		{ "op_custom_edition_maps", 14, TRUE },
+		{ "op_mcc_maps", 16, TRUE },
+		{ "op_game_mode", 18, TRUE },
+		{ "op_hosts", 21, TRUE },
+		{ "op_favorites_only", 24, TRUE },
 	};
 	struct widget_instance *row = list->focused_child;
 	short index;
@@ -18223,7 +18442,9 @@ static void lobby_browser_update(struct widget_instance *list)
 	lobby_browser_choices(&choices, lobby_browser_source(list));
 	lobby_browser.count = (short)p2p_lobby_filter(lobby_browser.games, lobby_browser.found, &choices,
 		lobby_browser_map_state);
+	lobby_browser.count = lobby_browser_more_filters(lobby_browser.games, lobby_browser.count);
 	p2p_lobby_sort(lobby_browser.games, lobby_browser.count, lobby_browser.order, lobby_browser.reverse);
+	lobby_browser_favorites_first(lobby_browser.games, lobby_browser.count);
 	p2p_lobby_shown(lobby_browser.games, lobby_browser.count);
 	if (focused == BROWSER_ROWS - 1 && lobby_browser.first + BROWSER_ROWS < lobby_browser.count && list_scrolls_at_end())
 	{
@@ -18236,6 +18457,29 @@ static void lobby_browser_update(struct widget_instance *list)
 		lobby_browser_focus_row(list, ++focused);
 	}
 	lobby_browser.first = (short)PIN(lobby_browser.first, 0, MAX(0, lobby_browser.count - BROWSER_ROWS));
+	/* (a game just made a favorite or not, moved: the focus with it) */
+	if (browser_follow_wanted)
+	{
+		short index;
+
+		browser_follow_wanted = FALSE;
+		for (index = 0; index < lobby_browser.count; index++)
+		{
+			if (!memcmp(lobby_browser.games[index].identifier, browser_follow_identifier, 6))
+			{
+				lobby_browser.first = (short)PIN(lobby_browser.first, MAX(0, index - (BROWSER_ROWS - 1)), index);
+				lobby_browser.chosen = index;
+				/* (from its row: the row it is in now; from FAVORITE, the button
+				keeps the focus) */
+				if (focused != NONE)
+				{
+					focused = (short)(index - lobby_browser.first);
+					lobby_browser_focus_row(list, focused);
+				}
+				break;
+			}
+		}
+	}
 	/* (the first game found takes the focus from the buttons, which had it
 	while there were none) */
 	if (lobby_browser.count && !lobby_browser.shown)
@@ -18304,7 +18548,15 @@ static void lobby_browser_update(struct widget_instance *list)
 			continue;
 		game = &lobby_browser.games[index];
 		other_version = game->network_version != BROWSER_NETWORK_VERSION;
-		text_to_wide(game->name, text, ROW_TEXT_LENGTH);
+		/* (a favorite with a star before its name) */
+		if (browser_favorite(game))
+		{
+			text[0] = '*';
+			text[1] = ' ';
+			text_to_wide(game->name, text + 2, ROW_TEXT_LENGTH - 2);
+		}
+		else
+			text_to_wide(game->name, text, ROW_TEXT_LENGTH);
 		text_set(named(row, "server_item_server_name", 0), text);
 		map_display_name(game->map, text);
 		if (game->randomized)

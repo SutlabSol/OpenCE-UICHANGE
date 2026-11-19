@@ -595,6 +595,8 @@ enum forge_ai_spawn_row
 	_forge_ai_row_respawn_total,
 	_forge_ai_row_game_mode,
 	_forge_ai_row_spawn_effect,
+	_forge_ai_row_cloaked,
+	_forge_ai_row_hover_height,
 	NUMBER_OF_FORGE_AI_SETTING_ROWS,
 	_forge_ai_row_rot_snap = NUMBER_OF_FORGE_AI_SETTING_ROWS,
 	_forge_ai_row_floor,
@@ -646,10 +648,20 @@ void forge_ai_spawn_net_apply(
 	unsigned int gametype_flags,
 	int detached,
 	int spawn_effect);
+/* !FA:'s effect field: the spawn effect, CLOAKED and HEIGHT in one number (a
+peer from before them reads the effect alone) */
+#define FORGE_AI_PACKED_EFFECT_MASK 0x0F
+#define FORGE_AI_PACKED_CLOAKED 0x10
+#define FORGE_AI_PACKED_HEIGHT_SHIFT 5
+int forge_ai_spawn_effect_packed(struct forge_ai_spawn_entry const *entry);
 /* a spawn's units past its first as they start: how many it has laid out (0: one
 at its point), and where unit `index` stands. Forge's preview draws them */
 int forge_ai_spawn_grid_count(int32_t live_idx);
 int forge_ai_spawn_grid_point(int32_t live_idx, int index, union real_point3d *point);
+/* where a flying unit of a spawn with a HEIGHT takes to (unit `index`, 0 the
+first, at the marker): 0 for a spawn with none, or not of flyers. Forge mode
+draws them there, a line down to where they stand; they start there */
+int forge_ai_spawn_hover_point(int32_t live_idx, int index, union real_point3d *point);
 /* a spawn effect shown here, and told to the clients */
 void forge_ai_spawn_effect_play(int effect, union real_point3d const *point);
 /* a spawn's model out of reach of all but Forge's user */
@@ -669,6 +681,10 @@ long forge_ai_actor_unit_definition(char const *path);
 /* how a tag's object looks with no object made of it */
 void forge_model_look_get(long object_definition, char const *actor_path, float colors[4][3], int colored[4],
 	short *forced_shader);
+
+/* the spawns' units as they play (the host's, each tick, in Forge and in a match
+of the map): CLOAKED kept on, HEIGHT kept over the ground */
+void forge_ai_units_update(void);
 
 /* ---------- Prototypes: forge_3d_mode.c */
 

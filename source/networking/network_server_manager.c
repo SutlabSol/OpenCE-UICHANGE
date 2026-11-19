@@ -492,6 +492,11 @@ server browser's listing of a public game (p2p_lobby.c) */
 void p2p_set_game_player_counts(int count, int maximum);
 void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int kind,
 	int open, int in_progress, int has_teams, int randomized, int modded);
+/* port: (where its map is from: 1 the game's own, 2 Custom Edition's, 3 MCC's,
+p2p.h's P2P_LISTING_MAP_SOURCE_*; the server browser's filters) */
+void p2p_set_game_listing_map_source(int source);
+boolean custom_edition_level_name(char const *level_name);
+boolean mcc_level_name(char const *name);
 
 /* ---------- constants */
 
@@ -1646,6 +1651,8 @@ static void network_game_server_list(
 		extern int randomizer_show_prefix(void);
 		extern boolean tag_multiplayer_hosted(void);
 
+		p2p_set_game_listing_map_source(mcc_level_name(game->map.name) ? 3 :
+			custom_edition_level_name(game->map.name) ? 2 : 1);
 		/* (a modded game, listed only to builds with the mod: p2p_lobby.c) */
 		p2p_set_game_listing(name, map_label, gametype, game->variant.game_engine_index,
 			game_modes_kind(&game->variant, &game->variant_options), open, in_progress,

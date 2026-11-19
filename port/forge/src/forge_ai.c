@@ -34,6 +34,7 @@
 #include "scenario/scenario_definitions.h"
 #include "physics/collisions.h"
 #include "units/unit_definitions.h"
+#include "units/biped_definitions.h"
 #include "items/items.h"
 #include "items/weapons.h"
 #include "items/weapon_definitions.h"
@@ -1307,8 +1308,9 @@ static struct forge_ai_grid_layout *s_ai_grid_layouts;
 /* the next unit of each spawn to start: a spawn starts them all again each time
 the AI does, so this goes round */
 static short s_ai_grid_next[FORGE_MAX_AI_SPAWNS];
-/* the effect of the unit being placed */
+/* the effect of the unit being placed, and its spawn (-1: none of Forge's) */
 static int s_ai_placing_effect;
+static int s_ai_placing_entry = -1;
 
 static void forge_ai_grid_place(struct forge_ai_spawn_entry const *entry, int index, union real_point3d *point)
 {
@@ -1389,6 +1391,40 @@ static struct forge_ai_spawn_entry const *forge_ai_playing_spawns(int *count)
 	return s_saved.entries;
 }
 
+extern boolean tag_index_is_group(long tag_index, long group_tag);
+
+/* whether a spawn's actor is a biped that flies (sentinels, drones): HEIGHT's */
+static int forge_ai_entry_flies(struct forge_ai_spawn_entry const *entry)
+{
+	long unit_definition = forge_ai_actor_unit_definition(entry->actor_variant_path);
+
+	return unit_definition != NONE && tag_index_is_group(unit_definition, 'bipd') &&
+		TEST_FLAG(biped_definition_get(unit_definition)->biped.flags, _biped_flying_bit);
+}
+
+/* the point `height` over the ground under (x, y, z): 1 if there is ground */
+static int forge_ai_over_ground(float x, float y, float z, float height, union real_point3d *point)
+{
+	unsigned long const flags = FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit);
+	real_point3d start;
+	real_vector3d vector;
+	struct collision_result collision;
+
+	start.x = x;
+	start.y = y;
+	start.z = z + 0.5f;
+	vector.i = 0.0f;
+	vector.j = 0.0f;
+	vector.k = -100.0f;
+	memset(&collision, 0, sizeof(collision));
+	if (!collision_test_vector(flags, &start, &vector, NONE, &collision))
+		return 0;
+	point->x = x;
+	point->y = y;
+	point->z = collision.point.z + height;
+	return 1;
+}
+
 /* (from encounter_place_actor) where a unit of a squad starts: the location, or
 `place`, a copy of it where the spawn's layout has this one */
 struct actor_starting_location *forge_ai_location_for_unit(
@@ -1402,6 +1438,7 @@ struct actor_starting_location *forge_ai_location_for_unit(
 	int unit;
 
 	s_ai_placing_effect = _forge_ai_effect_none;
+	s_ai_placing_entry = -1;
 	if (!entries)
 		return location;
 	for (i = 0; i < count && i < FORGE_MAX_AI_SPAWNS; i++)
@@ -1415,18 +1452,191 @@ struct actor_starting_location *forge_ai_location_for_unit(
 	if (i == count || i == FORGE_MAX_AI_SPAWNS)
 		return location;
 	s_ai_placing_effect = entries[i].spawn_effect;
-	if (spawning || entries[i].unit_count < 2 || !forge_ai_entry_own_squad(&entries[i]))
-		return location;
-	unit = s_ai_grid_next[i] % entries[i].unit_count;
-	s_ai_grid_next[i] = (short)(unit + 1);
-	layout = forge_ai_grid_layout(&entries[i], i);
-	if (!unit || unit >= FORGE_AI_GRID_PLACES || !layout)
-		return location;
+	s_ai_placing_entry = i;
 	*place = *location;
-	place->position.x = layout->points[unit].x;
-	place->position.y = layout->points[unit].y;
-	place->position.z = layout->points[unit].z;
+	if (!spawning && entries[i].unit_count >= 2 && forge_ai_entry_own_squad(&entries[i]))
+	{
+		unit = s_ai_grid_next[i] % entries[i].unit_count;
+		s_ai_grid_next[i] = (short)(unit + 1);
+		layout = forge_ai_grid_layout(&entries[i], i);
+		if (unit && unit < FORGE_AI_GRID_PLACES && layout)
+		{
+			place->position.x = layout->points[unit].x;
+			place->position.y = layout->points[unit].y;
+			place->position.z = layout->points[unit].z;
+		}
+	}
+	/* (a flyer with a HEIGHT starts there, as Forge mode shows it:
+	forge_ai_spawn_hover_point) */
+	if (entries[i].hover_height && forge_ai_entry_flies(&entries[i]))
+	{
+		union real_point3d raised;
+
+		if (forge_ai_over_ground(place->position.x, place->position.y, place->position.z,
+				(float)entries[i].hover_height, &raised))
+		{
+			place->position.z = raised.z;
+		}
+	}
 	return place;
+}
+
+/* ---------- a spawn's units as they play: CLOAKED and HEIGHT
+
+A cloaked spawn's unit has the engine's cloak, as an actor variant with active
+camouflage has: it shimmers as it fires or is hit, and comes back (units.c),
+and the network carries it to the clients (network_actors.c). A spawn with a
+HEIGHT keeps its flying units (bipeds that fly: sentinels, drones) that high
+over the ground under them, pushed up as they sink and down as they climb far
+past it, the host's, each tick (forge_ai_units_update) */
+#define FORGE_AI_KEPT_UNITS 512
+/* (how far off the height is let be, in world units, before the push) */
+#define FORGE_AI_HOVER_BELOW 0.3f
+#define FORGE_AI_HOVER_ABOVE 3.0f
+/* (the fastest push, world units a tick: 2.5 a second up, 1.2 down) */
+#define FORGE_AI_HOVER_RISE (2.5f / (float)TICKS_PER_SECOND)
+#define FORGE_AI_HOVER_SINK (1.2f / (float)TICKS_PER_SECOND)
+
+static struct
+{
+	long unit_index;
+	float height;
+} s_ai_kept[FORGE_AI_KEPT_UNITS];
+static int s_ai_kept_count;
+static long s_ai_kept_tick = -1;
+
+/* HEIGHT's choices, world units over the ground (0: as the unit flies) */
+static int16_t const s_ai_hover_heights[] = { 0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25 };
+
+/* (a height from a saved map or a peer: one of the choices, else the nearest
+below it) */
+static int forge_ai_hover_height_valid(int height)
+{
+	int i, valid = 0;
+
+	for (i = 0; i < (int)NUMBEROF(s_ai_hover_heights); i++)
+	{
+		if (s_ai_hover_heights[i] <= height)
+			valid = s_ai_hover_heights[i];
+	}
+	return valid;
+}
+
+static void forge_ai_unit_keep(long unit_index, int entry_index)
+{
+	int count = 0;
+	struct forge_ai_spawn_entry const *entries = forge_ai_playing_spawns(&count);
+	struct forge_ai_spawn_entry const *entry;
+	struct unit_datum *unit;
+	struct biped_definition const *definition;
+
+	if (!entries || entry_index < 0 || entry_index >= count)
+		return;
+	entry = &entries[entry_index];
+	unit = (struct unit_datum *)object_try_and_get_and_verify_type(unit_index, _object_mask_unit);
+	if (!unit)
+		return;
+	if (entry->cloaked)
+	{
+		SET_FLAG(unit->unit.flags, _unit_active_camouflaged_bit, TRUE);
+		unit->unit.active_camouflage = 1.0f;
+	}
+	if (!entry->hover_height || !object_try_and_get_and_verify_type(unit_index, _object_mask_biped))
+		return;
+	definition = biped_definition_get(unit->definition_index);
+	if (!TEST_FLAG(definition->biped.flags, _biped_flying_bit))
+		return;
+	if (s_ai_kept_count == FORGE_AI_KEPT_UNITS)
+	{
+		int i, kept = 0;
+
+		/* (room made of those gone) */
+		for (i = 0; i < s_ai_kept_count; i++)
+		{
+			if (object_try_and_get_and_verify_type(s_ai_kept[i].unit_index, _object_mask_biped))
+				s_ai_kept[kept++] = s_ai_kept[i];
+		}
+		s_ai_kept_count = kept;
+		if (s_ai_kept_count == FORGE_AI_KEPT_UNITS)
+			return;
+	}
+	s_ai_kept[s_ai_kept_count].unit_index = unit_index;
+	s_ai_kept[s_ai_kept_count].height = (float)entry->hover_height;
+	s_ai_kept_count++;
+}
+
+/* 1 with how high the unit is over the ground (or the water's floor) under it */
+static int forge_ai_unit_altitude(long unit_index, float *altitude)
+{
+	unsigned long const flags = FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit);
+	union real_point3d origin;
+	real_vector3d vector;
+	struct collision_result collision;
+
+	object_get_origin(unit_index, &origin);
+	vector.i = 0.0f;
+	vector.j = 0.0f;
+	vector.k = -100.0f;
+	memset(&collision, 0, sizeof(collision));
+	if (!collision_test_vector(flags, (real_point3d *)&origin, &vector, NONE, &collision))
+		return 0;
+	*altitude = origin.z - collision.point.z;
+	return 1;
+}
+
+void forge_ai_units_update(void)
+{
+	long now = game_time_get();
+	int i, kept = 0;
+
+	if (s_ai_kept_tick >= 0 && now < s_ai_kept_tick)
+	{
+		/* (another level, or the same again: its units are gone) */
+		s_ai_kept_count = 0;
+	}
+	if (now == s_ai_kept_tick)
+		return;
+	s_ai_kept_tick = now;
+	if (game_connection() == _game_connection_network_client)
+	{
+		s_ai_kept_count = 0;
+		return;
+	}
+	for (i = 0; i < s_ai_kept_count; i++)
+	{
+		struct unit_datum *unit = (struct unit_datum *)object_try_and_get_and_verify_type(s_ai_kept[i].unit_index,
+			_object_mask_biped);
+		float altitude, target = s_ai_kept[i].height;
+		real *velocity;
+
+		/* (dead: let it fall) */
+		if (!unit || unit->unit.actor_index == NONE)
+			continue;
+		s_ai_kept[kept++] = s_ai_kept[i];
+		/* (held still: Forge mode's models, a vehicle's seat) */
+		if (unit->object.parent_object_index != NONE || !forge_ai_unit_altitude(s_ai_kept[i].unit_index, &altitude))
+			continue;
+		velocity = &unit->object.translational_velocity.k;
+		if (altitude < target - FORGE_AI_HOVER_BELOW)
+		{
+			float push = (target - altitude) * 0.08f;
+
+			if (push > FORGE_AI_HOVER_RISE)
+				push = FORGE_AI_HOVER_RISE;
+			if (*velocity < push)
+				*velocity = push;
+		}
+		else if (altitude > target + FORGE_AI_HOVER_ABOVE)
+		{
+			float push = (altitude - target - FORGE_AI_HOVER_ABOVE) * 0.04f;
+
+			if (push > FORGE_AI_HOVER_SINK)
+				push = FORGE_AI_HOVER_SINK;
+			if (*velocity > -push)
+				*velocity = -push;
+		}
+	}
+	s_ai_kept_count = kept;
 }
 
 static void forge_ai_weapon_give(long unit_index, long weapon_definition)
@@ -1456,6 +1666,8 @@ void forge_ai_unit_placed(long unit_index, struct actor_starting_location const 
 
 	if (slot > 0 && slot <= s_built.weapon_count)
 		forge_ai_weapon_give(unit_index, s_built.weapons[slot - 1]);
+	forge_ai_unit_keep(unit_index, s_ai_placing_entry);
+	s_ai_placing_entry = -1;
 	/* (not as the level loads: there is no one to see it, and no clients yet) */
 	if (s_ai_placing_effect != _forge_ai_effect_none && game_time_get() > 0)
 	{
@@ -1578,6 +1790,17 @@ void forge_ai_saved_parse(char const *text)
 				if (index > 0 && index < (int)NUMBEROF(s_ai_spawn_effects))
 					entry->spawn_effect = (uint8_t)index;
 			}
+		}
+		/* (after it: CLOAKED and HEIGHT, none on a map saved before them) */
+		{
+			char const *end = cur + strcspn(cur, "\r\n");
+			char const *cloaked = strstr(cur, "|ck=");
+			char const *height = strstr(cur, "|ht=");
+
+			if (cloaked && cloaked < end)
+				entry->cloaked = atoi(cloaked + 4) ? 1 : 0;
+			if (height && height < end)
+				entry->hover_height = (uint8_t)forge_ai_hover_height_valid(atoi(height + 4));
 		}
 		entry->team = (int16_t)team;
 		entry->unit_count = (int16_t)count;
@@ -1901,6 +2124,8 @@ void forge_ai_spawn_copy_settings(int source_entry, int32_t live_idx)
 	entry->respawn_total = source->respawn_total;
 	entry->gametype_flags = source->gametype_flags;
 	entry->spawn_effect = source->spawn_effect;
+	entry->cloaked = source->cloaked;
+	entry->hover_height = source->hover_height;
 	g_forge.live_instances[live_idx].team_designator = entry->team;
 	forge_ai_preview_update(live_idx);
 	forge_network_send_ai_spawn(live_idx);
@@ -2034,6 +2259,17 @@ void forge_ai_spawn_row_text(int32_t live_idx, int row, char *label, size_t labe
 		snprintf(label, label_size, "SPAWN EFFECT:");
 		snprintf(value, value_size, "%s", s_ai_spawn_effects[entry->spawn_effect < NUMBEROF(s_ai_spawn_effects) ?
 			entry->spawn_effect : 0].label);
+		break;
+	case _forge_ai_row_cloaked:
+		snprintf(label, label_size, "CLOAKED:");
+		snprintf(value, value_size, "%s", entry->cloaked ? "ON" : "OFF");
+		break;
+	case _forge_ai_row_hover_height:
+		snprintf(label, label_size, "FLYING HEIGHT:");
+		if (entry->hover_height)
+			snprintf(value, value_size, "%d OVER GROUND", (int)entry->hover_height);
+		else
+			snprintf(value, value_size, "AS IT FLIES");
 		break;
 	}
 }
@@ -2185,6 +2421,14 @@ void forge_ai_spawn_row_step(int32_t live_idx, int row, int dir)
 		/* (read now, in a solo Forge game, not as the unit appears) */
 		if (s_ai_spawn_effects[entry->spawn_effect].path)
 			forge_ai_tag_need('effe', s_ai_spawn_effects[entry->spawn_effect].path);
+		break;
+	case _forge_ai_row_cloaked:
+		entry->cloaked = (uint8_t)!entry->cloaked;
+		break;
+	case _forge_ai_row_hover_height:
+		index = forge_ai_table_index(s_ai_hover_heights, NUMBEROF(s_ai_hover_heights), entry->hover_height);
+		entry->hover_height = (uint8_t)s_ai_hover_heights[(index + (int)NUMBEROF(s_ai_hover_heights) + dir) %
+			(int)NUMBEROF(s_ai_hover_heights)];
 		break;
 	default:
 		return;
@@ -2338,11 +2582,20 @@ void forge_ai_spawn_net_apply(
 	entry->respawn_delay_seconds = (int16_t)respawn_delay_seconds;
 	entry->respawn_total = (int16_t)respawn_total;
 	entry->gametype_flags = (uint16_t)gametype_flags;
-	if (spawn_effect >= 0 && spawn_effect < (int)NUMBEROF(s_ai_spawn_effects))
-		entry->spawn_effect = (uint8_t)spawn_effect;
+	/* (CLOAKED and HEIGHT ride with the effect: forge_ai_spawn_effect_packed) */
+	if ((spawn_effect & FORGE_AI_PACKED_EFFECT_MASK) < (int)NUMBEROF(s_ai_spawn_effects))
+		entry->spawn_effect = (uint8_t)(spawn_effect & FORGE_AI_PACKED_EFFECT_MASK);
+	entry->cloaked = (spawn_effect & FORGE_AI_PACKED_CLOAKED) ? 1 : 0;
+	entry->hover_height = (uint8_t)forge_ai_hover_height_valid(spawn_effect >> FORGE_AI_PACKED_HEIGHT_SHIFT);
 	entry->detached = (uint8_t)detached;
 	g_forge.edit_state.ai_spawns_edited = 1;
 	forge_ai_preview_update(live_idx);
+}
+
+int forge_ai_spawn_effect_packed(struct forge_ai_spawn_entry const *entry)
+{
+	return (entry->spawn_effect & FORGE_AI_PACKED_EFFECT_MASK) | (entry->cloaked ? FORGE_AI_PACKED_CLOAKED : 0) |
+		(forge_ai_hover_height_valid(entry->hover_height) << FORGE_AI_PACKED_HEIGHT_SHIFT);
 }
 
 int forge_ai_spawn_grid_count(int32_t live_idx)
@@ -2364,6 +2617,24 @@ int forge_ai_spawn_grid_point(int32_t live_idx, int index, union real_point3d *p
 		return 0;
 	*point = layout->points[index];
 	return 1;
+}
+
+int forge_ai_spawn_hover_point(int32_t live_idx, int index, union real_point3d *point)
+{
+	struct forge_ai_spawn_entry const *entry = forge_ai_entry_live(live_idx);
+	union real_point3d base;
+
+	if (!entry || !entry->hover_height || !forge_ai_entry_flies(entry))
+		return 0;
+	if (index == 0 || !forge_ai_spawn_grid_point(live_idx, index, &base))
+	{
+		if (index != 0)
+			return 0;
+		base.x = entry->x;
+		base.y = entry->y;
+		base.z = entry->z;
+	}
+	return forge_ai_over_ground(base.x, base.y, base.z, (float)entry->hover_height, point);
 }
 
 void forge_ai_spawn_net_settings(

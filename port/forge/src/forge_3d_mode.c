@@ -7963,6 +7963,8 @@ void forge_3d_update(float dt)
 	/* (the map's volumes hurt whoever is in them, in a match of the map too:
 	forge_volumes.c) */
 	forge_volumes_update();
+	/* (the AI spawns' CLOAKED and HEIGHT, in a match of the map too: forge_ai.c) */
+	forge_ai_units_update();
 
 	/* Only run Forge editor controls when inside a Forge session */
 	if (!g_forge_session_enabled)

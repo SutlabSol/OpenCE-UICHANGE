@@ -911,7 +911,7 @@ static int forge_ai_spawn_packet(int32_t live_idx, char *msg, size_t msg_size)
 		(unsigned int)entry->respawn_total,
 		(unsigned int)entry->gametype_flags,
 		(unsigned int)entry->detached,
-		(unsigned int)entry->spawn_effect);
+		(unsigned int)forge_ai_spawn_effect_packed(entry));
 	return 1;
 }
 
