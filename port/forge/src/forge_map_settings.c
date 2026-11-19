@@ -30,6 +30,7 @@ the settings are read anew as each level loads.
 #include "units/unit_control_data.h"
 #include "items/weapons.h"
 #include "render/render_cameras.h"
+#include "rasterizer/rasterizer.h"
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
 
@@ -134,6 +135,10 @@ static struct
 	real_point3d plane_point;
 	real_vector3d plane_normal;
 } test = { NONE, _test_none, NONE, NONE, NONE };
+
+/* the far clip the game had before RENDER DISTANCE changed it (0: not
+changed) */
+static float render_distance_original;
 
 /* a level's loading, each one counted; and the settings' changes */
 static long level_serial;
@@ -566,6 +571,32 @@ static void net_send_link(long machine_index, int slot)
 	forge_network_send_text(machine_index, text);
 }
 
+static void net_send_view(long machine_index)
+{
+	char text[64];
+
+	snprintf(text, sizeof(text), "!FGV:%.0f:%.2f", settings.render_distance, settings.monitor_speed);
+	forge_network_send_text(machine_index, text);
+}
+
+/* RENDER DISTANCE: the game's far clip moved out while the map sets one,
+put back once it doesn't (each frame, from the fog hook) */
+static void render_distance_apply(void)
+{
+	if (settings.render_distance > 0.0f)
+	{
+		if (render_distance_original <= 0.0f)
+			render_distance_original = rasterizer_globals.far_clip_distance > 0.0f ?
+				rasterizer_globals.far_clip_distance : 1024.0f;
+		rasterizer_globals.far_clip_distance = settings.render_distance;
+	}
+	else if (render_distance_original > 0.0f)
+	{
+		rasterizer_globals.far_clip_distance = render_distance_original;
+		render_distance_original = 0.0f;
+	}
+}
+
 static int host_tells(void)
 {
 	return forge_is_multiplayer_session() && game_connection() == _game_connection_network_server;
@@ -582,8 +613,11 @@ int forge_map_settings_any(void)
 {
 	int slot;
 
-	if (settings.display_name[0] || settings.sky[0] || settings.atmosphere != _forge_atmosphere_map_default)
+	if (settings.display_name[0] || settings.sky[0] || settings.atmosphere != _forge_atmosphere_map_default ||
+		settings.render_distance > 0.0f || (settings.monitor_speed > 0.0f && settings.monitor_speed != 1.0f))
+	{
 		return 1;
+	}
 	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
 	{
 		if (settings.biped[slot][0] || settings.hands[slot][0] || settings.movement[slot] || settings.link[slot])
@@ -700,6 +734,16 @@ void forge_map_settings_level_loading(char const *text)
 			if (sscanf(line + 13, "%d|%d", &slot, &movement) == 2 && slot >= 0 && slot < NUMBER_OF_FORGE_MAP_SLOTS)
 				settings.movement[slot] = PIN(movement, 0, NUMBER_OF_FORGE_MOVEMENTS - 1);
 		}
+		else if (!strncmp(line, "MAP_RENDER_DISTANCE|", 20))
+		{
+			settings.render_distance = (float)atof(line + 20);
+			settings.render_distance = settings.render_distance > 0.0f ? PIN(settings.render_distance, 256.0f, 16384.0f) : 0.0f;
+		}
+		else if (!strncmp(line, "MAP_MONITOR_SPEED|", 18))
+		{
+			settings.monitor_speed = (float)atof(line + 18);
+			settings.monitor_speed = settings.monitor_speed > 0.0f ? PIN(settings.monitor_speed, 0.25f, 32.0f) : 0.0f;
+		}
 		else if (!strncmp(line, "MAP_ATMOSPHERE|", 15))
 		{
 			struct forge_map_settings read = settings;
@@ -751,6 +795,10 @@ int forge_map_settings_save_lines(char *text, unsigned long size)
 		if (settings.link[slot])
 			SETTINGS_LINE("MAP_LINK|%d|%d\r\n", slot, settings.link[slot]);
 	}
+	if (settings.render_distance > 0.0f)
+		SETTINGS_LINE("MAP_RENDER_DISTANCE|%.0f\r\n", settings.render_distance);
+	if (settings.monitor_speed > 0.0f && settings.monitor_speed != 1.0f)
+		SETTINGS_LINE("MAP_MONITOR_SPEED|%.2f\r\n", settings.monitor_speed);
 	if (settings.atmosphere != _forge_atmosphere_map_default)
 	{
 		SETTINGS_LINE("MAP_ATMOSPHERE|%d|%.3f|%.3f|%.3f|%.3f|%.2f|%.2f|%d|%d\r\n", settings.atmosphere,
@@ -963,6 +1011,29 @@ void forge_map_settings_set_fog(float const color[3], float density, float start
 		net_send_atmosphere(-1);
 }
 
+void forge_map_settings_set_render_distance(float distance)
+{
+	if (!forge_map_settings_can_edit())
+		return;
+	settings.render_distance = distance > 0.0f ? PIN(distance, 256.0f, 16384.0f) : 0.0f;
+	if (host_tells())
+		net_send_view(-1);
+}
+
+void forge_map_settings_set_monitor_speed(float speed)
+{
+	if (!forge_map_settings_can_edit())
+		return;
+	settings.monitor_speed = speed > 0.0f && speed != 1.0f ? PIN(speed, 0.25f, 32.0f) : 0.0f;
+	if (host_tells())
+		net_send_view(-1);
+}
+
+float forge_map_settings_monitor_speed(void)
+{
+	return settings.monitor_speed > 0.0f ? settings.monitor_speed : 1.0f;
+}
+
 void forge_map_settings_reset(void)
 {
 	if (!forge_map_settings_can_edit())
@@ -1151,6 +1222,7 @@ void forge_map_settings_net_send_all(long machine_index)
 		net_send_tag(machine_index, _forge_map_kind_hands, slot);
 	}
 	net_send_atmosphere(machine_index);
+	net_send_view(machine_index);
 	for (slot = 0; slot < NUMBER_OF_FORGE_MAP_SLOTS; slot++)
 	{
 		net_send_movement(machine_index, slot);
@@ -1207,6 +1279,16 @@ int forge_map_settings_net_receive(char const *text, int from_client)
 		{
 			settings.movement[slot] = PIN(movement, 0, NUMBER_OF_FORGE_MOVEMENTS - 1);
 			settings_generation++;
+		}
+	}
+	else if (!strncmp(text, "!FGV:", 5))
+	{
+		float distance = 0.0f, speed = 0.0f;
+
+		if (sscanf(text + 5, "%f:%f", &distance, &speed) == 2)
+		{
+			settings.render_distance = distance > 0.0f ? PIN(distance, 256.0f, 16384.0f) : 0.0f;
+			settings.monitor_speed = speed > 0.0f ? PIN(speed, 0.25f, 32.0f) : 0.0f;
 		}
 	}
 	else if (!strncmp(text, "!FGA:", 5))
@@ -1270,6 +1352,7 @@ int forge_map_settings_fog(short local_player_index, int indoors, struct render_
 	if (settings.sky[0] || sky_state.applied != NONE || sky_state.serial != level_serial)
 		sky_apply();
 	movement_apply();
+	render_distance_apply();
 	if (settings.atmosphere == _forge_atmosphere_map_default || (indoors && !settings.fog_indoors))
 		return 0;
 	if (settings.atmosphere == _forge_atmosphere_clear || settings.fog_density <= 0.0f)

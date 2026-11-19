@@ -5,7 +5,9 @@ The MAP SETTINGS menu (forge_map_settings.c holds what it sets), included
 into forge_3d_mode.c for its menus' drawing and input: the palette's button
 held opens it (forge_3d_update). Its pages:
 
-- MAP SETTINGS: DISPLAY NAME, SKYBOX, FOG SETTINGS, PLAYER BIPEDS;
+- MAP SETTINGS: DISPLAY NAME, SKYBOX, FOG SETTINGS, PLAYER BIPEDS, RENDER
+  DISTANCE (how far a big map is drawn) and MONITOR SPEED (how fast Forge's
+  Monitor flies over it);
 - FOG SETTINGS: the atmosphere and its fog's values;
 - PLAYER BIPEDS: RED TEAM, BLUE TEAM, FREE FOR ALL, each a page of its own
   (its CONFIG: CUSTOM, or another team's settings played; with CUSTOM its
@@ -44,6 +46,8 @@ enum
 	_map_settings_row_sky,
 	_map_settings_row_fog_menu,
 	_map_settings_row_bipeds_menu,
+	_map_settings_row_render_distance,
+	_map_settings_row_monitor_speed,
 
 	_map_settings_row_atmosphere,
 	_map_settings_row_fog_red,
@@ -114,7 +118,7 @@ static int map_settings_page_rows(int page, int *rows)
 	switch (page)
 	{
 	case _map_settings_page_main:
-		for (row = _map_settings_row_name; row <= _map_settings_row_bipeds_menu; row++)
+		for (row = _map_settings_row_name; row <= _map_settings_row_monitor_speed; row++)
 			rows[count++] = row;
 		break;
 	case _map_settings_page_fog:
@@ -536,6 +540,40 @@ static void map_settings_row_act(int row, int dir, int enter)
 		forge_set_status("%s movement: %s", map_settings_slot_name(s_map_settings_menu.team_slot),
 			own ? "the biped's own" : "Spartan");
 	}
+	else if (row == _map_settings_row_render_distance)
+	{
+		/* (the game's, then further out: a valley, a whole world) */
+		static float const distances[] = { 0.0f, 1536.0f, 2048.0f, 3072.0f, 4096.0f, 6144.0f, 8192.0f };
+		int count = (int)(sizeof(distances) / sizeof(distances[0]));
+		int place = 0, k;
+
+		for (k = 0; k < count; k++)
+		{
+			if (forge_map_settings_get()->render_distance >= distances[k] - 0.5f)
+				place = k;
+		}
+		place = (place + count + (dir ? dir : 1)) % count;
+		forge_map_settings_set_render_distance(distances[place]);
+		if (distances[place] > 0.0f)
+			forge_set_status("Render distance: %.0f (the map is drawn further out)", distances[place]);
+		else
+			forge_set_status("Render distance: the game's (1024)");
+	}
+	else if (row == _map_settings_row_monitor_speed)
+	{
+		static float const speeds[] = { 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f, 8.0f, 12.0f };
+		int count = (int)(sizeof(speeds) / sizeof(speeds[0]));
+		int place = 0, k;
+
+		for (k = 0; k < count; k++)
+		{
+			if (forge_map_settings_monitor_speed() >= speeds[k] - 0.01f)
+				place = k;
+		}
+		place = (place + count + (dir ? dir : 1)) % count;
+		forge_map_settings_set_monitor_speed(speeds[place]);
+		forge_set_status("Monitor speed: %gx", (double)speeds[place]);
+	}
 	else if (row == _map_settings_row_atmosphere)
 	{
 		int atmosphere = forge_map_settings_get()->atmosphere;
@@ -580,7 +618,8 @@ static int forge_map_settings_menu_row_has_value(int index)
 	int kind, slot;
 
 	return row != NONE && (map_settings_row_tag(row, &kind, &slot) || row == _map_settings_row_team_movement ||
-		row == _map_settings_row_team_config ||
+		row == _map_settings_row_team_config || row == _map_settings_row_render_distance ||
+		row == _map_settings_row_monitor_speed ||
 		(row >= _map_settings_row_atmosphere && row <= _map_settings_row_fog_sky));
 }
 
@@ -797,6 +836,17 @@ static void map_settings_row_text(int row, char *label, size_t label_size, char 
 		snprintf(label, label_size, "%s:", map_settings_slot_name(row - _map_settings_row_team_red));
 		snprintf(value, value_size, "AS %s", map_settings_link_name(now->link[row - _map_settings_row_team_red]));
 		break;
+	case _map_settings_row_render_distance:
+		snprintf(label, label_size, "RENDER DISTANCE:");
+		if (now->render_distance > 0.0f)
+			snprintf(value, value_size, "%.0f", now->render_distance);
+		else
+			snprintf(value, value_size, "DEFAULT (1024)");
+		break;
+	case _map_settings_row_monitor_speed:
+		snprintf(label, label_size, "MONITOR SPEED:");
+		snprintf(value, value_size, "%gX", (double)forge_map_settings_monitor_speed());
+		break;
 	case _map_settings_row_team_movement:
 		snprintf(label, label_size, "MOVEMENT:");
 		snprintf(value, value_size, "%s", now->movement[s_map_settings_menu.team_slot] == _forge_movement_own ?
@@ -820,6 +870,8 @@ static char const *map_settings_row_help(int row)
 	case _map_settings_row_sky: return "A lists the skies: the map's, and a profile's.";
 	case _map_settings_row_fog_menu: return "The map's fog: presets, or your own.";
 	case _map_settings_row_bipeds_menu: return "What players spawn as, team by team.";
+	case _map_settings_row_render_distance: return "How far the map is drawn: further for big maps.";
+	case _map_settings_row_monitor_speed: return "How fast the Monitor flies in Forge.";
 	case _map_settings_row_atmosphere: return "Fog presets; any value changed is CUSTOM.";
 	case _map_settings_row_fog_indoors: return "Fog in rooms without a sky too (closer in).";
 	case _map_settings_row_fog_sky: return "AUTO hides the sky behind full fog.";

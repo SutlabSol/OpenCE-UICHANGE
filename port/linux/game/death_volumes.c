@@ -143,6 +143,12 @@ boolean death_volume_column(real_point3d const *point, real height)
 	return FALSE;
 }
 
+boolean death_volume_is_deadly(short volume_index)
+{
+	return death_volumes_ready() && volume_index >= 0 && volume_index < death_volumes.volume_count &&
+		BIT_VECTOR_TEST_FLAG(death_volumes.deadly, volume_index);
+}
+
 boolean death_volumes_any(void)
 {
 	return death_volumes_ready();

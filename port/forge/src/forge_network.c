@@ -2,7 +2,8 @@
  * OpenCE : Faber ("OpenCE - Faber.exe")
  * Collaborative P2P Forge Network Synchronization:
  * - Bidirectional Spawn (!FS: / !FH:), Transform (!FM:), Delete (!FD:) and Firefight marker usage (!FU:) replication
- * - AI spawn settings (!FA:), a placed scenery's SCALE (!FZ:)
+ * - AI spawn settings (!FA:), a placed scenery's SCALE (!FZ:), a volume's settings (!FW:),
+ *   an emitter's DEAL DAMAGE (!FN:)
  * - Per-Player Monitor vs. Spartan mode & 3D Monitor flight state synchronization (!FT:)
  * - Late-join / full-session state synchronization (!FQ)
  * - Automatic client-side external tag & .ocetags faulting on object creation
@@ -28,6 +29,7 @@
 
 #include "forge_engine.h"
 #include "forge_map_settings.h"
+#include "forge_volumes.h"
 
 extern unsigned long system_milliseconds(void);
 extern void orig_network_objects_handle_changes(void const *entries, short count);
@@ -534,6 +536,14 @@ void forge_network_sync_tick(void)
 						packets_sent++;
 					}
 				}
+				/* (a map's own volume: each machine adopted it, so where it is now) */
+				else if (forge_volume_get(idx) && forge_volume_get(idx)->map_index >= 0)
+				{
+					snprintf(msg, sizeof(msg), "!FM:%d:-1:%.2f:%.2f:%.2f:%d:%d:%d:0", (int)idx, inst->x, inst->y, inst->z,
+						(int)(inst->yaw * 100.0f), (int)(inst->pitch * 100.0f), (int)(inst->roll * 100.0f));
+					forge_send_packet_to_machine(m, msg);
+					packets_sent++;
+				}
 				else if (!inst->is_default_scenario_object)
 				{
 					int tele_usage = forge_3d_teleporter_net_usage(idx);
@@ -576,6 +586,18 @@ void forge_network_sync_tick(void)
 						(int)(inst->pitch * 100.0f),
 						(int)(inst->roll * 100.0f),
 						is_held);
+					forge_send_packet_to_machine(m, msg);
+					packets_sent++;
+				}
+				/* (a volume's shape, size and effect; an emitter's DEAL DAMAGE off) */
+				if (inst->active && forge_volume_packet(idx, msg, sizeof(msg)))
+				{
+					forge_send_packet_to_machine(m, msg);
+					packets_sent++;
+				}
+				if (inst->active && inst->no_damage)
+				{
+					snprintf(msg, sizeof(msg), "!FN:%d:1", (int)idx);
 					forge_send_packet_to_machine(m, msg);
 					packets_sent++;
 				}
@@ -817,6 +839,56 @@ void forge_network_send_scale(int32_t live_idx, float scale)
 }
 
 static int32_t forge_resolve_target_live_idx(int live_idx, int obj_abs);
+
+static void forge_network_send_text_both_ways(char const *msg)
+{
+	if (!forge_is_multiplayer_session())
+		return;
+	if (game_connection() == _game_connection_network_client)
+		forge_send_packet_to_host(msg);
+	else if (game_connection() == _game_connection_network_server)
+		forge_broadcast_packet_to_clients(msg, -1);
+}
+
+void forge_network_send_no_damage(int32_t live_idx, int no_damage)
+{
+	char msg[64];
+
+	snprintf(msg, sizeof(msg), "!FN:%d:%d", (int)live_idx, no_damage ? 1 : 0);
+	forge_network_send_text_both_ways(msg);
+}
+
+void forge_network_send_volume(int32_t live_idx)
+{
+	char msg[64];
+
+	if (forge_volume_packet(live_idx, msg, sizeof(msg)))
+		forge_network_send_text_both_ways(msg);
+}
+
+/* a !FW: packet's fields read and applied (TRUE when it is one) */
+static int32_t forge_volume_packet_apply(char const *text, int (*resolve)(int live_idx))
+{
+	int live_idx = -1, shape = 0, effect = 0, damage = 0, sx = 200, sy = 200, sz = 200;
+	int32_t target_idx;
+	float size[3];
+
+	if (sscanf(text + 4, "%d:%d:%d:%d:%d:%d:%d", &live_idx, &shape, &effect, &damage, &sx, &sy, &sz) != 7)
+		return -1;
+	target_idx = resolve(live_idx);
+	if (target_idx < 0)
+		return -1;
+	size[0] = (float)sx / 100.0f;
+	size[1] = (float)sy / 100.0f;
+	size[2] = (float)sz / 100.0f;
+	forge_volume_apply(target_idx, shape, effect, (float)damage, size);
+	return target_idx;
+}
+
+static int forge_volume_resolve(int live_idx)
+{
+	return (int)forge_resolve_target_live_idx(live_idx, -1);
+}
 
 /* an AI spawn's settings: everything but where it stands, which !FM: carries.
 (the chat line's 64 bytes hold it, the actor and weapon by their hashes) */
@@ -1461,6 +1533,32 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 			}
 			return 1;
 		}
+		else if (strncmp(text, "!FW:", 4) == 0)
+		{
+			/* (a volume's settings, from a client: applied and passed on) */
+			int32_t target_idx = forge_volume_packet_apply(text, forge_volume_resolve);
+			char relay[64];
+
+			if (target_idx >= 0 && forge_volume_packet(target_idx, relay, sizeof(relay)))
+				forge_broadcast_packet_to_clients(relay, machine_index);
+			return 1;
+		}
+		else if (strncmp(text, "!FN:", 4) == 0)
+		{
+			int live_idx = -1, on = 0;
+			if (sscanf(text + 4, "%d:%d", &live_idx, &on) == 2)
+			{
+				int32_t target_idx = forge_resolve_target_live_idx(live_idx, -1);
+				if (target_idx >= 0)
+				{
+					char relay[64];
+					forge_3d_no_damage_apply(target_idx, on);
+					snprintf(relay, sizeof(relay), "!FN:%d:%d", (int)target_idx, on ? 1 : 0);
+					forge_broadcast_packet_to_clients(relay, machine_index);
+				}
+			}
+			return 1;
+		}
 		else if (strncmp(text, "!FZ:", 4) == 0)
 		{
 			int live_idx = -1, thousandths = 1000;
@@ -1640,6 +1738,22 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 				int32_t target_idx = forge_resolve_target_live_idx(live_idx, -1);
 				if (target_idx >= 0)
 					forge_3d_scale_apply(target_idx, (float)thousandths / 1000.0f);
+			}
+			return 1;
+		}
+		else if (strncmp(text, "!FW:", 4) == 0)
+		{
+			forge_volume_packet_apply(text, forge_volume_resolve);
+			return 1;
+		}
+		else if (strncmp(text, "!FN:", 4) == 0)
+		{
+			int live_idx = -1, on = 0;
+			if (sscanf(text + 4, "%d:%d", &live_idx, &on) == 2)
+			{
+				int32_t target_idx = forge_resolve_target_live_idx(live_idx, -1);
+				if (target_idx >= 0)
+					forge_3d_no_damage_apply(target_idx, on);
 			}
 			return 1;
 		}

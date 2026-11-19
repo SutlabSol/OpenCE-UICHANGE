@@ -162,6 +162,9 @@ enum forge_palette_category
 	_forge_cat_effects,
 	/* decals placed on the map's surfaces: blood, burns, bullet holes, signs */
 	_forge_cat_decals,
+	/* damage and kill volumes (forge_volumes.c): boxes, cylinders, spheres,
+	and the map's own deadly trigger volumes */
+	_forge_cat_volumes,
 	NUMBER_OF_FORGE_PALETTE_CATEGORIES
 };
 
@@ -215,7 +218,10 @@ enum forge_ff_spawn_type
 	_forge_ff_spawn_enemy_heavy_veh = 4,    /* Approved Enemy Wraith / Scorpion / Banshee spawn */
 	_forge_ff_spawn_dropship_zone = 5,      /* Enemy drop point taking any drop; 8-10 one kind alone (halo_firefight_route.h) */
 	_forge_ff_spawn_player_vehicle = 6,     /* Approved Player Vehicle Pad (Round 4 Warthog / Round 5 Scorpion) */
-	NUMBER_OF_FORGE_FF_SPAWN_TYPES = 7
+	NUMBER_OF_FORGE_FF_SPAWN_TYPES = 7,
+	/* where the players spawn in Firefight, over the map's starting
+	locations (halo_firefight_route.h's FF_PLAYER_SPAWN_TYPE) */
+	_forge_ff_spawn_player_spawn = 14
 };
 
 enum forge_ff_round_filter
@@ -262,10 +268,20 @@ struct forge_catalog_entry
 	has the origin and keyword it opens */
 	uint8_t origin;
 	uint8_t keyword;
-	uint16_t pad2;
+	/* a FIREFIGHT SPAWNS row's: the marker usage it places
+	(FORGE_FF_PRESET_PATH); 0 for any other row */
+	uint16_t preset;
 	char tag_path[FORGE_TAG_PATH_MAX];
 	char display_name[64];
 };
+
+/* FIREFIGHT's FIREFIGHT SPAWNS row, which opens its kinds of marker: each
+a row of its own, 'ffsp' with a path under FORGE_FF_PRESET_PATH and its
+usage in `preset`; what it places is "spawn\\firefight_spawn" */
+#define FORGE_GROUP_FF_MENU 'ffmn'
+#define FORGE_FF_MENU_PATH "spawn\\firefight_spawns"
+#define FORGE_FF_PRESET_PATH "spawn\\firefight_spawn\\"
+#define FORGE_FF_SPAWN_PATH "spawn\\firefight_spawn"
 
 /* a palette folder's row: an origin's (keyword 0) or a keyword's within it */
 #define FORGE_GROUP_FOLDER 'fold'
@@ -294,6 +310,10 @@ struct forge_live_instance
 	/* a placed vehicle made in every game, whatever the gametype's vehicles
 	(Object Settings' ALWAYS SPAWN: game_engine_vehicle_always_spawn) */
 	uint8_t always_spawn;
+	/* a placed emitter's Object Settings DEAL DAMAGE off: its effects' damage
+	parts do nothing (forge_volumes.c, effects.c); saved as OBJECT_NO_DAMAGE,
+	sent as !FN: */
+	uint8_t no_damage;
 	uint16_t gametype_flags;   /* 0 = All Modes, bit0=CTF, bit1=Slayer, bit2=Oddball, bit3=KOTH, bit4=Race */
 	int16_t netgame_flag_type; /* Scenario netgame_flag type (6=tele_from, 7=tele_to, 8=hill, 2=oddball, 0=ctf) or -1 */
 	int16_t team_designator;   /* Reference/Channel ID or Team Index */

@@ -780,7 +780,8 @@ static short count_custom_ff_spawn_markers(unsigned long allowed_type_mask)
 		if (!flag || flag->type != FF_NETGAME_FLAG_FIREFIGHT_SPAWN)
 			continue;
 		stype = FF_UNPACK_SPAWN_TYPE(flag->team_index);
-		if (stype == FF_ROUTE_SPAWN_TYPE)
+		/* (a route's points, and the players' spawns: no enemy's) */
+		if (stype == FF_ROUTE_SPAWN_TYPE || stype == FF_PLAYER_SPAWN_TYPE)
 			continue;
 		if (allowed_type_mask == 0xFFFFFFFFUL || (allowed_type_mask & (1UL << stype)) != 0)
 			count++;
@@ -1504,6 +1505,35 @@ boolean firefight_select_player_spawn_point(
 	{
 		discover_map_spawn_points();
 		ensure_active_firefight_structure_bsp();
+	}
+
+	/* Forge's Firefight player spawns, over the map's starting locations: the
+	round's first (any round's else), a player's first spawn on one of its own,
+	a respawn on any */
+	{
+		real_point3d marker_points[32];
+		real marker_facings[32];
+		short marker_count = collect_matching_custom_ff_spawns(1UL << FF_PLAYER_SPAWN_TYPE,
+			ff_state.in_bonus_round ? 0 : ff_state.current_round, 1, ff_state.in_bonus_round, FALSE, TRUE,
+			marker_points, marker_facings, NULL, 32);
+		short valid[32];
+		short valid_count = 0;
+
+		for (i = 0; i < marker_count; i++)
+		{
+			if (point_is_in_valid_bsp(&marker_points[i]))
+				valid[valid_count++] = i;
+		}
+		if (valid_count > 0)
+		{
+			struct player_datum *player = player_index != NONE ? player_try_and_get(player_index) : NULL;
+			short pick = player && player->statistics.deaths > 0 ?
+				(short)(spawner_rand() % (unsigned long)valid_count) : (short)(abs_player % valid_count);
+
+			*out_position = marker_points[valid[pick]];
+			*out_facing = marker_facings[valid[pick]];
+			return TRUE;
+		}
 	}
 
 	for (i = 0; i < scen->players.count && valid_player_count < 64; i++)

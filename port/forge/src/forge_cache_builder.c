@@ -13,6 +13,7 @@ scenario exporter (.map, 140x114 .bmp, .txt).
 #include "cseries/cseries.h"
 #include "forge_cache_builder.h"
 #include "forge_map_settings.h"
+#include "forge_volumes.h"
 #include "cache_file_formats.h"
 #include "tag_schema.h"
 #include "math/real_math.h"
@@ -5409,6 +5410,13 @@ static int append_forge_map_metadata_and_preview_trailer(
 				uint32_t o = buf_alloc(&state_buf, (uint32_t)(sizeof(always_line) - 1u), 1);
 				if (state_buf.data) memcpy(state_buf.data + o, always_line, sizeof(always_line) - 1u);
 			}
+			/* (an emitter's DEAL DAMAGE off, the same way) */
+			if (po->no_damage && state_buf.data)
+			{
+				static char const no_damage_line[] = "OBJECT_NO_DAMAGE\r\n";
+				uint32_t o = buf_alloc(&state_buf, (uint32_t)(sizeof(no_damage_line) - 1u), 1);
+				if (state_buf.data) memcpy(state_buf.data + o, no_damage_line, sizeof(no_damage_line) - 1u);
+			}
 			/* (and a scenery's SCALE, the same way) */
 			if (po->scale > 0.0f && state_buf.data)
 			{
@@ -5563,6 +5571,21 @@ static int append_forge_map_metadata_and_preview_trailer(
 			uint32_t o = buf_alloc(&state_buf, (uint32_t)settings_length, 1);
 			if (state_buf.data) memcpy(state_buf.data + o, settings_lines, (size_t)settings_length);
 		}
+	}
+
+	/* its damage and kill volumes (forge_volumes.c), and the map's own it
+	moved or set; read as its level loads */
+	if (edits && state_buf.data)
+	{
+		char *volume_lines = (char *)malloc(0x40000u);
+		int volume_length = volume_lines ? forge_volumes_save_lines(volume_lines, 0x40000u) : 0;
+
+		if (volume_length > 0)
+		{
+			uint32_t o = buf_alloc(&state_buf, (uint32_t)volume_length, 1);
+			if (state_buf.data) memcpy(state_buf.data + o, volume_lines, (size_t)volume_length);
+		}
+		free(volume_lines);
 	}
 
 	/* (the tags the bake leaves out, MCC's own content: each machine reads

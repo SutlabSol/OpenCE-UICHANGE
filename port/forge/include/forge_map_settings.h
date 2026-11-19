@@ -105,6 +105,10 @@ struct forge_map_settings
 	float fog_opaque;
 	int fog_indoors;
 	int sky_visibility;
+	/* how far the map is drawn (world units; 0: the game's, 1024), for a big
+	map; and how fast the Monitor flies in Forge (a multiple; 0: 1) */
+	float render_distance;
+	float monitor_speed;
 };
 
 /* ---------- prototypes/FORGE_MAP_SETTINGS.C */
@@ -157,6 +161,11 @@ int forge_map_settings_link_slot(int slot);
 void forge_map_settings_set_fog(float const color[3], float density, float start, float opaque, int indoors,
 	int sky_visibility);
 void forge_map_settings_reset(void);
+/* RENDER DISTANCE (0: the game's) and MONITOR SPEED (0 or 1: as it is) */
+void forge_map_settings_set_render_distance(float distance);
+void forge_map_settings_set_monitor_speed(float speed);
+/* the Monitor's speed's multiple (1 when the map sets none) */
+float forge_map_settings_monitor_speed(void);
 
 /* the tags that can be chosen for a kind, the level's: how many, at most
 `capacity` into `tags` */

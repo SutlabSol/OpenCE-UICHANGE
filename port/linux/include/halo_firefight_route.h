@@ -33,6 +33,10 @@ Bit 15 stays clear, as a usage below 0 means a default elsewhere.
 enum
 {
 	FF_ROUTE_SPAWN_TYPE = 7,
+	/* a Firefight player spawn (Forge's FIREFIGHT SPAWNS > PLAYER SPAWN): the
+	players spawn on these, those of the round first, over the map's starting
+	locations (firefight_select_player_spawn_point) */
+	FF_PLAYER_SPAWN_TYPE = 14,
 	FF_ROUTE_MAX_ID = 15,
 	FF_ROUTE_MAX_LEG_POINTS = 16,
 	FF_ROUTE_APPROACH = 0,

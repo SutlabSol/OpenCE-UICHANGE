@@ -50,6 +50,7 @@
 #include "devices/device_light_fixtures.h"
 #include "forge_engine.h"
 #include "forge_map_settings.h"
+#include "forge_volumes.h"
 #include "halo_ui_pointer.h"
 
 extern int halo_forge_pointer_update(int wanted, struct halo_ui_pointer *pointer);
@@ -2707,11 +2708,12 @@ static char const *forge_ff_spawn_type_label(int type)
 {
 	switch (type)
 	{
-	case _forge_ff_spawn_ai_infantry_only:   return "AI INFANTRY";
-	case _forge_ff_spawn_ai_and_vehicles:    return "AI + VEHICLES";
-	case _forge_ff_spawn_enemy_vehicle_only: return "ENEMY VEHICLE";
-	case _forge_ff_spawn_enemy_ghost_only:   return "ENEMY GHOST";
-	case _forge_ff_spawn_enemy_heavy_veh:    return "ENEMY HEAVY VEH";
+	case _forge_ff_spawn_ai_infantry_only:   return "INFANTRY AI";
+	case _forge_ff_spawn_ai_and_vehicles:    return "INFANTRY + VEHICLES";
+	case _forge_ff_spawn_enemy_vehicle_only: return "VEHICLE AI: ANY";
+	case _forge_ff_spawn_enemy_ghost_only:   return "VEHICLE AI: LIGHT";
+	case _forge_ff_spawn_enemy_heavy_veh:    return "VEHICLE AI: HEAVY";
+	case _forge_ff_spawn_player_spawn:       return "PLAYER SPAWN";
 	case FF_DROP_SPAWN_TYPE_ANY:
 	case FF_DROP_SPAWN_TYPE_COVENANT:
 	case FF_DROP_SPAWN_TYPE_HUMAN:
@@ -2719,9 +2721,50 @@ static char const *forge_ff_spawn_type_label(int type)
 	case FF_DROP_SPAWN_TYPE_COVENANT_HUMAN:
 	case FF_DROP_SPAWN_TYPE_COVENANT_FLOOD:
 	case FF_DROP_SPAWN_TYPE_HUMAN_FLOOD:     return "ENEMY DROP POINT";
-	case _forge_ff_spawn_player_vehicle:     return "PLAYER VEH PAD";
+	case _forge_ff_spawn_player_vehicle:     return "PLAYER VEHICLE";
 	case FF_ROUTE_SPAWN_TYPE:                return "DROPSHIP ROUTE";
 	default:                                 return "AI INFANTRY";
+	}
+}
+
+/* the kinds of Firefight marker FIREFIGHT SPAWNS places, each a row of its
+own: a marker's type is one of its kind's (vehicle AI's light or heavy) */
+enum forge_ff_spawn_kind
+{
+	_forge_ff_kind_player_spawn = 0,
+	_forge_ff_kind_player_vehicle,
+	_forge_ff_kind_infantry,
+	_forge_ff_kind_vehicle,
+	_forge_ff_kind_enemy_drop,
+	_forge_ff_kind_route
+};
+
+static int forge_ff_spawn_kind(int type)
+{
+	switch (type)
+	{
+	case _forge_ff_spawn_player_spawn:       return _forge_ff_kind_player_spawn;
+	case _forge_ff_spawn_player_vehicle:     return _forge_ff_kind_player_vehicle;
+	case _forge_ff_spawn_enemy_vehicle_only:
+	case _forge_ff_spawn_enemy_ghost_only:
+	case _forge_ff_spawn_enemy_heavy_veh:    return _forge_ff_kind_vehicle;
+	case FF_ROUTE_SPAWN_TYPE:                return _forge_ff_kind_route;
+	default:
+		return ff_drop_point_kinds(type) != 0 ? _forge_ff_kind_enemy_drop : _forge_ff_kind_infantry;
+	}
+}
+
+/* the panel's title for a marker: its kind's */
+static char const *forge_ff_spawn_kind_title(int type)
+{
+	switch (forge_ff_spawn_kind(type))
+	{
+	case _forge_ff_kind_player_spawn:   return "FIREFIGHT PLAYER SPAWN";
+	case _forge_ff_kind_player_vehicle: return "FIREFIGHT PLAYER VEHICLE";
+	case _forge_ff_kind_vehicle:        return "FIREFIGHT VEHICLE AI";
+	case _forge_ff_kind_enemy_drop:     return "ENEMY DROP POINT";
+	case _forge_ff_kind_route:          return "DROPSHIP ROUTE";
+	default:                            return "FIREFIGHT INFANTRY AI";
 	}
 }
 
@@ -3433,6 +3476,18 @@ int32_t forge_3d_spawn_object_at_slot(
 		forge_ai_preview_update(live_idx);
 		forge_set_status("Placed AI Spawn");
 	}
+	else if (group_tag == FORGE_GROUP_VOLUME)
+	{
+		char what[96];
+
+		/* (a volume is no object: forge_volumes.c keeps what it is) */
+		inst->object_index = NONE;
+		inst->edit_entry_index = -1;
+		forge_volume_spawned(live_idx, tag_path);
+		forge_volume_describe(live_idx, what, sizeof(what));
+		if (broadcast_net)
+			forge_set_status("Placed %s", what);
+	}
 	else if (group_tag == 'tele')
 	{
 		/* _netgame_flag_teleport_from = 6, _netgame_flag_teleport_to = 7 */
@@ -3546,6 +3601,7 @@ int32_t forge_3d_spawn_object_at_slot(
 			po->group_tag = group_tag;
 			po->gametype_flags = inst->gametype_flags;
 			po->always_spawn = inst->always_spawn;
+			po->no_damage = inst->no_damage;
 			po->scale = inst->scale;
 			po->category = (group_tag == 'vehi') ? _forge_object_vehicle :
 				(group_tag == 'weap') ? _forge_object_weapon :
@@ -3764,6 +3820,10 @@ void forge_3d_move_instance_ext(
 	{
 		forge_ai_spawn_moved(inst);
 	}
+	else if (inst->group_tag == FORGE_GROUP_VOLUME)
+	{
+		forge_volume_moved(live_idx);
+	}
 	else if (inst->is_default_scenario_object)
 	{
 		forge_ensure_default_object_edit_entry(inst);
@@ -3848,6 +3908,17 @@ void forge_3d_delete_instance(int32_t live_idx, int broadcast_net)
 	inst = &g_forge.live_instances[live_idx];
 	if (!inst->active)
 		return;
+	/* (a map's own volume stays the map's: turned off, not deleted) */
+	if (inst->group_tag == FORGE_GROUP_VOLUME && forge_volume_get(live_idx) &&
+		forge_volume_get(live_idx)->map_index >= 0)
+	{
+		struct forge_volume off = *forge_volume_get(live_idx);
+
+		off.effect = _forge_volume_off;
+		forge_volume_set(live_idx, &off, broadcast_net);
+		forge_set_status("A map's volume can't be deleted: it is turned OFF");
+		return;
+	}
 
 	/* A dropship zone takes its route with it (other machines hear of each point) */
 	route_id = (broadcast_net && forge_ff_is_dropship_zone(inst)) ? FF_ROUTE_ID(inst->team_designator) : 0;
@@ -3916,29 +3987,23 @@ static int forge_ff_is_dropship_zone(struct forge_live_instance const *inst)
 	return forge_ff_drop_kinds(inst) != 0;
 }
 
-/* the SPAWN TYPE row's next type: an enemy drop point is one, whatever
-factions it spawns (a new one all three), and the route's points' type is
-left out */
+/* the SPAWN TYPE row's next type, within the marker's kind (FIREFIGHT SPAWNS
+chose it): vehicle AI's LIGHT or HEAVY (one of before's ANY goes to them),
+infantry with or without vehicles; the other kinds have one type each (an
+enemy drop point's factions are its FACTIONS TO SPAWN page's) */
 static int forge_ff_spawn_type_step(int type, int dir)
 {
-	static int const cycle[] = {
-		_forge_ff_spawn_ai_infantry_only, _forge_ff_spawn_ai_and_vehicles, _forge_ff_spawn_enemy_vehicle_only,
-		_forge_ff_spawn_enemy_ghost_only, _forge_ff_spawn_enemy_heavy_veh,
-		FF_DROP_SPAWN_TYPE_ANY,
-		_forge_ff_spawn_player_vehicle,
-	};
-	int count = (int)(sizeof(cycle) / sizeof(cycle[0]));
-	int at = 0;
-	int k;
-
-	if (ff_drop_point_kinds(type) != 0)
-		type = FF_DROP_SPAWN_TYPE_ANY;
-	for (k = 0; k < count; k++)
+	switch (forge_ff_spawn_kind(type))
 	{
-		if (cycle[k] == type)
-			at = k;
+	case _forge_ff_kind_vehicle:
+		if (type == _forge_ff_spawn_enemy_vehicle_only)
+			return dir > 0 ? _forge_ff_spawn_enemy_ghost_only : _forge_ff_spawn_enemy_heavy_veh;
+		return type == _forge_ff_spawn_enemy_ghost_only ? _forge_ff_spawn_enemy_heavy_veh : _forge_ff_spawn_enemy_ghost_only;
+	case _forge_ff_kind_infantry:
+		return type == _forge_ff_spawn_ai_infantry_only ? _forge_ff_spawn_ai_and_vehicles : _forge_ff_spawn_ai_infantry_only;
+	default:
+		return type;
 	}
-	return cycle[(at + count + dir) % count];
 }
 
 /* ---------- A drop point's own rows, after the six every Firefight marker has
@@ -5110,9 +5175,17 @@ static int s_palette_ai_group = NONE;
 folder's tags */
 static int s_palette_origin = NONE;
 static int s_palette_keyword = 0;
+/* FIREFIGHT's level: its rows, or FIREFIGHT SPAWNS' kinds of marker */
+static int s_palette_ff_menu = 0;
+
+static int forge_palette_is_ff_preset(struct forge_catalog_entry const *row)
+{
+	return row->group_tag == 'ffsp' && _strnicmp(row->tag_path, FORGE_FF_PRESET_PATH, strlen(FORGE_FF_PRESET_PATH)) == 0;
+}
 
 static void forge_palette_folders_reset(void)
 {
+	s_palette_ff_menu = 0;
 	s_palette_ai_group = NONE;
 	s_palette_origin = NONE;
 	s_palette_keyword = 0;
@@ -5181,6 +5254,23 @@ static int get_filtered_catalog_indices(int *out_indices, int max_out)
 
 	if (forge_catalog_category_split(g_forge.current_category))
 		return get_filtered_split_indices(g_forge.current_category, out_indices, max_out);
+	/* (FIREFIGHT: its spawns' kinds once FIREFIGHT SPAWNS is open, else the rest) */
+	if (g_forge.current_category == _forge_cat_firefight)
+	{
+		for (i = 0; i < g_forge.catalog_count && count < max_out; i++)
+		{
+			struct forge_catalog_entry const *row = &g_forge.catalog[i];
+
+			if (row->category == _forge_cat_firefight && forge_catalog_entry_allowed(row) &&
+				forge_palette_is_ff_preset(row) == s_palette_ff_menu)
+			{
+				if (out_indices)
+					out_indices[count] = i;
+				count++;
+			}
+		}
+		return count;
+	}
 	if (g_forge.current_category != _forge_cat_ai_squads)
 		return get_filtered_catalog_indices_for_cat(g_forge.current_category, out_indices, max_out);
 	if (s_palette_ai_group == NONE)
@@ -5706,6 +5796,9 @@ void forge_init_map_scenario_entities(void)
 			}
 		}
 	}
+
+	/* (the map's deadly trigger volumes: Forge's VOLUMES, forge_volumes.c) */
+	forge_volumes_adopt_map();
 }
 
 static int count_active_instances_for_catalog_entry(struct forge_catalog_entry const *ce)
@@ -5713,6 +5806,25 @@ static int count_active_instances_for_catalog_entry(struct forge_catalog_entry c
 	int i, count = 0;
 	if (!ce || !ce->tag_path[0])
 		return 0;
+	/* (a FIREFIGHT SPAWNS kind: the markers of its kind; vehicle AI's light
+	and heavy both) */
+	if (ce->group_tag == 'ffsp' && _strnicmp(ce->tag_path, FORGE_FF_PRESET_PATH, strlen(FORGE_FF_PRESET_PATH)) == 0)
+	{
+		int kind = forge_ff_spawn_kind(FORGE_FF_UNPACK_TYPE(ce->preset));
+
+		for (i = 0; i < g_forge.live_instance_count; i++)
+		{
+			struct forge_live_instance const *inst = &g_forge.live_instances[i];
+
+			if (inst->active && inst->group_tag == 'ffsp' &&
+				FORGE_FF_UNPACK_TYPE(inst->team_designator) != FF_ROUTE_SPAWN_TYPE &&
+				forge_ff_spawn_kind(FORGE_FF_UNPACK_TYPE(inst->team_designator)) == kind)
+			{
+				count++;
+			}
+		}
+		return count;
+	}
 	for (i = 0; i < g_forge.live_instance_count; i++)
 	{
 		if (g_forge.live_instances[i].active &&
@@ -5802,7 +5914,8 @@ static enum forge_palette_category forge_palette_category_step(enum forge_palett
 		_forge_cat_teleporters,
 		_forge_cat_objectives,
 		_forge_cat_ai_squads,
-		_forge_cat_firefight
+		_forge_cat_firefight,
+		_forge_cat_volumes
 	};
 	int i;
 
@@ -5900,6 +6013,38 @@ void forge_3d_always_spawn_apply(int32_t live_idx, int on)
 	inst->always_spawn = (uint8_t)(on != 0);
 	if (inst->edit_entry_index >= 0 && inst->edit_entry_index < (int)g_forge.edit_state.placed_object_count)
 		g_forge.edit_state.placed_objects[inst->edit_entry_index].always_spawn = inst->always_spawn;
+}
+
+/* a placed emitter's DEAL DAMAGE set (the Object Settings row, a peer's
+!FN:, a saved map's OBJECT_NO_DAMAGE): kept in the map's record for the save */
+void forge_3d_no_damage_apply(int32_t live_idx, int no_damage)
+{
+	struct forge_live_instance *inst;
+
+	if (live_idx < 0 || live_idx >= g_forge.live_instance_count)
+		return;
+	inst = &g_forge.live_instances[live_idx];
+	if (!inst->active || inst->group_tag != 'scen')
+		return;
+	inst->no_damage = (uint8_t)(no_damage != 0);
+	if (inst->edit_entry_index >= 0 && inst->edit_entry_index < (int)g_forge.edit_state.placed_object_count)
+		g_forge.edit_state.placed_objects[inst->edit_entry_index].no_damage = inst->no_damage;
+}
+
+extern int forge_runtime_is_particle_emitter(uint32_t group_tag, char const *tag_path);
+
+/* Object Settings' DEAL DAMAGE row: a placed emitter's (fire, plasma fire),
+or a scenery's whose effects deal damage, after its SCALE row; else -1 */
+static int forge_props_damage_row(struct forge_live_instance const *inst, int scale_row)
+{
+	struct object_datum *obj;
+
+	if (scale_row < 0 || inst->group_tag != 'scen')
+		return -1;
+	if (inst->no_damage || forge_runtime_is_particle_emitter(inst->group_tag, inst->tag_path))
+		return scale_row + 1;
+	obj = forge_valid_object_get(inst->object_index);
+	return obj && forge_volumes_tag_deals_damage(obj->definition_index) ? scale_row + 1 : -1;
 }
 
 static char const *gametype_flags_label(uint16_t flags)
@@ -7098,6 +7243,8 @@ static struct
 	int has_ai;
 	struct forge_ai_spawn_entry ai;
 	int leg_style[2];
+	int has_volume;
+	struct forge_volume volume;
 } s_props_opened;
 
 static void forge_props_open(void)
@@ -7113,6 +7260,9 @@ static void forge_props_open(void)
 	s_props_opened.snap_mode = g_forge.snap_mode;
 	s_props_opened.has_ai = inst->group_tag == FORGE_GROUP_AI_SPAWN &&
 		forge_ai_spawn_settings_get(g_forge.grabbed_live_index, &s_props_opened.ai);
+	s_props_opened.has_volume = forge_volume_get(g_forge.grabbed_live_index) != NULL;
+	if (s_props_opened.has_volume)
+		s_props_opened.volume = *forge_volume_get(g_forge.grabbed_live_index);
 	if (forge_ff_is_dropship_zone(inst))
 	{
 		s_props_opened.leg_style[0] = forge_ff_route_leg_style(route_id, FF_ROUTE_APPROACH);
@@ -7220,6 +7370,10 @@ static void forge_props_undo(void)
 	{
 		forge_ai_spawn_settings_set(live_idx, &s_props_opened.ai);
 	}
+	else if (s_props_opened.has_volume && forge_volume_get(live_idx))
+	{
+		forge_volume_set(live_idx, &s_props_opened.volume, 1);
+	}
 	else if (inst->group_tag == 'ffsp')
 	{
 		int route_now = FF_ROUTE_ID(inst->team_designator);
@@ -7256,6 +7410,11 @@ static void forge_props_undo(void)
 		{
 			forge_3d_scale_apply(live_idx, forge_inst_scale(was));
 			forge_network_send_scale(live_idx, forge_inst_scale(was));
+		}
+		if (inst->no_damage != was->no_damage)
+		{
+			forge_3d_no_damage_apply(live_idx, was->no_damage);
+			forge_network_send_no_damage(live_idx, was->no_damage);
 		}
 		if (inst->group_tag == 'spwn')
 		{
@@ -7303,7 +7462,8 @@ static void forge_settings_selection_drop_to_floor(void)
 		FLAG(_collision_test_structure_bit) | FLAG(_collision_test_objects_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
 		&from, &down, forge_valid_object_get(inst->object_index) ? inst->object_index : NONE, &collision))
 	{
-		forge_3d_move_instance_ext(live_idx, inst->x, inst->y, collision.point.z + 0.08f,
+		forge_3d_move_instance_ext(live_idx, inst->x, inst->y, collision.point.z + 0.08f +
+			(forge_volume_get(live_idx) ? forge_volume_get(live_idx)->size[2] * 0.5f : 0.0f),
 			inst->yaw, inst->pitch, inst->roll, 0, 1);
 	}
 }
@@ -7428,6 +7588,10 @@ void forge_3d_update(float dt)
 			forge_init_map_scenario_entities();
 		forge_load_saved_map_state_if_present(forge_get_active_map_name());
 	}
+
+	/* (the map's volumes hurt whoever is in them, in a match of the map too:
+	forge_volumes.c) */
+	forge_volumes_update();
 
 	/* Only run Forge editor controls when inside a Forge session */
 	if (!g_forge_session_enabled)
@@ -7918,6 +8082,13 @@ void forge_3d_update(float dt)
 				s_props_factions_open = 0;
 				g_forge.props_cursor = FORGE_FF_ZONE_FIRST_ROW;
 			}
+			/* (out of FIREFIGHT SPAWNS, to FIREFIGHT's rows) */
+			else if (modal_before_hotkeys == _forge_modal_spawn_palette && s_palette_ff_menu)
+			{
+				s_palette_ff_menu = 0;
+				g_forge.palette_cursor = 0;
+				g_forge.palette_scroll = 0;
+			}
 			/* (out of a group of actors, to the groups) */
 			else if (modal_before_hotkeys == _forge_modal_spawn_palette && s_palette_ai_group != NONE)
 			{
@@ -8128,6 +8299,15 @@ void forge_3d_update(float dt)
 			float sx, sy, sz;
 			int32_t spawned_idx = -1;
 
+			/* (FIREFIGHT SPAWNS opens its kinds) */
+			if (ce->group_tag == FORGE_GROUP_FF_MENU)
+			{
+				s_palette_ff_menu = 1;
+				g_forge.palette_cursor = 0;
+				g_forge.palette_scroll = 0;
+				prev_enter = 1;
+				goto update_prev_keys;
+			}
 			/* (a group of actors opens) */
 			if (ce->group_tag == FORGE_GROUP_AI_MENU)
 			{
@@ -8245,13 +8425,19 @@ void forge_3d_update(float dt)
 				float pitch = (ce->group_tag == 'scen' && _stricmp(ce->tag_path, FORGE_DROP_AREA_TAG) == 0) ?
 					FORGE_DROP_AREA_PITCH : 0.0f;
 
+				/* (a FIREFIGHT SPAWNS kind: a Firefight marker of its usage; a
+				volume stands on what it is put on, its middle half its height up) */
+				int ff_preset = forge_palette_is_ff_preset(ce);
+
+				if (ce->group_tag == FORGE_GROUP_VOLUME)
+					sz += FORGE_VOLUME_SIZE_DEFAULT * 0.5f;
 				spawned_idx = forge_3d_spawn_object_at(
 					ce->group_tag,
-					ce->tag_path,
+					ff_preset ? FORGE_FF_SPAWN_PATH : ce->tag_path,
 					ce->source_cache_id,
 					sx, sy, sz,
 					g_forge.cam_yaw, pitch, 0.0f,
-					0,
+					ff_preset ? (int16_t)ce->preset : 0,
 					1);
 			}
 
@@ -8306,11 +8492,17 @@ void forge_3d_update(float dt)
 		int always_row = forge_props_always_spawn_row(inst, snap_row, test_drop_row);
 		/* (a placed scenery's or effect's SCALE, after the rest) */
 		int scale_row = forge_props_scale_row(inst, snap_row, test_drop_row);
+		/* (a placed emitter's DEAL DAMAGE, after its SCALE) */
+		int damage_row = forge_props_damage_row(inst, scale_row);
+		/* (a volume's own rows: forge_volumes.h's) */
+		int is_volume = forge_volume_is(g_forge.grabbed_live_index);
 		int zone_rows[FORGE_FF_ZONE_MAX_ROWS];
 		int zone_row_count = is_zone ? forge_ff_zone_rows(inst, zone_rows) : 0;
-		int max_props_row = is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS - 1 : is_tele ? (snap_row ? 6 : 5) :
+		int max_props_row = is_volume ? NUMBER_OF_FORGE_VOLUME_ROWS - 1 :
+			is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS - 1 : is_tele ? (snap_row ? 6 : 5) :
 			(is_zone ? FORGE_FF_ZONE_FIRST_ROW - 1 + zone_row_count :
-				(is_route_point ? 6 : (always_row >= 0 ? always_row : scale_row >= 0 ? scale_row :
+				(is_route_point ? 6 : (always_row >= 0 ? always_row : damage_row >= 0 ? damage_row :
+					scale_row >= 0 ? scale_row :
 					(test_drop_row >= 0 ? test_drop_row : ((is_ff_spawn || snap_row) ? 5 : 4)))));
 		/* (DONE and UNDO, side by side under the rows) */
 		int props_done = max_props_row + 1;
@@ -8410,7 +8602,41 @@ void forge_3d_update(float dt)
 		}
 		if (dir != 0)
 		{
-			if (is_ai_spawn)
+			if (is_volume)
+			{
+				if (g_forge.props_cursor < _forge_volume_row_rot_snap)
+				{
+					char what[96];
+
+					if (forge_volume_row_step(g_forge.grabbed_live_index, g_forge.props_cursor, dir))
+					{
+						forge_volume_describe(g_forge.grabbed_live_index, what, sizeof(what));
+						forge_set_status("%s", what);
+					}
+				}
+				else if (g_forge.props_cursor == _forge_volume_row_rot_snap)
+				{
+					g_forge.snap_mode = (enum forge_snap_angle_mode)((g_forge.snap_mode + NUMBER_OF_FORGE_SNAP_MODES + dir) % NUMBER_OF_FORGE_SNAP_MODES);
+				}
+				else if (g_forge.props_cursor == _forge_volume_row_floor)
+				{
+					cur_z = 1;
+				}
+				else if (g_forge.props_cursor == _forge_volume_row_delete && cur_enter && !prev_enter)
+				{
+					int map_volume = forge_volume_get(g_forge.grabbed_live_index)->map_index >= 0;
+
+					forge_3d_delete_instance(g_forge.grabbed_live_index, 1);
+					if (!map_volume)
+					{
+						g_forge.grabbed_live_index = -1;
+						g_forge.grabbed_object_index = NONE;
+						g_forge.active_modal = _forge_modal_none;
+						goto update_prev_keys;
+					}
+				}
+			}
+			else if (is_ai_spawn)
 			{
 				if (g_forge.props_cursor < NUMBER_OF_FORGE_AI_SETTING_ROWS)
 				{
@@ -8673,6 +8899,16 @@ void forge_3d_update(float dt)
 				forge_3d_scale_apply(g_forge.grabbed_live_index, scale);
 				forge_network_send_scale(g_forge.grabbed_live_index, forge_inst_scale(inst));
 			}
+			else if (g_forge.props_cursor == damage_row && damage_row >= 0)
+			{
+				struct object_datum *emitter = forge_valid_object_get(inst->object_index);
+				int deals = emitter && forge_volumes_tag_deals_damage(emitter->definition_index);
+
+				forge_3d_no_damage_apply(g_forge.grabbed_live_index, !inst->no_damage);
+				forge_network_send_no_damage(g_forge.grabbed_live_index, inst->no_damage);
+				forge_set_status("Deal damage %s%s", inst->no_damage ? "off: its fire burns no one" : "on",
+					deals || inst->no_damage ? "" : " (this emitter's effects deal none)");
+			}
 			else if (g_forge.props_cursor == always_row)
 			{
 				forge_3d_always_spawn_apply(g_forge.grabbed_live_index, !inst->always_spawn);
@@ -8689,7 +8925,8 @@ void forge_3d_update(float dt)
 	if (g_forge.mode == _forge_mode_3d_monitor)
 	{
 		float boost = ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) ? 2.5f : 1.0f;
-		float spd = g_forge.cam_speed * g_forge.controller_fly_speed * boost * dt;
+		/* (and the map's MONITOR SPEED: a big map's flown faster) */
+		float spd = g_forge.cam_speed * g_forge.controller_fly_speed * boost * dt * forge_map_settings_monitor_speed();
 		float dyaw = 0.0f, dpitch = 0.0f;
 		int rot_holding = 0;
 		real_vector3d fwd, up, right_vec;
@@ -9244,6 +9481,11 @@ void forge_3d_update(float dt)
 				{
 					forge_ai_spawn_label(inst, g_forge.hovered_object_label, sizeof(g_forge.hovered_object_label));
 				}
+				else if (inst->group_tag == FORGE_GROUP_VOLUME)
+				{
+					forge_volume_describe(g_forge.hovered_live_index, g_forge.hovered_object_label,
+						sizeof(g_forge.hovered_object_label));
+				}
 				else if (forge_ff_is_route_point(inst))
 				{
 					snprintf(g_forge.hovered_object_label, sizeof(g_forge.hovered_object_label),
@@ -9389,9 +9631,11 @@ void forge_3d_update(float dt)
 				{
 					g_forge_next_spawn_always = src_copy.always_spawn;
 					g_forge_next_spawn_scale = src_copy.scale;
+					/* (a copy of a map's volume is a box of Forge's) */
 					dup_idx = forge_3d_spawn_object_at(
 						src_copy.group_tag,
-						src_copy.tag_path,
+						src_copy.group_tag == FORGE_GROUP_VOLUME && !_stricmp(src_copy.tag_path, FORGE_VOLUME_MAP_PATH) ?
+							FORGE_VOLUME_BOX_PATH : src_copy.tag_path,
 						src_copy.source_cache_id,
 						src_copy.x, src_copy.y, src_copy.z,
 						src_copy.yaw, src_copy.pitch, src_copy.roll,
@@ -9399,6 +9643,22 @@ void forge_3d_update(float dt)
 						1);
 					if (dup_idx >= 0 && g_forge.live_instances[dup_idx].always_spawn)
 						forge_network_send_always_spawn(dup_idx, 1);
+					/* (a volume's shape, size and effect; an emitter's DEAL DAMAGE) */
+					if (dup_idx >= 0 && forge_volume_get(src_idx) && forge_volume_get(dup_idx))
+					{
+						struct forge_volume copy = *forge_volume_get(src_idx);
+
+						if (copy.shape == _forge_volume_map_box)
+							copy.shape = _forge_volume_box;
+						if (copy.effect == _forge_volume_map_script)
+							copy.effect = _forge_volume_insta_kill;
+						forge_volume_set(dup_idx, &copy, 1);
+					}
+					if (dup_idx >= 0 && src_copy.no_damage)
+					{
+						forge_3d_no_damage_apply(dup_idx, 1);
+						forge_network_send_no_damage(dup_idx, 1);
+					}
 					if (dup_idx >= 0 && g_forge.live_instances[dup_idx].scale > 0.0f)
 						forge_network_send_scale(dup_idx, g_forge.live_instances[dup_idx].scale);
 				}
@@ -9615,6 +9875,9 @@ void forge_3d_update(float dt)
 					&down_orig, &down_vec, ignore_grab, &gcoll))
 				{
 					tz = gcoll.point.z + 0.08f;
+					/* (a volume stands on the floor, its middle half its height up) */
+					if (forge_volume_get(g_forge.grabbed_live_index))
+						tz += forge_volume_get(g_forge.grabbed_live_index)->size[2] * 0.5f;
 					if (!prev_z)
 						forge_set_status("Snapping to Floor (Z=%.2f)", tz);
 				}
@@ -10025,7 +10288,7 @@ static void draw_teleporter_and_objective_markers(
 
 		if (!inst->active)
 			continue;
-		if (inst->group_tag != 'spwn' && inst->group_tag != 'tele' && inst->group_tag != 'flag' && inst->group_tag != 'ffsp' &&
+		if (inst->group_tag != 'spwn' && inst->group_tag != 'tele' && inst->group_tag != 'flag' && inst->group_tag != 'ffsp' && inst->group_tag != FORGE_GROUP_VOLUME &&
 			inst->group_tag != FORGE_GROUP_AI_SPAWN && !forge_tele_is(inst))
 			continue;
 
@@ -10299,7 +10562,8 @@ void forge_3d_draw_hud(
 		"FIREFIGHT",
 		"TELEPORTERS",
 		"EFFECTS",
-		"DECALS"
+		"DECALS",
+		"VOLUMES"
 	};
 	static char const *const snap_names[4] = { "OFF", "15 DEG", "45 DEG", "90 DEG" };
 	char buf[256];
@@ -10507,7 +10771,9 @@ void forge_3d_draw_hud(
 			{
 				snprintf(buf, sizeof(buf), "%s (%d/%d)",
 					(g_forge.current_category == _forge_cat_ai_squads && s_palette_ai_group != NONE) ?
-						forge_ai_group_name(s_palette_ai_group) : cat_names[g_forge.current_category],
+						forge_ai_group_name(s_palette_ai_group) :
+					(g_forge.current_category == _forge_cat_firefight && s_palette_ff_menu) ? "FIREFIGHT SPAWNS" :
+						cat_names[g_forge.current_category],
 					fcount > 0 ? (g_forge.palette_cursor + 1) : 0,
 					fcount);
 			}
@@ -10545,7 +10811,8 @@ void forge_3d_draw_hud(
 
 				/* (a group opens; its count means nothing) */
 				snprintf(buf, sizeof(buf),
-					ce->group_tag == FORGE_GROUP_AI_MENU || ce->group_tag == FORGE_GROUP_FOLDER ? ">" : "%d", placed_cnt);
+					ce->group_tag == FORGE_GROUP_AI_MENU || ce->group_tag == FORGE_GROUP_FOLDER ||
+					ce->group_tag == FORGE_GROUP_FF_MENU ? ">" : "%d", placed_cnt);
 				draw_ce_menu_str_box(0, font_index, (short)(rx1 - 56), (short)(ry0 + 1), (short)(rx1 - 10), ry1, 1 /* right */,
 					buf, row_col);
 
@@ -10592,13 +10859,17 @@ void forge_3d_draw_hud(
 			int test_drop_row = forge_is_drop_area(inst) ? (snap_row ? 6 : 5) : -1;
 			int always_row = forge_props_always_spawn_row(inst, snap_row, test_drop_row);
 			int scale_row = forge_props_scale_row(inst, snap_row, test_drop_row);
+			int damage_row = forge_props_damage_row(inst, scale_row);
+			int is_volume = forge_volume_is(g_forge.grabbed_live_index);
 			int zone_rows[FORGE_FF_ZONE_MAX_ROWS];
 			int zone_row_count = is_zone ? forge_ff_zone_rows(inst, zone_rows) : 0;
 			/* (a drop point's FACTIONS TO SPAWN page: its three, then BACK alone) */
 			int factions_page = is_zone && s_props_factions_open;
-			int row_count = factions_page ? 3 : is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS : is_tele ? (snap_row ? 7 : 6) :
+			int row_count = factions_page ? 3 : is_volume ? NUMBER_OF_FORGE_VOLUME_ROWS :
+				is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS : is_tele ? (snap_row ? 7 : 6) :
 				(is_zone ? FORGE_FF_ZONE_FIRST_ROW + zone_row_count :
-					(is_route_point ? 7 : (always_row >= 0 ? always_row + 1 : scale_row >= 0 ? scale_row + 1 :
+					(is_route_point ? 7 : (always_row >= 0 ? always_row + 1 : damage_row >= 0 ? damage_row + 1 :
+						scale_row >= 0 ? scale_row + 1 :
 						(test_drop_row >= 0 ? test_drop_row + 1 : ((is_ff_spawn || snap_row) ? 6 : 5)))));
 			short box_w = (short)(is_ai_spawn ? 372 : 312);
 			short box_h = (short)(34 + row_count * 28 + 50);
@@ -10615,11 +10886,29 @@ void forge_3d_draw_hud(
 			draw_ce_pause_box(px0, py0, box_w, box_h, 1);
 
 			draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 4),
-				factions_page ? "FACTIONS TO SPAWN" : is_ai_spawn ? "AI SPAWN" : (is_tele ? "TELEPORTER" :
+				factions_page ? "FACTIONS TO SPAWN" : is_volume ?
+					(forge_volume_get(g_forge.grabbed_live_index)->map_index >= 0 ? "MAP VOLUME" : "VOLUME") :
+					is_ai_spawn ? "AI SPAWN" : (is_tele ? "TELEPORTER" :
 					(is_route_point ? "DROPSHIP ROUTE" : (is_zone ? "ENEMY DROP POINT" :
-					(is_ff_spawn ? "FIREFIGHT SPAWN" : "OBJECT PROPERTIES")))), 0xFFFFFFFFu);
+					(is_ff_spawn ? forge_ff_spawn_kind_title(FORGE_FF_UNPACK_TYPE(inst->team_designator)) :
+						"OBJECT PROPERTIES")))), 0xFFFFFFFFu);
 
-			if (is_ai_spawn)
+			if (is_volume)
+			{
+				for (r = 0; r < _forge_volume_row_rot_snap; r++)
+				{
+					forge_volume_row_text(g_forge.grabbed_live_index, r,
+						labels[r], sizeof(labels[r]), values[r], sizeof(values[r]));
+				}
+				snprintf(labels[_forge_volume_row_rot_snap], sizeof(labels[0]), "ROT SNAP:");
+				snprintf(values[_forge_volume_row_rot_snap], sizeof(values[0]), "%s", snap_names[g_forge.snap_mode]);
+				snprintf(labels[_forge_volume_row_floor], sizeof(labels[0]), "DROP TO FLOOR");
+				values[_forge_volume_row_floor][0] = 0;
+				snprintf(labels[_forge_volume_row_delete], sizeof(labels[0]), "%s",
+					forge_volume_get(g_forge.grabbed_live_index)->map_index >= 0 ? "TURN OFF" : "DELETE OBJECT");
+				values[_forge_volume_row_delete][0] = 0;
+			}
+			else if (is_ai_spawn)
 			{
 				for (r = 0; r < NUMBER_OF_FORGE_AI_SETTING_ROWS; r++)
 				{
@@ -10692,9 +10981,23 @@ void forge_3d_draw_hud(
 			}
 			else if (is_ff_spawn)
 			{
-				snprintf(labels[0], sizeof(labels[0]), "SPAWN TYPE:");
-				snprintf(values[0], sizeof(values[0]), "%s",
-					forge_ff_spawn_type_label(FORGE_FF_UNPACK_TYPE(inst->team_designator)));
+				{
+					int ff_type = FORGE_FF_UNPACK_TYPE(inst->team_designator);
+
+					/* (vehicle AI's LIGHT or HEAVY; the rest's kind, which
+					FIREFIGHT SPAWNS chose) */
+					if (forge_ff_spawn_kind(ff_type) == _forge_ff_kind_vehicle)
+					{
+						snprintf(labels[0], sizeof(labels[0]), "VEHICLE AI:");
+						snprintf(values[0], sizeof(values[0]), "%s", ff_type == _forge_ff_spawn_enemy_ghost_only ? "LIGHT" :
+							ff_type == _forge_ff_spawn_enemy_heavy_veh ? "HEAVY" : "ANY");
+					}
+					else
+					{
+						snprintf(labels[0], sizeof(labels[0]), "SPAWN TYPE:");
+						snprintf(values[0], sizeof(values[0]), "%s", forge_ff_spawn_type_label(ff_type));
+					}
+				}
 				snprintf(labels[1], sizeof(labels[1]), "ROUNDS:");
 				snprintf(values[1], sizeof(values[1]), "%s",
 					forge_ff_round_filter_label(FORGE_FF_UNPACK_ROUND(inst->team_designator)));
@@ -10810,6 +11113,11 @@ void forge_3d_draw_hud(
 				{
 					snprintf(labels[scale_row], sizeof(labels[0]), "SCALE:");
 					snprintf(values[scale_row], sizeof(values[0]), "%.1fX", (double)forge_inst_scale(inst));
+				}
+				if (damage_row >= 0)
+				{
+					snprintf(labels[damage_row], sizeof(labels[0]), "DEAL DAMAGE:");
+					snprintf(values[damage_row], sizeof(values[0]), "%s", inst->no_damage ? "OFF" : "ON");
 				}
 			}
 

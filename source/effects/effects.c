@@ -172,6 +172,10 @@ symbols in this file:
 #include "tag_files/tag_groups.h"
 #include "units/bipeds.h"
 #include "units/units.h"
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
+#if OPENCE_ENABLE_FORGE
+int forge_volumes_effect_damage_blocked(long object_index);
+#endif
 #undef real_local_random
 
 /* ---------- constants */
@@ -1662,6 +1666,12 @@ static void effect_generate_part(
 	no damage, no sound (port/linux/game/skulls_outbreak.c) */
 	if ((skulls_effect_quiet && part_definition->runtime_base_class_tag == SOUND_DEFINITION_TAG) ||
 		(skulls_effect_harmless && part_definition->runtime_base_class_tag == DAMAGE_EFFECT_DEFINITION_TAG) ||
+#if OPENCE_ENABLE_FORGE
+		/* port: a Forge emitter whose DEAL DAMAGE is off: its fire burns no
+		one (port/forge/src/forge_volumes.c) */
+		(part_definition->runtime_base_class_tag == DAMAGE_EFFECT_DEFINITION_TAG &&
+			forge_volumes_effect_damage_blocked(effect->object_index)) ||
+#endif
 		/* port: and Floodfection's, no objects but garbage (its bits), which
 		each machine keeps for itself: a multiplayer game's clients would not
 		have the others (port/linux/game/infection.c) */
