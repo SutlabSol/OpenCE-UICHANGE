@@ -1490,22 +1490,28 @@ HEIGHT keeps its flying units (bipeds that fly: sentinels, drones) that high
 over the ground under them, pushed up as they sink and down as they climb far
 past it, the host's, each tick (forge_ai_units_update) */
 #define FORGE_AI_KEPT_UNITS 512
-/* (how far off the height is let be, in world units, before the push) */
-#define FORGE_AI_HOVER_BELOW 0.3f
-#define FORGE_AI_HOVER_ABOVE 3.0f
-/* (the fastest push, world units a tick: 2.5 a second up, 1.2 down) */
+/* (held there all the time, not pushed back once it strays, which made it
+bounce: its rise or fall is the height it is off by, times P, plus what it
+has been off by over time, times I, which takes up the engine's own pull
+down; world units a tick) */
+#define FORGE_AI_HOVER_P 0.06f
+#define FORGE_AI_HOVER_I 0.002f
+#define FORGE_AI_HOVER_BIAS (1.0f / (float)TICKS_PER_SECOND)
+/* (the fastest it is moved, world units a tick: 2.5 a second up, 1.5 down) */
 #define FORGE_AI_HOVER_RISE (2.5f / (float)TICKS_PER_SECOND)
-#define FORGE_AI_HOVER_SINK (1.2f / (float)TICKS_PER_SECOND)
+#define FORGE_AI_HOVER_SINK (1.5f / (float)TICKS_PER_SECOND)
 
 static struct
 {
 	long unit_index;
 	float height;
+	float bias;
 } s_ai_kept[FORGE_AI_KEPT_UNITS];
 static int s_ai_kept_count;
 static long s_ai_kept_tick = -1;
 
-/* HEIGHT's choices, world units over the ground (0: as the unit flies) */
+/* HEIGHT's choices, world units over the ground (0: none, the unit starts at
+its marker and flies as the engine has it) */
 static int16_t const s_ai_hover_heights[] = { 0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25 };
 
 /* (a height from a saved map or a peer: one of the choices, else the nearest
@@ -1562,6 +1568,7 @@ static void forge_ai_unit_keep(long unit_index, int entry_index)
 	}
 	s_ai_kept[s_ai_kept_count].unit_index = unit_index;
 	s_ai_kept[s_ai_kept_count].height = (float)entry->hover_height;
+	s_ai_kept[s_ai_kept_count].bias = 0.0f;
 	s_ai_kept_count++;
 }
 
@@ -1607,7 +1614,7 @@ void forge_ai_units_update(void)
 		struct unit_datum *unit = (struct unit_datum *)object_try_and_get_and_verify_type(s_ai_kept[i].unit_index,
 			_object_mask_biped);
 		float altitude, target = s_ai_kept[i].height;
-		real *velocity;
+		float error, rise;
 
 		/* (dead: let it fall) */
 		if (!unit || unit->unit.actor_index == NONE)
@@ -1616,25 +1623,18 @@ void forge_ai_units_update(void)
 		/* (held still: Forge mode's models, a vehicle's seat) */
 		if (unit->object.parent_object_index != NONE || !forge_ai_unit_altitude(s_ai_kept[i].unit_index, &altitude))
 			continue;
-		velocity = &unit->object.translational_velocity.k;
-		if (altitude < target - FORGE_AI_HOVER_BELOW)
-		{
-			float push = (target - altitude) * 0.08f;
-
-			if (push > FORGE_AI_HOVER_RISE)
-				push = FORGE_AI_HOVER_RISE;
-			if (*velocity < push)
-				*velocity = push;
-		}
-		else if (altitude > target + FORGE_AI_HOVER_ABOVE)
-		{
-			float push = (altitude - target - FORGE_AI_HOVER_ABOVE) * 0.04f;
-
-			if (push > FORGE_AI_HOVER_SINK)
-				push = FORGE_AI_HOVER_SINK;
-			if (*velocity > -push)
-				*velocity = -push;
-		}
+		error = target - altitude;
+		s_ai_kept[kept - 1].bias += error * FORGE_AI_HOVER_I;
+		if (s_ai_kept[kept - 1].bias > FORGE_AI_HOVER_BIAS)
+			s_ai_kept[kept - 1].bias = FORGE_AI_HOVER_BIAS;
+		else if (s_ai_kept[kept - 1].bias < -FORGE_AI_HOVER_BIAS)
+			s_ai_kept[kept - 1].bias = -FORGE_AI_HOVER_BIAS;
+		rise = error * FORGE_AI_HOVER_P + s_ai_kept[kept - 1].bias;
+		if (rise > FORGE_AI_HOVER_RISE)
+			rise = FORGE_AI_HOVER_RISE;
+		else if (rise < -FORGE_AI_HOVER_SINK)
+			rise = -FORGE_AI_HOVER_SINK;
+		unit->object.translational_velocity.k = rise;
 	}
 	s_ai_kept_count = kept;
 }
@@ -2266,10 +2266,8 @@ void forge_ai_spawn_row_text(int32_t live_idx, int row, char *label, size_t labe
 		break;
 	case _forge_ai_row_hover_height:
 		snprintf(label, label_size, "FLYING HEIGHT:");
-		if (entry->hover_height)
-			snprintf(value, value_size, "%d OVER GROUND", (int)entry->hover_height);
-		else
-			snprintf(value, value_size, "AS IT FLIES");
+		/* (0: where it starts, at the marker, and not held) */
+		snprintf(value, value_size, "%d UNITS", (int)entry->hover_height);
 		break;
 	}
 }
