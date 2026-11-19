@@ -7168,6 +7168,20 @@ void forge_3d_reset_session_tracking(void)
 }
 
 /* the instance made the grabbed one, as it is now */
+/* a volume pointed at by its edge (forge_volumes_pick_edge), and where on
+it; held, it keeps where it was taken from the reticle: the offset of its
+middle from that point */
+static struct
+{
+	int32_t live_idx;
+	float point[3];
+} s_volume_pick = { -1 };
+static struct
+{
+	int32_t live_idx;
+	float offset[3];
+} s_volume_grab = { -1 };
+
 static void forge_select_instance(int best)
 {
 	struct forge_live_instance *inst = &g_forge.live_instances[best];
@@ -7210,6 +7224,22 @@ static void forge_select_instance(int best)
 	g_forge.grab_yaw = inst->yaw;
 	g_forge.grab_pitch = inst->pitch;
 	g_forge.grab_roll = inst->roll;
+	/* (a volume taken by its edge: held there, its middle where it is) */
+	s_volume_grab.live_idx = -1;
+	if (best == s_volume_pick.live_idx && forge_volume_get(best))
+	{
+		float px = s_volume_pick.point[0] - g_forge.cam_x;
+		float py = s_volume_pick.point[1] - g_forge.cam_y;
+		float pz = s_volume_pick.point[2] - g_forge.cam_z;
+
+		s_volume_grab.live_idx = best;
+		s_volume_grab.offset[0] = inst->x - s_volume_pick.point[0];
+		s_volume_grab.offset[1] = inst->y - s_volume_pick.point[1];
+		s_volume_grab.offset[2] = inst->z - s_volume_pick.point[2];
+		g_forge.grab_distance = (float)sqrt((double)(px * px + py * py + pz * pz));
+		if (g_forge.grab_distance < 1.0f) g_forge.grab_distance = 1.0f;
+		if (g_forge.grab_distance > 30.0f) g_forge.grab_distance = 30.0f;
+	}
 }
 
 /* the settings closed on an instance that was not picked up: let go where it
@@ -9466,6 +9496,33 @@ void forge_3d_update(float dt)
 				}
 			}
 
+			/* A volume by its edges, when nothing else is pointed at: its middle
+			may be far off, in a wall or under the floor. As far as the first
+			surface the view meets, 30 world units at most */
+			s_volume_pick.live_idx = -1;
+			if (g_forge.hovered_live_index < 0 && g_forge.hovered_object_index == NONE)
+			{
+				float origin[3], direction[3], point[3];
+				int32_t picked;
+
+				origin[0] = g_forge.cam_x;
+				origin[1] = g_forge.cam_y;
+				origin[2] = g_forge.cam_z;
+				direction[0] = fwd.i;
+				direction[1] = fwd.j;
+				direction[2] = fwd.k;
+				picked = forge_volumes_pick_edge(origin, direction,
+					surface_distance < 30.0f ? surface_distance + 0.5f : 30.0f, point);
+				if (picked >= 0 && picked != g_forge.grabbed_live_index)
+				{
+					g_forge.hovered_live_index = picked;
+					s_volume_pick.live_idx = picked;
+					s_volume_pick.point[0] = point[0];
+					s_volume_pick.point[1] = point[1];
+					s_volume_pick.point[2] = point[2];
+				}
+			}
+
 			/* Update hovered_object_label for HUD display (including Player Spawns, Teleporters & KOTH/Oddball/CTF/Race markers) */
 			g_forge.hovered_object_label[0] = 0;
 			if (g_forge.hovered_live_index >= 0 && g_forge.hovered_live_index < g_forge.live_instance_count)
@@ -9854,6 +9911,13 @@ void forge_3d_update(float dt)
 				g_forge.ray_hit_x = tx;
 				g_forge.ray_hit_y = ty;
 				g_forge.ray_hit_z = tz;
+			}
+			/* (a volume taken by its edge: its middle as far from the reticle as it was) */
+			if (s_volume_grab.live_idx == g_forge.grabbed_live_index && s_volume_grab.live_idx >= 0)
+			{
+				tx += s_volume_grab.offset[0];
+				ty += s_volume_grab.offset[1];
+				tz += s_volume_grab.offset[2];
 			}
 
 			/* Hold Z to continuously snap held object to floor, then Click (or Enter) to place on ground! */

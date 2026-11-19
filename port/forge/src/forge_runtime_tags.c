@@ -7763,21 +7763,26 @@ static long get_or_create_translucent_marker_shader(int color_preset, int is_hig
 	if (color_preset < 0 || color_preset >= NUMBER_OF_MARKER_COLOR_PRESETS)
 		color_preset = _marker_color_ffa_yellow;
 
+	/* (is_highlighted 2 and 3: a faint tint, a volume's faces, and the one
+	pointed at a little less faint) */
+	if (is_highlighted < 0 || is_highlighted > 3)
+		is_highlighted = 1;
 	snprintf(shdr_name, sizeof(shdr_name), "forge\\markers\\shdr_%d_%d_%d",
-		color_preset, is_highlighted ? 1 : 0, is_z_prime ? 1 : 0);
+		color_preset, is_highlighted, is_z_prime ? 1 : 0);
 	shdr_idx = tag_loaded('soso', shdr_name);
 	if (shdr_idx != NONE)
 		return shdr_idx;
 
 	rgb = s_preset_rgb[color_preset];
-	alpha_byte = is_z_prime ? 0xFFu : (is_highlighted ? 0xB8u : 0x8Cu);
+	alpha_byte = is_z_prime ? 0xFFu : is_highlighted == 3 ? 0x40u : is_highlighted == 2 ? 0x24u :
+		(is_highlighted ? 0xB8u : 0x8Cu);
 	argb = (alpha_byte << 24) | rgb;
 	r_f = (float)((rgb >> 16) & 0xFFu) / 255.0f;
 	g_f = (float)((rgb >> 8) & 0xFFu) / 255.0f;
 	b_f = (float)(rgb & 0xFFu) / 255.0f;
 
 	snprintf(bitm_name, sizeof(bitm_name), "forge\\markers\\bitm_%d_%d_%d",
-		color_preset, is_highlighted ? 1 : 0, is_z_prime ? 1 : 0);
+		color_preset, is_highlighted, is_z_prime ? 1 : 0);
 	bitm_idx = tag_loaded('bitm', bitm_name);
 	if (bitm_idx == NONE)
 	{
@@ -7816,18 +7821,23 @@ static long get_or_create_translucent_marker_shader(int color_preset, int is_hig
 	*(int16_t *)(soso_def + 0x24) = 4; /* _shader_type_model */
 	/* Bit 1 = _shader_model_two_sided_bit, Bit 2 = _shader_model_not_alpha_tested_bit, Bit 3 = _shader_model_alpha_blended_decal_bit */
 	*(uint16_t *)(soso_def + 0x28) = is_z_prime ? ((1u << 1) | (1u << 2)) : ((1u << 1) | (1u << 2) | (1u << 3));
-	*(float *)(soso_def + 0x38) = is_highlighted ? 0.72f : 0.55f;
+	*(float *)(soso_def + 0x38) = is_highlighted == 3 ? 0.26f : is_highlighted == 2 ? 0.16f :
+		is_highlighted ? 0.72f : 0.55f;
 	*(int16_t *)(soso_def + 0x4C) = 0;
 	*(uint16_t *)(soso_def + 0x6C) = 1u; /* _shader_model_self_illumination_no_random_phase_bit */
 	*(int16_t *)(soso_def + 0x70) = 0;
 	*(int16_t *)(soso_def + 0x72) = 0;
 	*(float *)(soso_def + 0x74) = 1.0f;
-	*(float *)(soso_def + 0x78) = r_f * 0.34f;
-	*(float *)(soso_def + 0x7C) = g_f * 0.34f;
-	*(float *)(soso_def + 0x80) = b_f * 0.34f;
-	*(float *)(soso_def + 0x84) = r_f * 0.34f;
-	*(float *)(soso_def + 0x88) = g_f * 0.34f;
-	*(float *)(soso_def + 0x8C) = b_f * 0.34f;
+	{
+		float glow = is_highlighted >= 2 ? 0.2f : 0.34f;
+
+		*(float *)(soso_def + 0x78) = r_f * glow;
+		*(float *)(soso_def + 0x7C) = g_f * glow;
+		*(float *)(soso_def + 0x80) = b_f * glow;
+		*(float *)(soso_def + 0x84) = r_f * glow;
+		*(float *)(soso_def + 0x88) = g_f * glow;
+		*(float *)(soso_def + 0x8C) = b_f * glow;
+	}
 	*(float *)(soso_def + 0x9C) = 1.0f;
 	*(float *)(soso_def + 0xA0) = 1.0f;
 	*(int32_t *)(soso_def + 0xA4) = 'bitm';
@@ -8349,6 +8359,96 @@ static void draw_translucent_beam_3d(
 	rasterizer_model_end();
 }
 
+/* a parallelogram (a corner and its two sides) faintly tinted: the beam's
+box flattened onto it. Its x (0 to 1) along side_a, its y (-0.015 to 0.015)
+across side_b, its z (0.025 to 0.055) a sliver through it */
+static void draw_translucent_face_3d(float const *corner, float const *side_a, float const *side_b, int color_preset,
+	int highlighted)
+{
+	struct rasterizer_model_begin_parameters model_parameters;
+	union real_rgb_color change_colors[4];
+	real function_values[4];
+	struct real_matrix4x3 node_matrix;
+	long shader_index;
+	struct shader *shader;
+	float normal[3], length, sliver;
+	float la, lb;
+	int p;
+
+	if (!s_marker_meshes.meshes[_marker_mesh_koth_beam].valid ||
+		s_marker_meshes.meshes[_marker_mesh_koth_beam].part_count <= 0)
+		return;
+	normal[0] = side_a[1] * side_b[2] - side_a[2] * side_b[1];
+	normal[1] = side_a[2] * side_b[0] - side_a[0] * side_b[2];
+	normal[2] = side_a[0] * side_b[1] - side_a[1] * side_b[0];
+	length = (float)sqrt((double)(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]));
+	if (length < 0.000001f)
+		return;
+	shader_index = get_or_create_translucent_marker_shader(color_preset, highlighted ? 3 : 2, 0);
+	shader = shader_index != NONE ? shader_definition_get(shader_index) : NULL;
+	if (!shader)
+		return;
+
+	/* (a sliver 0.004 thick: up spans 0.03 of the mesh's z) */
+	sliver = 0.004f / 0.03f / length;
+	memset(&node_matrix, 0, sizeof(node_matrix));
+	node_matrix.scale = 1.0f;
+	node_matrix.forward.i = side_a[0];
+	node_matrix.forward.j = side_a[1];
+	node_matrix.forward.k = side_a[2];
+	node_matrix.left.i = side_b[0] / 0.03f;
+	node_matrix.left.j = side_b[1] / 0.03f;
+	node_matrix.left.k = side_b[2] / 0.03f;
+	node_matrix.up.i = normal[0] * sliver;
+	node_matrix.up.j = normal[1] * sliver;
+	node_matrix.up.k = normal[2] * sliver;
+	node_matrix.position.x = corner[0] + side_b[0] * 0.5f - node_matrix.up.i * 0.04f;
+	node_matrix.position.y = corner[1] + side_b[1] * 0.5f - node_matrix.up.j * 0.04f;
+	node_matrix.position.z = corner[2] + side_b[2] * 0.5f - node_matrix.up.k * 0.04f;
+
+	change_colors[0].red = change_colors[0].green = change_colors[0].blue = 1.0f;
+	change_colors[1] = change_colors[2] = change_colors[3] = change_colors[0];
+	function_values[0] = function_values[1] = function_values[2] = function_values[3] = 1.0f;
+
+	la = (float)sqrt((double)(side_a[0] * side_a[0] + side_a[1] * side_a[1] + side_a[2] * side_a[2]));
+	lb = (float)sqrt((double)(side_b[0] * side_b[0] + side_b[1] * side_b[1] + side_b[2] * side_b[2]));
+	memset(&model_parameters, 0, sizeof(model_parameters));
+	model_parameters.unique_identifier = NONE;
+	model_parameters.lighting.ambient_color.red = 0.90f;
+	model_parameters.lighting.ambient_color.green = 0.90f;
+	model_parameters.lighting.ambient_color.blue = 0.90f;
+	model_parameters.centroid.x = corner[0] + (side_a[0] + side_b[0]) * 0.5f;
+	model_parameters.centroid.y = corner[1] + (side_a[1] + side_b[1]) * 0.5f;
+	model_parameters.centroid.z = corner[2] + (side_a[2] + side_b[2]) * 0.5f;
+	model_parameters.radius = 0.5f * (la + lb) + 0.5f;
+	if (!render_frustum_sphere_visible(&render.frustum, (union real_point3d const *)&model_parameters.centroid,
+			model_parameters.radius))
+	{
+		return;
+	}
+	model_parameters.animation.colors = change_colors;
+	model_parameters.animation.values = function_values;
+	model_parameters.skinning.node_matrices = &node_matrix;
+	model_parameters.skinning.node_matrix_count = 1;
+	model_parameters.geometry_flags = (1u << 2); /* _rasterizer_geometry_no_fog_bit */
+	model_parameters.base_map_scale.i = 1.0f;
+	model_parameters.base_map_scale.j = 1.0f;
+
+	rasterizer_model_begin(&model_parameters, FALSE);
+	for (p = 0; p < s_marker_meshes.meshes[_marker_mesh_koth_beam].part_count; p++)
+	{
+		rasterizer_model_draw(
+			shader,
+			0,
+			&s_marker_meshes.meshes[_marker_mesh_koth_beam].parts[p].triangle_buffer,
+			NONE,
+			s_marker_meshes.meshes[_marker_mesh_koth_beam].parts[p].triangle_buffer.count,
+			&s_marker_meshes.meshes[_marker_mesh_koth_beam].parts[p].vertex_buffer,
+			NONE);
+	}
+	rasterizer_model_end();
+}
+
 static void draw_dropship_route_piece(float const *from, float const *to, int kind)
 {
 	static int const colors[] = {
@@ -8405,6 +8505,14 @@ static void draw_volume_line(float const *from, float const *to, int color, int 
 		return;
 	}
 	draw_translucent_beam_3d(&p0, &p1, colors[color >= 0 && color < 3 ? color : 0], highlighted ? 2.5f : 1.25f);
+}
+
+/* a volume's face, faintly tinted in its edges' color */
+static void draw_volume_face(float const *corner, float const *side_a, float const *side_b, int color, int highlighted)
+{
+	static int const colors[] = { _marker_color_koth_gold, _marker_color_red_team, _marker_color_blue_team };
+
+	draw_translucent_face_3d(corner, side_a, side_b, colors[color >= 0 && color < 3 ? color : 0], highlighted);
 }
 
 /* the model of a Firefight generator, as a match shows it
@@ -8537,7 +8645,7 @@ static void render_world_objective_and_spawn_markers(void)
 		return;
 
 	forge_3d_dropship_routes_render(draw_dropship_route_piece);
-	forge_volumes_render(draw_volume_line);
+	forge_volumes_render(draw_volume_line, draw_volume_face);
 
 	/* An AI spawn's other units, where they will start: models, not objects, so
 	nothing can pick them up and they cost none of the level's objects */

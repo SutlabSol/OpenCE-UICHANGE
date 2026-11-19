@@ -741,12 +741,285 @@ void forge_volumes_update(void)
 	volumes_hurt(ticks);
 }
 
-void forge_volumes_render(void (*draw_line)(float const *from, float const *to, int color, int highlighted))
+/* ---------- the shapes' geometry: edges (lines) and faces (parallelograms:
+a corner and its two sides), in the world, for drawing and picking */
+
+enum
 {
-	enum
+	VOLUME_RING_SEGMENTS = 20,
+	/* (a sphere's faces: bands of latitude, each of segments; a cylinder's
+	caps: strips across) */
+	VOLUME_SPHERE_BANDS = 8,
+	VOLUME_SPHERE_SEGMENTS = 14,
+	VOLUME_CAP_STRIPS = 8
+};
+
+struct volume_frame
+{
+	struct forge_live_instance const *inst;
+	real_vector3d forward, left, up;
+	float hx, hy, hz;
+};
+
+static void volume_frame_make(struct forge_live_instance const *inst, struct forge_volume const *volume,
+	struct volume_frame *frame)
+{
+	frame->inst = inst;
+	euler_basis(inst->yaw, inst->pitch, inst->roll, &frame->forward, &frame->left, &frame->up);
+	frame->hx = volume->size[0] * 0.5f;
+	frame->hy = volume->size[1] * 0.5f;
+	frame->hz = volume->size[2] * 0.5f;
+}
+
+/* a point of the volume's frame (along forward, left, up from its middle) in the world */
+static void frame_point(struct volume_frame const *frame, float a, float b, float c, float out[3])
+{
+	out[0] = frame->inst->x + frame->forward.i * a + frame->left.i * b + frame->up.i * c;
+	out[1] = frame->inst->y + frame->forward.j * a + frame->left.j * b + frame->up.j * c;
+	out[2] = frame->inst->z + frame->forward.k * a + frame->left.k * b + frame->up.k * c;
+}
+
+/* a direction of the frame in the world */
+static void frame_vector(struct volume_frame const *frame, float a, float b, float c, float out[3])
+{
+	out[0] = frame->forward.i * a + frame->left.i * b + frame->up.i * c;
+	out[1] = frame->forward.j * a + frame->left.j * b + frame->up.j * c;
+	out[2] = frame->forward.k * a + frame->left.k * b + frame->up.k * c;
+}
+
+/* a point on an ellipsoid's surface: at latitude lat (-pi/2 to pi/2) and longitude lon */
+static void sphere_point(struct volume_frame const *frame, float lat, float lon, float out[3])
+{
+	float c = (float)cos((double)lat);
+
+	frame_point(frame, frame->hx * c * (float)cos((double)lon), frame->hy * c * (float)sin((double)lon),
+		frame->hz * (float)sin((double)lat), out);
+}
+
+/* each edge of a volume */
+static void volume_edges(struct forge_volume const *volume, struct volume_frame const *frame,
+	void (*edge)(void *context, float const *from, float const *to), void *context)
+{
+	float hx = frame->hx, hy = frame->hy, hz = frame->hz;
+	int k;
+
+	if (volume->shape == _forge_volume_box || volume->shape == _forge_volume_map_box)
 	{
-		RING_SEGMENTS = 20
-	};
+		static signed char const corners[8][3] = {
+			{ -1, -1, -1 }, { 1, -1, -1 }, { 1, 1, -1 }, { -1, 1, -1 },
+			{ -1, -1, 1 }, { 1, -1, 1 }, { 1, 1, 1 }, { -1, 1, 1 }
+		};
+		static unsigned char const edges[12][2] = {
+			{ 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 }, { 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 4 },
+			{ 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 }
+		};
+
+		for (k = 0; k < 12; k++)
+		{
+			float from[3], to[3];
+			signed char const *a = corners[edges[k][0]];
+			signed char const *b = corners[edges[k][1]];
+
+			frame_point(frame, hx * a[0], hy * a[1], hz * a[2], from);
+			frame_point(frame, hx * b[0], hy * b[1], hz * b[2], to);
+			edge(context, from, to);
+		}
+		return;
+	}
+	{
+		/* (a cylinder: its two rings and four sides; a sphere: its three great rings) */
+		int rings = volume->shape == _forge_volume_cylinder ? 2 : 3;
+		int ring;
+
+		for (ring = 0; ring < rings; ring++)
+		{
+			for (k = 0; k < VOLUME_RING_SEGMENTS; k++)
+			{
+				float a0 = (float)k * 6.2831853f / (float)VOLUME_RING_SEGMENTS;
+				float a1 = (float)(k + 1) * 6.2831853f / (float)VOLUME_RING_SEGMENTS;
+				float c0 = (float)cos((double)a0), s0 = (float)sin((double)a0);
+				float c1 = (float)cos((double)a1), s1 = (float)sin((double)a1);
+				float from[3], to[3];
+
+				if (volume->shape == _forge_volume_cylinder)
+				{
+					float h = ring == 0 ? -hz : hz;
+
+					frame_point(frame, hx * c0, hy * s0, h, from);
+					frame_point(frame, hx * c1, hy * s1, h, to);
+				}
+				else if (ring == 0)
+				{
+					frame_point(frame, hx * c0, hy * s0, 0.0f, from);
+					frame_point(frame, hx * c1, hy * s1, 0.0f, to);
+				}
+				else if (ring == 1)
+				{
+					frame_point(frame, hx * c0, 0.0f, hz * s0, from);
+					frame_point(frame, hx * c1, 0.0f, hz * s1, to);
+				}
+				else
+				{
+					frame_point(frame, 0.0f, hy * c0, hz * s0, from);
+					frame_point(frame, 0.0f, hy * c1, hz * s1, to);
+				}
+				edge(context, from, to);
+			}
+		}
+		if (volume->shape == _forge_volume_cylinder)
+		{
+			for (k = 0; k < 4; k++)
+			{
+				float angle = (float)k * 1.5707963f;
+				float from[3], to[3];
+
+				frame_point(frame, hx * (float)cos((double)angle), hy * (float)sin((double)angle), -hz, from);
+				frame_point(frame, hx * (float)cos((double)angle), hy * (float)sin((double)angle), hz, to);
+				edge(context, from, to);
+			}
+		}
+	}
+}
+
+/* each face of a volume, as parallelograms (a corner, and its two sides from
+it): a box's six, a cylinder's side in panels and its caps in strips, a
+sphere's in bands of panels */
+static void volume_faces(struct forge_volume const *volume, struct volume_frame const *frame,
+	void (*face)(void *context, float const *corner, float const *side_a, float const *side_b), void *context)
+{
+	float hx = frame->hx, hy = frame->hy, hz = frame->hz;
+	float corner[3], a[3], b[3];
+	int k;
+
+	if (volume->shape == _forge_volume_box || volume->shape == _forge_volume_map_box)
+	{
+		int axis, sign;
+
+		for (axis = 0; axis < 3; axis++)
+		{
+			for (sign = -1; sign <= 1; sign += 2)
+			{
+				float half[3] = { hx, hy, hz };
+				float at[3], side_a[3] = { 0.0f, 0.0f, 0.0f }, side_b[3] = { 0.0f, 0.0f, 0.0f };
+				int u = (axis + 1) % 3, v = (axis + 2) % 3;
+
+				at[axis] = half[axis] * (float)sign;
+				at[u] = -half[u];
+				at[v] = -half[v];
+				side_a[u] = 2.0f * half[u];
+				side_b[v] = 2.0f * half[v];
+				frame_point(frame, at[0], at[1], at[2], corner);
+				frame_vector(frame, side_a[0], side_a[1], side_a[2], a);
+				frame_vector(frame, side_b[0], side_b[1], side_b[2], b);
+				face(context, corner, a, b);
+			}
+		}
+		return;
+	}
+	if (volume->shape == _forge_volume_cylinder)
+	{
+		for (k = 0; k < VOLUME_RING_SEGMENTS; k++)
+		{
+			float a0 = (float)k * 6.2831853f / (float)VOLUME_RING_SEGMENTS;
+			float a1 = (float)(k + 1) * 6.2831853f / (float)VOLUME_RING_SEGMENTS;
+			float next[3];
+
+			frame_point(frame, hx * (float)cos((double)a0), hy * (float)sin((double)a0), -hz, corner);
+			frame_point(frame, hx * (float)cos((double)a1), hy * (float)sin((double)a1), -hz, next);
+			a[0] = next[0] - corner[0];
+			a[1] = next[1] - corner[1];
+			a[2] = next[2] - corner[2];
+			frame_vector(frame, 0.0f, 0.0f, 2.0f * hz, b);
+			face(context, corner, a, b);
+		}
+		/* (each cap in strips across its forward axis, each as wide as the
+		ellipse at its middle) */
+		for (k = 0; k < VOLUME_CAP_STRIPS; k++)
+		{
+			float u0 = -1.0f + 2.0f * (float)k / (float)VOLUME_CAP_STRIPS;
+			float um = u0 + 1.0f / (float)VOLUME_CAP_STRIPS;
+			float w = (float)sqrt((double)MAX(0.0f, 1.0f - um * um));
+			int cap;
+
+			for (cap = -1; cap <= 1; cap += 2)
+			{
+				frame_point(frame, hx * u0, -hy * w, hz * (float)cap, corner);
+				frame_vector(frame, hx * 2.0f / (float)VOLUME_CAP_STRIPS, 0.0f, 0.0f, a);
+				frame_vector(frame, 0.0f, 2.0f * hy * w, 0.0f, b);
+				face(context, corner, a, b);
+			}
+		}
+		return;
+	}
+	{
+		int band;
+
+		for (band = 0; band < VOLUME_SPHERE_BANDS; band++)
+		{
+			float lat0 = -1.5707963f + 3.1415927f * (float)band / (float)VOLUME_SPHERE_BANDS;
+			float lat1 = -1.5707963f + 3.1415927f * (float)(band + 1) / (float)VOLUME_SPHERE_BANDS;
+
+			for (k = 0; k < VOLUME_SPHERE_SEGMENTS; k++)
+			{
+				float lon0 = 6.2831853f * (float)k / (float)VOLUME_SPHERE_SEGMENTS;
+				float lon1 = 6.2831853f * (float)(k + 1) / (float)VOLUME_SPHERE_SEGMENTS;
+				float p01[3], p10[3];
+
+				/* (a band's panel from its wider edge's corner: the poles' bands
+				are triangles, drawn as their wide edge's panel narrowing nowhere,
+				so they're a little over) */
+				if (band < VOLUME_SPHERE_BANDS / 2)
+				{
+					sphere_point(frame, lat1, lon0, corner);
+					sphere_point(frame, lat1, lon1, p01);
+					sphere_point(frame, lat0, (lon0 + lon1) * 0.5f, p10);
+				}
+				else
+				{
+					sphere_point(frame, lat0, lon0, corner);
+					sphere_point(frame, lat0, lon1, p01);
+					sphere_point(frame, lat1, (lon0 + lon1) * 0.5f, p10);
+				}
+				a[0] = p01[0] - corner[0];
+				a[1] = p01[1] - corner[1];
+				a[2] = p01[2] - corner[2];
+				/* (towards the other edge, from the side's middle) */
+				b[0] = p10[0] - (corner[0] + a[0] * 0.5f);
+				b[1] = p10[1] - (corner[1] + a[1] * 0.5f);
+				b[2] = p10[2] - (corner[2] + a[2] * 0.5f);
+				face(context, corner, a, b);
+			}
+		}
+	}
+}
+
+/* the drawing's: what each volume's lines and faces are drawn with */
+struct volume_draw_context
+{
+	void (*draw_line)(float const *from, float const *to, int color, int highlighted);
+	void (*draw_face)(float const *corner, float const *side_a, float const *side_b, int color, int highlighted);
+	int color;
+	int highlighted;
+};
+
+static void volume_draw_edge(void *context, float const *from, float const *to)
+{
+	struct volume_draw_context const *draw = (struct volume_draw_context const *)context;
+
+	draw->draw_line(from, to, draw->color, draw->highlighted);
+}
+
+static void volume_draw_face(void *context, float const *corner, float const *side_a, float const *side_b)
+{
+	struct volume_draw_context const *draw = (struct volume_draw_context const *)context;
+
+	draw->draw_face(corner, side_a, side_b, draw->color, draw->highlighted);
+}
+
+void forge_volumes_render(
+	void (*draw_line)(float const *from, float const *to, int color, int highlighted),
+	void (*draw_face)(float const *corner, float const *side_a, float const *side_b, int color, int highlighted))
+{
 	int32_t i;
 
 	if (!draw_line)
@@ -755,104 +1028,123 @@ void forge_volumes_render(void (*draw_line)(float const *from, float const *to, 
 	{
 		struct forge_live_instance const *inst = volume_instance(i);
 		struct forge_volume const *volume = &s_volumes[i];
-		real_vector3d forward, left, up;
-		float hx, hy, hz;
-		int color, hi;
-		int k;
-
-#define VOLUME_POINT(out, a, b, c) \
-	do { \
-		(out)[0] = inst->x + forward.i * (a) + left.i * (b) + up.i * (c); \
-		(out)[1] = inst->y + forward.j * (a) + left.j * (b) + up.j * (c); \
-		(out)[2] = inst->z + forward.k * (a) + left.k * (b) + up.k * (c); \
-	} while (0)
+		struct volume_frame frame;
+		struct volume_draw_context draw;
 
 		if (!inst)
 			continue;
-		euler_basis(inst->yaw, inst->pitch, inst->roll, &forward, &left, &up);
-		hx = volume->size[0] * 0.5f;
-		hy = volume->size[1] * 0.5f;
-		hz = volume->size[2] * 0.5f;
-		color = volume->effect == _forge_volume_insta_kill || volume->effect == _forge_volume_map_script ? _volume_color_kill :
-			volume->effect == _forge_volume_off ? _volume_color_off : _volume_color_damage;
-		hi = i == g_forge.grabbed_live_index || i == g_forge.hovered_live_index;
-		if (volume->shape == _forge_volume_box || volume->shape == _forge_volume_map_box)
-		{
-			static signed char const corners[8][3] = {
-				{ -1, -1, -1 }, { 1, -1, -1 }, { 1, 1, -1 }, { -1, 1, -1 },
-				{ -1, -1, 1 }, { 1, -1, 1 }, { 1, 1, 1 }, { -1, 1, 1 }
-			};
-			static unsigned char const edges[12][2] = {
-				{ 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 }, { 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 4 },
-				{ 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 }
-			};
-
-			for (k = 0; k < 12; k++)
-			{
-				float from[3], to[3];
-				signed char const *a = corners[edges[k][0]];
-				signed char const *b = corners[edges[k][1]];
-
-				VOLUME_POINT(from, hx * a[0], hy * a[1], hz * a[2]);
-				VOLUME_POINT(to, hx * b[0], hy * b[1], hz * b[2]);
-				draw_line(from, to, color, hi);
-			}
-		}
-		else
-		{
-			/* (a cylinder: its two rings and four sides; a sphere: its three
-			great rings) */
-			int rings = volume->shape == _forge_volume_cylinder ? 2 : 3;
-			int ring;
-
-			for (ring = 0; ring < rings; ring++)
-			{
-				for (k = 0; k < RING_SEGMENTS; k++)
-				{
-					float a0 = (float)k * 6.2831853f / (float)RING_SEGMENTS;
-					float a1 = (float)(k + 1) * 6.2831853f / (float)RING_SEGMENTS;
-					float from[3], to[3];
-
-					if (volume->shape == _forge_volume_cylinder)
-					{
-						float h = ring == 0 ? -hz : hz;
-
-						VOLUME_POINT(from, hx * (float)cos(a0), hy * (float)sin(a0), h);
-						VOLUME_POINT(to, hx * (float)cos(a1), hy * (float)sin(a1), h);
-					}
-					else if (ring == 0)
-					{
-						VOLUME_POINT(from, hx * (float)cos(a0), hy * (float)sin(a0), 0.0f);
-						VOLUME_POINT(to, hx * (float)cos(a1), hy * (float)sin(a1), 0.0f);
-					}
-					else if (ring == 1)
-					{
-						VOLUME_POINT(from, hx * (float)cos(a0), 0.0f, hz * (float)sin(a0));
-						VOLUME_POINT(to, hx * (float)cos(a1), 0.0f, hz * (float)sin(a1));
-					}
-					else
-					{
-						VOLUME_POINT(from, 0.0f, hy * (float)cos(a0), hz * (float)sin(a0));
-						VOLUME_POINT(to, 0.0f, hy * (float)cos(a1), hz * (float)sin(a1));
-					}
-					draw_line(from, to, color, hi);
-				}
-			}
-			if (volume->shape == _forge_volume_cylinder)
-			{
-				for (k = 0; k < 4; k++)
-				{
-					float angle = (float)k * 1.5707963f;
-					float from[3], to[3];
-
-					VOLUME_POINT(from, hx * (float)cos(angle), hy * (float)sin(angle), -hz);
-					VOLUME_POINT(to, hx * (float)cos(angle), hy * (float)sin(angle), hz);
-					draw_line(from, to, color, hi);
-				}
-			}
-		}
-#undef VOLUME_POINT
+		volume_frame_make(inst, volume, &frame);
+		draw.draw_line = draw_line;
+		draw.draw_face = draw_face;
+		draw.color = volume->effect == _forge_volume_insta_kill || volume->effect == _forge_volume_map_script ?
+			_volume_color_kill : volume->effect == _forge_volume_off ? _volume_color_off : _volume_color_damage;
+		draw.highlighted = i == g_forge.grabbed_live_index || i == g_forge.hovered_live_index;
+		if (draw_face)
+			volume_faces(volume, &frame, volume_draw_face, &draw);
+		volume_edges(volume, &frame, volume_draw_edge, &draw);
 	}
+}
+
+/* ---------- picking a volume by its edges */
+
+struct volume_pick_context
+{
+	float origin[3];
+	float direction[3]; /* unit */
+	float max_along;
+	/* the best edge so far: its closeness (its distance from the view over
+	what it may be at that far), and the point on the view's ray */
+	float score;
+	float point[3];
+	int found;
+};
+
+/* an edge against the view's ray: the closest two points of the line and
+the segment, and how far apart they are */
+static void volume_pick_edge(void *context, float const *from, float const *to)
+{
+	struct volume_pick_context *pick = (struct volume_pick_context *)context;
+	float const *d1 = pick->direction;
+	float d2[3], r[3];
+	float b, c, e, f, denominator, along, t;
+	float on_ray[3], on_edge[3], gap[3];
+	float distance, tolerance;
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		d2[k] = to[k] - from[k];
+		r[k] = pick->origin[k] - from[k];
+	}
+	b = d1[0] * d2[0] + d1[1] * d2[1] + d1[2] * d2[2];
+	c = d1[0] * r[0] + d1[1] * r[1] + d1[2] * r[2];
+	e = d2[0] * d2[0] + d2[1] * d2[1] + d2[2] * d2[2];
+	f = d2[0] * r[0] + d2[1] * r[1] + d2[2] * r[2];
+	if (e < 0.0001f)
+		return;
+	/* (closest points of the ray O + d1 s, s >= 0, and the segment A + d2 t,
+	t in 0..1; the ray's direction is unit) */
+	denominator = e - b * b;
+	{
+		float s = denominator > 0.000001f ? (b * f - c * e) / denominator : -c;
+
+		if (s < 0.0f)
+			s = 0.0f;
+		t = PIN((b * s + f) / e, 0.0f, 1.0f);
+		s = b * t - c;
+		along = s > 0.0f ? s : 0.0f;
+	}
+	if (along < 0.5f || along > pick->max_along)
+		return;
+	for (k = 0; k < 3; k++)
+	{
+		on_ray[k] = pick->origin[k] + d1[k] * along;
+		on_edge[k] = from[k] + d2[k] * t;
+		gap[k] = on_ray[k] - on_edge[k];
+	}
+	distance = (float)sqrt((double)(gap[0] * gap[0] + gap[1] * gap[1] + gap[2] * gap[2]));
+	/* (a little wider the further away it is, as it looks the same) */
+	tolerance = 0.2f + 0.025f * along;
+	if (distance > tolerance || distance / tolerance >= pick->score)
+		return;
+	pick->score = distance / tolerance;
+	pick->found = 1;
+	for (k = 0; k < 3; k++)
+		pick->point[k] = on_edge[k];
+}
+
+int32_t forge_volumes_pick_edge(float const origin[3], float const direction[3], float max_along, float out_point[3])
+{
+	struct volume_pick_context pick;
+	int32_t best = -1;
+	int32_t i;
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		pick.origin[k] = origin[k];
+		pick.direction[k] = direction[k];
+	}
+	pick.max_along = max_along;
+	pick.score = 1.0f;
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *inst = volume_instance(i);
+		struct volume_frame frame;
+
+		if (!inst)
+			continue;
+		volume_frame_make(inst, &s_volumes[i], &frame);
+		pick.found = 0;
+		volume_edges(&s_volumes[i], &frame, volume_pick_edge, &pick);
+		if (pick.found)
+		{
+			best = i;
+			for (k = 0; k < 3; k++)
+				out_point[k] = pick.point[k];
+		}
+	}
+	return best;
 }
 
 int forge_volumes_tag_deals_damage(long definition_index)

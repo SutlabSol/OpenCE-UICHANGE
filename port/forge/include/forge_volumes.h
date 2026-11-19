@@ -151,9 +151,18 @@ int forge_volume_packet(int32_t live_idx, char *text, unsigned long size);
 void forge_volumes_update(void);
 
 /* their shapes in the world, in Forge mode (forge_runtime_tags.c's world
-pass): each edge a line drawn by `draw_line` (`color` a marker color
-preset, `highlighted` the one held or pointed at) */
-void forge_volumes_render(void (*draw_line)(float const *from, float const *to, int color, int highlighted));
+pass): each edge a line drawn by `draw_line`, and their faces tinted by
+`draw_face` as parallelograms (a corner and its two sides); `color` is the
+effect's (0 hurts, 1 kills, 2 does nothing), `highlighted` the one held or
+pointed at */
+void forge_volumes_render(
+	void (*draw_line)(float const *from, float const *to, int color, int highlighted),
+	void (*draw_face)(float const *corner, float const *side_a, float const *side_b, int color, int highlighted));
+/* the volume whose edge the view's ray passes closest to (within a margin
+that widens with distance), no further along it than max_along (the first
+surface it meets): its live index, and the point on that edge it was picked
+at; -1 for none */
+int32_t forge_volumes_pick_edge(float const origin[3], float const direction[3], float max_along, float out_point[3]);
 
 /* whether an emitter's tag deals damage: one of its effects' parts is a
 damage effect (DEAL DAMAGE shows for it) */
