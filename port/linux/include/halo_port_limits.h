@@ -200,9 +200,12 @@ damage's place, pulling every machine's physics) and an AI spawn's PLAYERS'
 teams (!FA:'s team 6-8: ALL PLAYERS, RED, BLUE); 108 Forge's ONE WAY volumes
 (!FW:'s effect 6), a GRAVITY volume's FALL DAMAGE OFF (!FW:'s flags, an eighth
 field) and a scenery's COLLISION off (!FK:); 109 a volume's FALL DAMAGE
-VANILLA/LANDING/EXIT and REMOVE INERTIA (!FW:'s flags 1-2, 4), on any volume. A Firefight game is always of this signature
+VANILLA/LANDING/EXIT and REMOVE INERTIA (!FW:'s flags 1-2, 4), on any volume; 110 Forge's
+AI PATROL volumes (!FW:'s effect 7, the number in its flags' top bits), AI route
+points ('airt' markers, all of a point in its !FH:/!FU: team) and an AI spawn's
+GOAL (!FJ:). A Firefight game is always of this signature
 (network_server_message_handler.c) */
-#define HALO_PORT_MOD_NETWORK_VERSION 109
+#define HALO_PORT_MOD_NETWORK_VERSION 110
 #define HALO_PORT_MODDED_VERSION_MARK 0xFF00
 #define HALO_PORT_ADVERTISED_MODDED_VERSION (HALO_PORT_MODDED_VERSION_MARK | HALO_PORT_MOD_NETWORK_VERSION)
 

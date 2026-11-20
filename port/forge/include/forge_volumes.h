@@ -96,6 +96,11 @@ enum forge_volume_effect
 	/* (after the others: saved maps and older peers keep their numbers) */
 	_forge_volume_gravity,
 	_forge_volume_one_way,
+	/* AI PATROL: no effect on what is in it; the ground in it is where the AI
+	spawns linked to it (their GOAL's PATROL VOLUME) roam, by its number, and
+	`damage` is its PURSUIT RANGE (world units past its sides they chase out
+	to) */
+	_forge_volume_ai_patrol,
 	NUMBER_OF_FORGE_VOLUME_EFFECTS
 };
 
@@ -130,8 +135,19 @@ enum
 	NUMBER_OF_FORGE_VOLUME_FALL_MODES = 3,
 	/* REMOVE INERTIA: a biped coming into it stops */
 	FORGE_VOLUME_FLAG_STOP_INERTIA = 1 << 2,
-	FORGE_VOLUME_FLAGS_ALL = FORGE_VOLUME_FALL_MASK | FORGE_VOLUME_FLAG_STOP_INERTIA
+	/* an AI PATROL volume's number (1 to 31, given as it becomes one, never
+	changed; 0: none), in the top five bits, so the saved line and !FW: carry
+	it as they carry the flags */
+	FORGE_VOLUME_PATROL_SHIFT = 3,
+	FORGE_VOLUME_PATROL_MASK = 0x1F << 3,
+	FORGE_VOLUME_PATROL_MAX = 31,
+	FORGE_VOLUME_FLAGS_ALL = FORGE_VOLUME_FALL_MASK | FORGE_VOLUME_FLAG_STOP_INERTIA | FORGE_VOLUME_PATROL_MASK
 };
+
+#define FORGE_VOLUME_PATROL_NUMBER(flags) ((((int)(flags)) & FORGE_VOLUME_PATROL_MASK) >> FORGE_VOLUME_PATROL_SHIFT)
+/* (an AI PATROL volume's PURSUIT RANGE: a new one's, and the most) */
+#define FORGE_VOLUME_PURSUIT_DEFAULT 10.0f
+#define FORGE_VOLUME_PURSUIT_MAX 100.0f
 
 /* ---------- structures */
 
@@ -228,8 +244,8 @@ int forge_volumes_one_way_floor(float const from[3], float to[3], float velocity
 /* their shapes in the world, in Forge mode (forge_runtime_tags.c's world
 pass): each edge a line drawn by `draw_line`, and their faces tinted by
 `draw_face` as parallelograms (a corner and its two sides); `color` is the
-effect's (0 hurts, 1 kills, 2 does nothing, 3 pulls, 4 is ONE WAY), `highlighted` the one held or
-pointed at */
+effect's (0 hurts, 1 kills, 2 does nothing, 3 pulls, 4 is ONE WAY, 5 is AI PATROL,
+6 its PURSUIT RANGE, drawn round it), `highlighted` the one held or pointed at */
 void forge_volumes_render(
 	void (*draw_line)(float const *from, float const *to, int color, int highlighted),
 	void (*draw_face)(float const *corner, float const *side_a, float const *side_b, int color, int highlighted));
@@ -238,6 +254,20 @@ that widens with distance), no further along it than max_along (the first
 surface it meets): its live index, and the point on that edge it was picked
 at; -1 for none */
 int32_t forge_volumes_pick_edge(float const origin[3], float const direction[3], float max_along, float out_point[3]);
+
+/* ---------- AI PATROL volumes (forge_ai.c's goals) */
+
+/* the live index of the AI PATROL volume of this number, -1 for none */
+int32_t forge_volume_patrol_find(int number);
+/* the AI PATROL volumes' numbers, lowest first: how many (at most `max`) */
+int forge_volumes_patrol_numbers(int *numbers, int max);
+/* the lowest number no AI PATROL volume has, 0 when all have one */
+int forge_volume_patrol_free_number(void);
+/* whether a point is in a volume of this shape, standing at `position` turned
+by yaw, pitch and roll (radians) and of `size` (each axis's), each side `margin`
+further out */
+int forge_volume_shape_contains(int shape, float const position[3], float yaw, float pitch, float roll,
+	float const size[3], float margin, float const point[3]);
 
 /* whether an emitter's tag deals damage: one of its effects' parts is a
 damage effect (DEAL DAMAGE shows for it) */

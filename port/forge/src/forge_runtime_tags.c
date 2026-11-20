@@ -57,6 +57,7 @@
 #include "forge_engine.h"
 #include "forge_map_settings.h"
 #include "forge_volumes.h"
+#include "forge_ai_routes.h"
 
 #undef fopen
 #undef fclose
@@ -1652,6 +1653,8 @@ void forge_runtime_reload_catalogs(void)
 	add_ff_preset("infantry_ai", "[FF] Infantry AI", FORGE_FF_PACK_USAGE(_forge_ff_spawn_ai_infantry_only, 0, 0));
 	add_ff_preset("vehicle_ai", "[FF] Vehicle AI", FORGE_FF_PACK_USAGE(_forge_ff_spawn_enemy_ghost_only, 0, 0));
 	add_ff_preset("enemy_drop", "[FF] Enemy Drop", FORGE_FF_PACK_USAGE(FF_DROP_SPAWN_TYPE_ANY, 0, 0));
+	/* (the AI's routes, in the Actors tab: forge_ai_routes.c) */
+	add_catalog_entry(FORGE_GROUP_AI_ROUTE, _forge_cat_ai_squads, 1, FORGE_AI_ROUTE_PATH, "[AI] AI Route");
 	/* (damage and kill volumes: forge_volumes.c) */
 	add_catalog_entry(FORGE_GROUP_VOLUME, _forge_cat_volumes, 1, FORGE_VOLUME_BOX_PATH, "[VOLUME] Box Volume");
 	add_catalog_entry(FORGE_GROUP_VOLUME, _forge_cat_volumes, 1, FORGE_VOLUME_CYLINDER_PATH, "[VOLUME] Cylinder Volume");
@@ -6006,6 +6009,11 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 		{
 			forge_volumes_load_line(line);
 		}
+		/* (an AI route's point: forge_ai_routes.c) */
+		else if (in_forge_state && strncmp(line, "AI_ROUTE|", 9) == 0)
+		{
+			forge_ai_routes_load_line(line);
+		}
 		else if (in_forge_state && strncmp(line, "OBJECT_SCALE|", 13) == 0)
 		{
 			scale = (float)atof(line + 13);
@@ -8171,6 +8179,14 @@ static int resolve_marker_kind_and_color(
 		*out_color_preset = _marker_color_oddball_purple;
 		return 1;
 	}
+	/* (an AI route's point: its start green, the rest blue) */
+	if (group_tag == FORGE_GROUP_AI_ROUTE)
+	{
+		*out_mesh_kind = _marker_mesh_firefight_spawn;
+		*out_color_preset = FORGE_AI_ROUTE_ORDER(team_designator) == 0 ? _marker_color_tele_green :
+			_marker_color_blue_team;
+		return 1;
+	}
 	if (group_tag == FORGE_GROUP_AI_SPAWN)
 	{
 		*out_mesh_kind = _marker_mesh_firefight_spawn;
@@ -8505,12 +8521,16 @@ static void draw_dropship_route_piece(float const *from, float const *to, int ki
 }
 
 /* a volume's edge (forge_volumes_render): red where it kills, gold where it
-hurts, grey-blue where it does nothing, purple where it pulls (GRAVITY, and
-its arrow); thicker for the one held or pointed at */
+hurts (and ONE WAY), grey-blue where it does nothing, purple where it pulls
+(GRAVITY, and its arrow), green round an AI PATROL, and thin blue round its
+PURSUIT RANGE; thicker for the one held or pointed at */
+static int const s_volume_line_colors[] = { _marker_color_koth_gold, _marker_color_red_team, _marker_color_blue_team,
+	_marker_color_oddball_purple, _marker_color_koth_gold, _marker_color_tele_green, _marker_color_blue_team };
+#define VOLUME_LINE_COLOR_PURSUIT 6
+
 static void draw_volume_line(float const *from, float const *to, int color, int highlighted)
 {
-	static int const colors[] = { _marker_color_koth_gold, _marker_color_red_team, _marker_color_blue_team,
-		_marker_color_oddball_purple };
+	int const count = (int)(sizeof(s_volume_line_colors) / sizeof(s_volume_line_colors[0]));
 	union real_point3d p0, p1, middle;
 	float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
 
@@ -8528,16 +8548,56 @@ static void draw_volume_line(float const *from, float const *to, int color, int 
 	{
 		return;
 	}
-	draw_translucent_beam_3d(&p0, &p1, colors[color >= 0 && color < 4 ? color : 0], highlighted ? 2.5f : 1.25f);
+	draw_translucent_beam_3d(&p0, &p1, s_volume_line_colors[color >= 0 && color < count ? color : 0],
+		color == VOLUME_LINE_COLOR_PURSUIT ? 0.75f : highlighted ? 2.5f : 1.25f);
 }
 
 /* a volume's face, faintly tinted in its edges' color */
 static void draw_volume_face(float const *corner, float const *side_a, float const *side_b, int color, int highlighted)
 {
-	static int const colors[] = { _marker_color_koth_gold, _marker_color_red_team, _marker_color_blue_team,
-		_marker_color_oddball_purple };
+	int const count = (int)(sizeof(s_volume_line_colors) / sizeof(s_volume_line_colors[0]));
 
-	draw_translucent_face_3d(corner, side_a, side_b, colors[color >= 0 && color < 4 ? color : 0], highlighted);
+	draw_translucent_face_3d(corner, side_a, side_b, s_volume_line_colors[color >= 0 && color < count ? color : 0],
+		highlighted);
+}
+
+/* an AI route's piece (forge_ai_routes_render): green on its way, blue on a
+LOOP's way back; thicker for the route held or pointed at */
+static void draw_ai_route_line(float const *from, float const *to, int color, int highlighted)
+{
+	union real_point3d p0, p1, middle;
+	float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
+
+	p0.x = from[0];
+	p0.y = from[1];
+	p0.z = from[2];
+	p1.x = to[0];
+	p1.y = to[1];
+	p1.z = to[2];
+	middle.x = (p0.x + p1.x) * 0.5f;
+	middle.y = (p0.y + p1.y) * 0.5f;
+	middle.z = (p0.z + p1.z) * 0.5f;
+	if (!render_frustum_sphere_visible(&render.frustum, &middle,
+			(float)sqrt((double)(dx * dx + dy * dy + dz * dz)) * 0.5f + 1.0f))
+	{
+		return;
+	}
+	draw_translucent_beam_3d(&p0, &p1, color == 1 ? _marker_color_blue_team : _marker_color_tele_green,
+		highlighted ? 2.5f : 1.5f);
+}
+
+/* an AI spawn's line to its goal (forge_ai_goal_links_render): gold */
+static void draw_ai_goal_link(float const *from, float const *to)
+{
+	union real_point3d p0, p1;
+
+	p0.x = from[0];
+	p0.y = from[1];
+	p0.z = from[2];
+	p1.x = to[0];
+	p1.y = to[1];
+	p1.z = to[2];
+	draw_translucent_beam_3d(&p0, &p1, _marker_color_koth_gold, 2.0f);
 }
 
 /* the model of a Firefight generator, as a match shows it
@@ -8567,6 +8627,7 @@ static void render_world_objective_and_spawn_markers(void)
 			continue;
 		if (inst->group_tag != 'spwn' && inst->group_tag != 'tele' && inst->group_tag != 'flag' && inst->group_tag != 'ffsp' &&
 			inst->group_tag != FORGE_GROUP_AI_SPAWN && inst->group_tag != FORGE_GROUP_VOLUME &&
+			inst->group_tag != FORGE_GROUP_AI_ROUTE &&
 			inst->group_tag != 'vehi' && inst->group_tag != 'weap' &&
 			inst->group_tag != 'eqip' && inst->group_tag != 'effe' && inst->group_tag != 'deca' &&
 			!is_forge_particle_emitter_tag(inst->group_tag, inst->tag_path))
@@ -8671,6 +8732,8 @@ static void render_world_objective_and_spawn_markers(void)
 
 	forge_3d_dropship_routes_render(draw_dropship_route_piece);
 	forge_volumes_render(draw_volume_line, draw_volume_face);
+	forge_ai_routes_render(draw_ai_route_line);
+	forge_ai_goal_links_render(draw_ai_goal_link);
 
 	/* An AI spawn's other units, where they will start: models, not objects, so
 	nothing can pick them up and they cost none of the level's objects */
@@ -8835,7 +8898,8 @@ static void render_spawn_palette_3d_preview(long object_index, void const *light
 		if (chosen_idx >= 0 && (g_forge.catalog[chosen_idx].group_tag == FORGE_GROUP_AI_MENU ||
 			g_forge.catalog[chosen_idx].group_tag == FORGE_GROUP_FOLDER ||
 			g_forge.catalog[chosen_idx].group_tag == FORGE_GROUP_FF_MENU ||
-			g_forge.catalog[chosen_idx].group_tag == FORGE_GROUP_VOLUME))
+			g_forge.catalog[chosen_idx].group_tag == FORGE_GROUP_VOLUME ||
+			g_forge.catalog[chosen_idx].group_tag == FORGE_GROUP_AI_ROUTE))
 		{
 			chosen_idx = -1;
 		}

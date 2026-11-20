@@ -219,6 +219,16 @@ symbols in this file:
 #include "ai/props.h"
 #include "game/game.h"
 #include "halo_firefight.h"
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
+
+/* port: a Forge AI spawn's goal walks a straight line where it finds no path,
+as Firefight's AI do (port/forge/src/forge_ai.c) */
+#if OPENCE_ENABLE_FORGE
+extern boolean forge_ai_actor_walks_straight(long actor_index);
+#define forge_ai_walks_straight(actor_index) forge_ai_actor_walks_straight(actor_index)
+#else
+#define forge_ai_walks_straight(actor_index) FALSE
+#endif
 #include "main/console.h"
 #include "physics/collision_bsp.h"
 #include "physics/collisions.h"
@@ -2073,7 +2083,7 @@ boolean actor_path_refresh(
 					actor->control.path.destination_original_distance = distance;
 
 				if (!success &&
-					firefight_active() &&
+					(firefight_active() || forge_ai_walks_straight(actor_index)) &&
 					!actor->state.flying &&
 					(destination_type == _destination_prop ||
 						destination_type == _destination_raw_location))

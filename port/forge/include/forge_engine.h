@@ -611,12 +611,61 @@ enum forge_ai_spawn_row
 	_forge_ai_row_spawn_effect,
 	_forge_ai_row_cloaked,
 	_forge_ai_row_hover_height,
+	/* (GOAL >: opens the goal's page) */
+	_forge_ai_row_goal_page,
 	NUMBER_OF_FORGE_AI_SETTING_ROWS,
 	_forge_ai_row_rot_snap = NUMBER_OF_FORGE_AI_SETTING_ROWS,
 	_forge_ai_row_floor,
 	_forge_ai_row_delete,
+	/* the goal's page: GOAL, then what it has of PATROL VOLUME or ROUTE (the
+	target row), WHO, START DISTANCE and FOLLOW DISTANCE, then BACK */
+	_forge_ai_row_goal,
+	_forge_ai_row_goal_target,
+	_forge_ai_row_goal_who,
+	_forge_ai_row_goal_start,
+	_forge_ai_row_goal_follow,
+	_forge_ai_row_goal_back,
 	NUMBER_OF_FORGE_AI_ROWS
 };
+
+/* an AI spawn's GOAL (forge_ai_spawn_entry.goal): what its units do when they
+are not fighting */
+enum forge_ai_goal
+{
+	/* (as ever: they stand, and fight from around the spawn) */
+	_forge_ai_goal_none = 0,
+	/* roam the ground in an AI PATROL volume (goal_link its number), each unit
+	from point to point of its own; they chase out to its PURSUIT RANGE */
+	_forge_ai_goal_patrol,
+	/* walk an AI route (goal_link its number): a leader walks it, the others
+	follow the leader */
+	_forge_ai_goal_route,
+	/* go for the nearest player of goal_who once farther than goal_start */
+	_forge_ai_goal_hunt,
+	/* keep near the nearest player of goal_who: once farther than goal_start,
+	back to goal_follow from them */
+	_forge_ai_goal_follow,
+	NUMBER_OF_FORGE_AI_GOALS
+};
+
+/* whom HUNT and FOLLOW go for (goal_who) */
+enum
+{
+	_forge_ai_goal_who_any = 0,
+	_forge_ai_goal_who_red,
+	_forge_ai_goal_who_blue,
+	NUMBER_OF_FORGE_AI_GOAL_WHO
+};
+
+/* the rows an AI spawn's panel shows (the goal's page's while it is open),
+how many */
+int forge_ai_spawn_rows(int32_t live_idx, int *rows);
+/* a spawn's goal, as the network has it (!FJ:) */
+void forge_ai_spawn_goal_apply(int32_t live_idx, int goal, int link, int who, int start, int follow);
+/* the spawns' lines to their goals, in Forge mode: those of a spawn held or
+pointed at, and those of all the spawns linked to a route or AI PATROL volume
+held or pointed at */
+void forge_ai_goal_links_render(void (*draw_line)(float const *from, float const *to));
 
 int32_t forge_ai_spawn_unit_live(
 	char const *actor_variant_path,
@@ -648,7 +697,9 @@ int forge_ai_spawn_settings_get(int32_t live_idx, struct forge_ai_spawn_entry *s
 void forge_ai_spawn_settings_set(int32_t live_idx, struct forge_ai_spawn_entry const *settings);
 void forge_ai_spawn_copy_settings(int source_entry, int32_t live_idx);
 void forge_ai_spawn_row_text(int32_t live_idx, int row, char *label, size_t label_size, char *value, size_t value_size);
-void forge_ai_spawn_row_step(int32_t live_idx, int row, int dir);
+/* a row stepped: 0, or FORGE_AI_ROUTE_PRESS_PAGE_OPENED/CLOSED (forge_ai_routes.h)
+for the goal's page opened or closed */
+int forge_ai_spawn_row_step(int32_t live_idx, int row, int dir);
 void forge_ai_spawn_label(struct forge_live_instance const *inst, char *text, size_t text_size);
 void forge_ai_spawn_net_apply(
 	int32_t live_idx,

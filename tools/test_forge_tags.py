@@ -241,9 +241,9 @@ def test_ai_spawns_rebuild_the_encounters_and_are_saved_and_shared():
     assert "#undef free" in forge_ai and "#undef malloc" in forge_ai
     # the fields the saved line writes are the fields it reads, in order
     written = re.search(r'"AI_SPAWN\|([^"]+)\\r\\n"', builder).group(1)
-    # (the spawn effect, CLOAKED and HEIGHT are last and read apart: an empty weapon stops the scan short of
-    # them)
-    trailing = "|fx=%d|ck=%d|ht=%d"
+    # (the spawn effect, CLOAKED, HEIGHT and the GOAL are last and read apart: an empty weapon stops the scan
+    # short of them)
+    trailing = "|fx=%d|ck=%d|ht=%d|gl=%d|gn=%d|gw=%d|gs=%d|gf=%d"
     assert written.endswith(trailing)
     assert all(f'strstr(cur, "|{key}=")' in forge_ai for key in ("fx", "ck", "ht"))
     written = written[:-len(trailing)]

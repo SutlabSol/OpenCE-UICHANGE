@@ -56,6 +56,7 @@ symbols in this file:
 #include "scenario/scenario_definitions.h"
 #include "units/unit_definitions.h"
 #include "units/units.h"
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
 
 /* ---------- constants */
 
@@ -222,6 +223,22 @@ static short action_alert_next_position(
 {
 	struct actor_datum *actor = actor_get(actor_index);
 	short result = NONE;
+
+	/* port: a Forge AI spawn's ROUTE: its first point first, the nearest after
+	a fight, a stop at a STAY AT END route's last, and its leader alone walks it
+	(port/forge/src/forge_ai.c) */
+#if OPENCE_ENABLE_FORGE
+	if (!actor->input.vehicle_passenger && move_position_order != _move_position_order_none)
+	{
+		extern short forge_ai_route_next_position(long actor_index, short move_position_order,
+			short current_position_index, boolean *handled);
+		boolean handled = FALSE;
+		short forced = forge_ai_route_next_position(actor_index, move_position_order, current_position_index, &handled);
+
+		if (handled)
+			return forced;
+	}
+#endif
 
 	if (actor->input.vehicle_passenger ||
 		move_position_order == _move_position_order_none)

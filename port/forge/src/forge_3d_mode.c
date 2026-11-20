@@ -51,6 +51,7 @@
 #include "forge_engine.h"
 #include "forge_map_settings.h"
 #include "forge_volumes.h"
+#include "forge_ai_routes.h"
 #include "halo_ui_pointer.h"
 
 extern int halo_forge_pointer_update(int wanted, struct halo_ui_pointer *pointer);
@@ -3498,6 +3499,16 @@ int32_t forge_3d_spawn_object_at_slot(
 		if (broadcast_net)
 			forge_set_status("Placed %s", what);
 	}
+	else if (group_tag == FORGE_GROUP_AI_ROUTE)
+	{
+		/* (a route point is no object: its route, place, behavior and wait are
+		its team number, forge_ai_routes.h) */
+		inst->object_index = NONE;
+		inst->edit_entry_index = -1;
+		forge_ai_route_spawned(live_idx, broadcast_net);
+		if (!inst->active)
+			return -1;
+	}
 	else if (group_tag == 'tele')
 	{
 		/* _netgame_flag_teleport_from = 6, _netgame_flag_teleport_to = 7 */
@@ -3961,6 +3972,12 @@ void forge_3d_delete_instance(int32_t live_idx, int broadcast_net)
 	{
 		forge_ai_spawn_deleted(inst);
 	}
+	else if (inst->group_tag == FORGE_GROUP_AI_ROUTE)
+	{
+		/* (the route's others numbered on again, here; the others hear of each) */
+		if (broadcast_net)
+			forge_ai_route_point_deleted(FORGE_AI_ROUTE_NUMBER(inst->team_designator));
+	}
 	else if (inst->is_default_scenario_object)
 	{
 		forge_ensure_default_object_edit_entry(inst);
@@ -4114,6 +4131,12 @@ void forge_3d_marker_usage_apply(int32_t live_idx, int16_t usage)
 	if (forge_tele_is(&g_forge.live_instances[live_idx]))
 	{
 		forge_tele_apply(live_idx, ((uint16_t)usage >> 8) & 3, usage & 0xFF);
+		return;
+	}
+	/* (an AI route's point: forge_ai_routes.h) */
+	if (forge_ai_route_is(&g_forge.live_instances[live_idx]))
+	{
+		forge_ai_route_usage_apply(live_idx, usage);
 		return;
 	}
 	/* (an effect spot's REPEAT: its seconds) */
@@ -5289,6 +5312,12 @@ static int get_filtered_catalog_indices(int *out_indices, int max_out)
 		return get_filtered_catalog_indices_for_cat(g_forge.current_category, out_indices, max_out);
 	if (s_palette_ai_group == NONE)
 	{
+		/* (AI ROUTE first: a route's two points, not an actor) */
+		for (i = 0; i < g_forge.catalog_count && count < max_out; i++)
+		{
+			if (g_forge.catalog[i].group_tag == FORGE_GROUP_AI_ROUTE && forge_catalog_entry_allowed(&g_forge.catalog[i]))
+				out_indices[count++] = i;
+		}
 		for (group = 0; group < forge_ai_group_count(); group++)
 		{
 			int row_index = -1, ranks = 0;
@@ -5297,8 +5326,8 @@ static int get_filtered_catalog_indices(int *out_indices, int max_out)
 			{
 				struct forge_catalog_entry const *row = &g_forge.catalog[i];
 
-				if (row->category != _forge_cat_ai_squads || forge_ai_row_group(row) != group ||
-					!forge_catalog_entry_allowed(row))
+				if (row->category != _forge_cat_ai_squads || row->group_tag == FORGE_GROUP_AI_ROUTE ||
+					forge_ai_row_group(row) != group || !forge_catalog_entry_allowed(row))
 				{
 					continue;
 				}
@@ -7245,6 +7274,7 @@ void forge_3d_reset_session_tracking(void)
 	forge_3d_history_clear();
 	s_route_props_live_idx = -1;
 	g_forge.route_follow_live_index = -1;
+	forge_ai_routes_level_reset();
 	if (s_route_test_flying)
 		forge_ff_test_stop();
 	s_route_test_flying = 0;
@@ -8923,6 +8953,9 @@ void forge_3d_update(float dt)
 					g_forge.cam_yaw, pitch, 0.0f,
 					ff_preset ? (int16_t)ce->preset : 0,
 					1);
+				/* (an AI route: its second point, which follows the first while it is held) */
+				if (spawned_idx >= 0 && ce->group_tag == FORGE_GROUP_AI_ROUTE)
+					forge_ai_route_begin(spawned_idx);
 			}
 
 			/* Hitting Enter confirms the previewed item and attaches it to the placement beam */
@@ -8958,6 +8991,7 @@ void forge_3d_update(float dt)
 	}
 
 	forge_ff_routes_update(dt);
+	forge_ai_routes_update();
 
 	/* Halo 3 Object Properties Modal (Points 5, 6, 8, 13: Team for Spawns/CTF, Reference/Channel ID for Teleporters & Objectives, Firefight Spawn options, Spawn Gametype Mode for objects) */
 	if (g_forge.active_modal == _forge_modal_object_properties && g_forge.grabbed_live_index >= 0)
@@ -8982,10 +9016,17 @@ void forge_3d_update(float dt)
 		int collision_row = forge_props_collision_row(inst, scale_row, damage_row);
 		/* (a volume's own rows: forge_volumes.h's) */
 		int is_volume = forge_volume_is(g_forge.grabbed_live_index);
+		/* (an AI spawn's and a route point's rows as shown: each has a page) */
+		int is_ai_route = forge_ai_route_is(inst);
+		int ai_rows[NUMBER_OF_FORGE_AI_ROWS];
+		int ai_row_count = is_ai_spawn ? forge_ai_spawn_rows(g_forge.grabbed_live_index, ai_rows) : 0;
+		int route_rows[NUMBER_OF_FORGE_AI_ROUTE_ROWS];
+		int route_row_count = is_ai_route ? forge_ai_route_rows(g_forge.grabbed_live_index, route_rows) : 0;
 		int zone_rows[FORGE_FF_ZONE_MAX_ROWS];
 		int zone_row_count = is_zone ? forge_ff_zone_rows(inst, zone_rows) : 0;
 		int max_props_row = is_volume ? NUMBER_OF_FORGE_VOLUME_ROWS - 1 :
-			is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS - 1 : is_tele ? (snap_row ? 6 : 5) :
+			is_ai_route ? route_row_count - 1 :
+			is_ai_spawn ? ai_row_count - 1 : is_tele ? (snap_row ? 6 : 5) :
 			(is_zone ? FORGE_FF_ZONE_FIRST_ROW - 1 + zone_row_count :
 				(is_route_point ? 6 : (always_row >= 0 ? always_row : collision_row >= 0 ? collision_row :
 					damage_row >= 0 ? damage_row : scale_row >= 0 ? scale_row :
@@ -9122,27 +9163,84 @@ void forge_3d_update(float dt)
 					}
 				}
 			}
-			else if (is_ai_spawn)
+			else if (is_ai_route)
 			{
-				if (g_forge.props_cursor < NUMBER_OF_FORGE_AI_SETTING_ROWS)
-				{
-					forge_ai_spawn_row_step(g_forge.grabbed_live_index, g_forge.props_cursor, dir);
-				}
-				else if (g_forge.props_cursor == _forge_ai_row_rot_snap)
+				int row = g_forge.props_cursor < route_row_count ? route_rows[g_forge.props_cursor] : -1;
+
+				if (row == _forge_ai_route_row_rot_snap)
 				{
 					g_forge.snap_mode = (enum forge_snap_angle_mode)((g_forge.snap_mode + NUMBER_OF_FORGE_SNAP_MODES + dir) % NUMBER_OF_FORGE_SNAP_MODES);
 				}
-				else if (g_forge.props_cursor == _forge_ai_row_floor)
+				else if (row == _forge_ai_route_row_floor)
 				{
 					cur_z = 1;
 				}
-				else if (g_forge.props_cursor == _forge_ai_row_delete && cur_enter && !prev_enter)
+				else if (row == _forge_ai_route_row_delete && cur_enter && !prev_enter)
 				{
 					forge_3d_delete_instance(g_forge.grabbed_live_index, 1);
 					g_forge.grabbed_live_index = -1;
 					g_forge.grabbed_object_index = NONE;
 					g_forge.active_modal = _forge_modal_none;
 					goto update_prev_keys;
+				}
+				else if (row >= 0)
+				{
+					int press = forge_ai_route_row_press(g_forge.grabbed_live_index, row, dir, cur_enter && !prev_enter);
+
+					if (press == FORGE_AI_ROUTE_PRESS_PAGE_OPENED)
+					{
+						g_forge.props_cursor = 0;
+					}
+					else if (press == FORGE_AI_ROUTE_PRESS_PAGE_CLOSED)
+					{
+						int rows[NUMBER_OF_FORGE_AI_ROUTE_ROWS];
+						int count = forge_ai_route_rows(g_forge.grabbed_live_index, rows), k;
+
+						for (k = 0; k < count; k++)
+						{
+							if (rows[k] == _forge_ai_route_row_settings)
+								g_forge.props_cursor = k;
+						}
+					}
+					else if (press == FORGE_AI_ROUTE_PRESS_DELETED)
+					{
+						g_forge.grabbed_live_index = -1;
+						g_forge.grabbed_object_index = NONE;
+						g_forge.active_modal = _forge_modal_none;
+						goto update_prev_keys;
+					}
+				}
+			}
+			else if (is_ai_spawn)
+			{
+				int row = g_forge.props_cursor < ai_row_count ? ai_rows[g_forge.props_cursor] : -1;
+
+				if (row == _forge_ai_row_rot_snap)
+				{
+					g_forge.snap_mode = (enum forge_snap_angle_mode)((g_forge.snap_mode + NUMBER_OF_FORGE_SNAP_MODES + dir) % NUMBER_OF_FORGE_SNAP_MODES);
+				}
+				else if (row == _forge_ai_row_floor)
+				{
+					cur_z = 1;
+				}
+				else if (row == _forge_ai_row_delete && cur_enter && !prev_enter)
+				{
+					forge_3d_delete_instance(g_forge.grabbed_live_index, 1);
+					g_forge.grabbed_live_index = -1;
+					g_forge.grabbed_object_index = NONE;
+					g_forge.active_modal = _forge_modal_none;
+					goto update_prev_keys;
+				}
+				/* (GOAL > and BACK open and close the goal's page on a press) */
+				else if (row >= 0 && ((row != _forge_ai_row_goal_page && row != _forge_ai_row_goal_back) ||
+					(cur_enter && !prev_enter)))
+				{
+					int press = forge_ai_spawn_row_step(g_forge.grabbed_live_index, row, dir);
+
+					if (press == FORGE_AI_ROUTE_PRESS_PAGE_OPENED)
+						g_forge.props_cursor = 0;
+					else if (press == FORGE_AI_ROUTE_PRESS_PAGE_CLOSED)
+						g_forge.props_cursor = _forge_ai_row_goal_page;
 				}
 			}
 			else if (is_tele)
@@ -10008,6 +10106,11 @@ void forge_3d_update(float dt)
 					forge_volume_describe(g_forge.hovered_live_index, g_forge.hovered_object_label,
 						sizeof(g_forge.hovered_object_label));
 				}
+				else if (forge_ai_route_is(inst))
+				{
+					forge_ai_route_describe(g_forge.hovered_live_index, g_forge.hovered_object_label,
+						sizeof(g_forge.hovered_object_label));
+				}
 				else if (forge_ff_is_route_point(inst))
 				{
 					snprintf(g_forge.hovered_object_label, sizeof(g_forge.hovered_object_label),
@@ -10142,6 +10245,12 @@ void forge_3d_update(float dt)
 					else
 						forge_set_status("This Leg of the Route Is Full (%d Points)", FF_ROUTE_MAX_LEG_POINTS);
 				}
+				else if (forge_ai_route_is(&src_copy))
+				{
+					/* (a copied AI route point is the next point along: room made for it) */
+					dup_usage = forge_ai_route_copy_usage(src_idx);
+					dup_allowed = dup_usage != 0;
+				}
 				else if (forge_ff_is_dropship_zone(&src_copy) && FF_ROUTE_ID(src_copy.team_designator) != 0)
 				{
 					/* A copied zone starts a route of its own */
@@ -10174,6 +10283,17 @@ void forge_3d_update(float dt)
 							copy.shape = _forge_volume_box;
 						if (copy.effect == _forge_volume_map_script)
 							copy.effect = _forge_volume_insta_kill;
+						/* (an AI PATROL copy is a patrol of its own number) */
+						if (copy.effect == _forge_volume_ai_patrol)
+						{
+							int number = forge_volume_patrol_free_number();
+
+							copy.flags = (uint8_t)(copy.flags & ~FORGE_VOLUME_PATROL_MASK);
+							if (number > 0)
+								copy.flags = (uint8_t)(copy.flags | (number << FORGE_VOLUME_PATROL_SHIFT));
+							else
+								copy.effect = _forge_volume_off;
+						}
 						forge_volume_set(dup_idx, &copy, 1);
 					}
 					if (dup_idx >= 0 && src_copy.no_damage)
@@ -10823,7 +10943,7 @@ static void draw_teleporter_and_objective_markers(
 		if (!inst->active)
 			continue;
 		if (inst->group_tag != 'spwn' && inst->group_tag != 'tele' && inst->group_tag != 'flag' && inst->group_tag != 'ffsp' && inst->group_tag != FORGE_GROUP_VOLUME &&
-			inst->group_tag != FORGE_GROUP_AI_SPAWN && !forge_tele_is(inst))
+			inst->group_tag != FORGE_GROUP_AI_SPAWN && inst->group_tag != FORGE_GROUP_AI_ROUTE && !forge_tele_is(inst))
 			continue;
 
 		is_hi = (i == g_forge.grabbed_live_index || i == g_forge.hovered_live_index ||
@@ -10831,11 +10951,14 @@ static void draw_teleporter_and_objective_markers(
 		if (!is_hi)
 			continue;
 
-		if (inst->group_tag == FORGE_GROUP_AI_SPAWN)
+		if (inst->group_tag == FORGE_GROUP_AI_SPAWN || inst->group_tag == FORGE_GROUP_AI_ROUTE)
 		{
 			char ai_lbl[96];
 
-			forge_ai_spawn_label(inst, ai_lbl, sizeof(ai_lbl));
+			if (inst->group_tag == FORGE_GROUP_AI_ROUTE)
+				forge_ai_route_describe(i, ai_lbl, sizeof(ai_lbl));
+			else
+				forge_ai_spawn_label(inst, ai_lbl, sizeof(ai_lbl));
 			wpt.x = inst->x;
 			wpt.y = inst->y;
 			wpt.z = inst->z + 0.14f;
@@ -11396,17 +11519,23 @@ void forge_3d_draw_hud(
 			int damage_row = forge_props_damage_row(inst, scale_row);
 			int collision_row = forge_props_collision_row(inst, scale_row, damage_row);
 			int is_volume = forge_volume_is(g_forge.grabbed_live_index);
+			int is_ai_route = forge_ai_route_is(inst);
+			int ai_rows[NUMBER_OF_FORGE_AI_ROWS];
+			int ai_row_count = is_ai_spawn ? forge_ai_spawn_rows(g_forge.grabbed_live_index, ai_rows) : 0;
+			int route_rows[NUMBER_OF_FORGE_AI_ROUTE_ROWS];
+			int route_row_count = is_ai_route ? forge_ai_route_rows(g_forge.grabbed_live_index, route_rows) : 0;
 			int zone_rows[FORGE_FF_ZONE_MAX_ROWS];
 			int zone_row_count = is_zone ? forge_ff_zone_rows(inst, zone_rows) : 0;
 			/* (a drop point's FACTIONS TO SPAWN page: its three, then BACK alone) */
 			int factions_page = is_zone && s_props_factions_open;
 			int row_count = factions_page ? 3 : is_volume ? NUMBER_OF_FORGE_VOLUME_ROWS :
-				is_ai_spawn ? NUMBER_OF_FORGE_AI_ROWS : is_tele ? (snap_row ? 7 : 6) :
+				is_ai_route ? route_row_count :
+				is_ai_spawn ? ai_row_count : is_tele ? (snap_row ? 7 : 6) :
 				(is_zone ? FORGE_FF_ZONE_FIRST_ROW + zone_row_count :
 					(is_route_point ? 7 : (always_row >= 0 ? always_row + 1 : collision_row >= 0 ? collision_row + 1 :
 						damage_row >= 0 ? damage_row + 1 : scale_row >= 0 ? scale_row + 1 :
 						(test_drop_row >= 0 ? test_drop_row + 1 : ((is_ff_spawn || snap_row) ? 6 : 5)))));
-			short box_w = (short)(is_ai_spawn ? 372 : 312);
+			short box_w = (short)(is_ai_spawn || is_ai_route ? 372 : 312);
 			short box_h = (short)(34 + row_count * 28 + 50);
 			short px0 = (short)(window_x0 + 16);
 			short py0 = (short)(window_y0 + 34);
@@ -11423,7 +11552,9 @@ void forge_3d_draw_hud(
 			draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 4),
 				factions_page ? "FACTIONS TO SPAWN" : is_volume ?
 					(forge_volume_get(g_forge.grabbed_live_index)->map_index >= 0 ? "MAP VOLUME" : "VOLUME") :
-					is_ai_spawn ? "AI SPAWN" : (is_tele ? "TELEPORTER" :
+					is_ai_route ? forge_ai_route_panel_title(g_forge.grabbed_live_index) :
+					is_ai_spawn ? (ai_row_count > 0 && ai_rows[0] == _forge_ai_row_goal ? "AI SPAWN GOAL" : "AI SPAWN") :
+					(is_tele ? "TELEPORTER" :
 					(is_route_point ? "DROPSHIP ROUTE" : (is_zone ? "ENEMY DROP POINT" :
 					(is_ff_spawn ? forge_ff_spawn_kind_title(FORGE_FF_UNPACK_TYPE(inst->team_designator)) :
 						"OBJECT PROPERTIES")))), 0xFFFFFFFFu);
@@ -11443,19 +11574,49 @@ void forge_3d_draw_hud(
 					forge_volume_get(g_forge.grabbed_live_index)->map_index >= 0 ? "TURN OFF" : "DELETE OBJECT");
 				values[_forge_volume_row_delete][0] = 0;
 			}
+			else if (is_ai_route)
+			{
+				for (r = 0; r < route_row_count; r++)
+				{
+					int row = route_rows[r];
+
+					labels[r][0] = 0;
+					values[r][0] = 0;
+					if (row == _forge_ai_route_row_rot_snap)
+					{
+						snprintf(labels[r], sizeof(labels[0]), "ROT SNAP:");
+						snprintf(values[r], sizeof(values[0]), "%s", snap_names[g_forge.snap_mode]);
+					}
+					else if (row == _forge_ai_route_row_floor)
+						snprintf(labels[r], sizeof(labels[0]), "DROP TO FLOOR");
+					else if (row == _forge_ai_route_row_delete)
+						snprintf(labels[r], sizeof(labels[0]), "DELETE POINT");
+					else
+						forge_ai_route_row_text(g_forge.grabbed_live_index, row, labels[r], sizeof(labels[r]), values[r],
+							sizeof(values[r]));
+				}
+			}
 			else if (is_ai_spawn)
 			{
-				for (r = 0; r < NUMBER_OF_FORGE_AI_SETTING_ROWS; r++)
+				for (r = 0; r < ai_row_count; r++)
 				{
-					forge_ai_spawn_row_text(g_forge.grabbed_live_index, r,
-						labels[r], sizeof(labels[r]), values[r], sizeof(values[r]));
+					int row = ai_rows[r];
+
+					labels[r][0] = 0;
+					values[r][0] = 0;
+					if (row == _forge_ai_row_rot_snap)
+					{
+						snprintf(labels[r], sizeof(labels[0]), "ROT SNAP:");
+						snprintf(values[r], sizeof(values[0]), "%s", snap_names[g_forge.snap_mode]);
+					}
+					else if (row == _forge_ai_row_floor)
+						snprintf(labels[r], sizeof(labels[0]), "DROP TO FLOOR");
+					else if (row == _forge_ai_row_delete)
+						snprintf(labels[r], sizeof(labels[0]), "DELETE OBJECT");
+					else
+						forge_ai_spawn_row_text(g_forge.grabbed_live_index, row, labels[r], sizeof(labels[r]), values[r],
+							sizeof(values[r]));
 				}
-				snprintf(labels[_forge_ai_row_rot_snap], sizeof(labels[0]), "ROT SNAP:");
-				snprintf(values[_forge_ai_row_rot_snap], sizeof(values[0]), "%s", snap_names[g_forge.snap_mode]);
-				snprintf(labels[_forge_ai_row_floor], sizeof(labels[0]), "DROP TO FLOOR");
-				values[_forge_ai_row_floor][0] = 0;
-				snprintf(labels[_forge_ai_row_delete], sizeof(labels[0]), "DELETE OBJECT");
-				values[_forge_ai_row_delete][0] = 0;
 			}
 			else if (is_tele)
 			{

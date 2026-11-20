@@ -14,6 +14,7 @@ scenario exporter (.map, 140x114 .bmp, .txt).
 #include "forge_cache_builder.h"
 #include "forge_map_settings.h"
 #include "forge_volumes.h"
+#include "forge_ai_routes.h"
 #include "cache_file_formats.h"
 #include "tag_schema.h"
 #include "math/real_math.h"
@@ -5484,14 +5485,15 @@ static int append_forge_map_metadata_and_preview_trailer(
 				if (!ai->active || !ai->actor_variant_path[0])
 					continue;
 				line_len = snprintf(ai_line, sizeof(ai_line),
-					"AI_SPAWN|%.4f|%.4f|%.4f|%.4f|%d|%d|%d|%d|%d|%u|%d|%d|%d|%d|%s|%s|fx=%d|ck=%d|ht=%d\r\n",
+					"AI_SPAWN|%.4f|%.4f|%.4f|%.4f|%d|%d|%d|%d|%d|%u|%d|%d|%d|%d|%s|%s|fx=%d|ck=%d|ht=%d|gl=%d|gn=%d|gw=%d|gs=%d|gf=%d\r\n",
 					ai->x, ai->y, ai->z, ai->yaw,
 					(int)ai->team, (int)ai->unit_count,
 					(int)ai->respawn_alive, (int)ai->respawn_delay_seconds, (int)ai->respawn_total,
 					(unsigned)ai->gametype_flags,
 					(int)ai->encounter_index, (int)ai->squad_index, (int)ai->location_index, (int)ai->detached,
 					ai->actor_variant_path, ai->weapon_path, (int)ai->spawn_effect, (int)ai->cloaked,
-					(int)ai->hover_height);
+					(int)ai->hover_height, (int)ai->goal, (int)ai->goal_link, (int)ai->goal_who, (int)ai->goal_start,
+					(int)ai->goal_follow);
 				if (line_len > 0 && state_buf.data)
 				{
 					uint32_t o = buf_alloc(&state_buf, (uint32_t)line_len, 1);
@@ -5594,6 +5596,20 @@ static int append_forge_map_metadata_and_preview_trailer(
 			if (state_buf.data) memcpy(state_buf.data + o, volume_lines, (size_t)volume_length);
 		}
 		free(volume_lines);
+	}
+
+	/* its AI routes' points (forge_ai_routes.c); read as its level loads */
+	if (edits && state_buf.data)
+	{
+		char *route_lines = (char *)malloc(0x20000u);
+		int route_length = route_lines ? forge_ai_routes_save_lines(route_lines, 0x20000u) : 0;
+
+		if (route_length > 0)
+		{
+			uint32_t o = buf_alloc(&state_buf, (uint32_t)route_length, 1);
+			if (state_buf.data) memcpy(state_buf.data + o, route_lines, (size_t)route_length);
+		}
+		free(route_lines);
 	}
 
 	/* (the tags the bake leaves out, MCC's own content: each machine reads

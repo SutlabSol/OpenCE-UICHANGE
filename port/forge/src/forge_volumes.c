@@ -51,7 +51,10 @@ enum
 	_volume_color_kill,
 	_volume_color_off,
 	_volume_color_gravity,
-	_volume_color_one_way
+	_volume_color_one_way,
+	_volume_color_patrol,
+	/* (an AI PATROL volume's PURSUIT RANGE, round it) */
+	_volume_color_pursuit
 };
 
 /* GRAVITY's STRENGTH (hundredths of the world's gravity): a new one's, and
@@ -123,7 +126,7 @@ static long s_gravity_wake_time = -1;
 
 static char const *const s_shape_names[NUMBER_OF_FORGE_VOLUME_SHAPES] = { "CUBE", "CYLINDER", "SPHERE", "MAP'S OWN" };
 static char const *const s_effect_names[NUMBER_OF_FORGE_VOLUME_EFFECTS] = {
-	"APPLY DAMAGE", "CONSTANT DAMAGE", "INSTA KILL", "MAP SCRIPT", "OFF", "GRAVITY", "ONE WAY"
+	"APPLY DAMAGE", "CONSTANT DAMAGE", "INSTA KILL", "MAP SCRIPT", "OFF", "GRAVITY", "ONE WAY", "AI PATROL"
 };
 
 /* ---------- private code */
@@ -621,6 +624,12 @@ void forge_volume_describe(int32_t live_idx, char *text, unsigned long size)
 				extra);
 			return;
 		}
+		if (volume->effect == _forge_volume_ai_patrol)
+		{
+			snprintf(text, size, "AI PATROL #%d %s (PURSUIT +%.0f)%s", FORGE_VOLUME_PATROL_NUMBER(volume->flags),
+				s_shape_names[volume->shape], (double)volume->damage, extra);
+			return;
+		}
 		snprintf(text, size, "%s %s%s", s_effect_names[volume->effect], s_shape_names[volume->shape], extra);
 	}
 }
@@ -643,11 +652,17 @@ void forge_volume_row_text(int32_t live_idx, int row, char *label, unsigned long
 		break;
 	case _forge_volume_row_effect:
 		snprintf(label, label_size, "EFFECT:");
-		snprintf(value, value_size, "%s", s_effect_names[volume->effect]);
+		if (volume->effect == _forge_volume_ai_patrol)
+			snprintf(value, value_size, "AI PATROL #%d", FORGE_VOLUME_PATROL_NUMBER(volume->flags));
+		else
+			snprintf(value, value_size, "%s", s_effect_names[volume->effect]);
 		break;
 	case _forge_volume_row_damage:
-		snprintf(label, label_size, volume->effect == _forge_volume_gravity ? "STRENGTH:" : "DAMAGE:");
-		if (volume->effect == _forge_volume_gravity)
+		snprintf(label, label_size, volume->effect == _forge_volume_gravity ? "STRENGTH:" :
+			volume->effect == _forge_volume_ai_patrol ? "PURSUIT RANGE:" : "DAMAGE:");
+		if (volume->effect == _forge_volume_ai_patrol)
+			snprintf(value, value_size, "+%.0f UNITS", (double)volume->damage);
+		else if (volume->effect == _forge_volume_gravity)
 			snprintf(value, value_size, "X%.2f", (double)(volume->damage / 100.0f));
 		else if (volume->effect == _forge_volume_apply_damage)
 			snprintf(value, value_size, "%.0f%% ONCE", (double)volume->damage);
@@ -685,6 +700,13 @@ void forge_volume_row_text(int32_t live_idx, int row, char *label, unsigned long
 	default:
 		break;
 	}
+}
+
+/* what a volume's `damage` is to an effect: 1 GRAVITY's STRENGTH, 2 AI
+PATROL's PURSUIT RANGE, 0 an amount of damage */
+static int volume_amount_kind(int effect)
+{
+	return effect == _forge_volume_gravity ? 1 : effect == _forge_volume_ai_patrol ? 2 : 0;
 }
 
 /* GRAVITY's next STRENGTH (hundredths): x0.05 to x1, x0.1 to x2, x0.5 past */
@@ -736,10 +758,32 @@ int forge_volume_row_step(int32_t live_idx, int row, int dir)
 		{
 			effect = (effect + count + dir) % count;
 		} while (effect == _forge_volume_map_script && settings.map_index < 0);
-		/* (GRAVITY's STRENGTH and the damage share a field: each starts at
-		its own default) */
-		if ((effect == _forge_volume_gravity) != (settings.effect == _forge_volume_gravity))
-			settings.damage = effect == _forge_volume_gravity ? VOLUME_GRAVITY_DEFAULT : 25.0f;
+		/* (GRAVITY's STRENGTH, AI PATROL's PURSUIT RANGE and the damage share
+		a field: each starts at its own default) */
+		if (volume_amount_kind(effect) != volume_amount_kind(settings.effect))
+		{
+			settings.damage = effect == _forge_volume_gravity ? VOLUME_GRAVITY_DEFAULT :
+				effect == _forge_volume_ai_patrol ? FORGE_VOLUME_PURSUIT_DEFAULT : 25.0f;
+		}
+		/* (an AI PATROL volume's number: given as it becomes one, gone as it
+		stops being one; the AI linked to it by it lose it) */
+		if (effect == _forge_volume_ai_patrol && settings.effect != _forge_volume_ai_patrol)
+		{
+			int number = forge_volume_patrol_free_number();
+
+			if (number == 0)
+			{
+				forge_set_status("No Free AI Patrol Numbers (%d in this map)", FORGE_VOLUME_PATROL_MAX);
+				effect = (effect + count + dir) % count;
+			}
+			else
+			{
+				settings.flags = (uint8_t)((settings.flags & ~FORGE_VOLUME_PATROL_MASK) |
+					(number << FORGE_VOLUME_PATROL_SHIFT));
+			}
+		}
+		if (effect != _forge_volume_ai_patrol)
+			settings.flags &= (uint8_t)~FORGE_VOLUME_PATROL_MASK;
 		settings.effect = (uint8_t)effect;
 		break;
 	}
@@ -749,9 +793,19 @@ int forge_volume_row_step(int32_t live_idx, int row, int dir)
 			settings.damage = gravity_step(settings.damage, dir);
 			break;
 		}
+		if (settings.effect == _forge_volume_ai_patrol)
+		{
+			float step = settings.damage < 10.0f || (dir < 0 && settings.damage <= 10.0f) ? 1.0f : 5.0f;
+
+			settings.damage = PIN((float)floor((double)((settings.damage + step * (float)dir) / step) + 0.5) * step,
+				0.0f, FORGE_VOLUME_PURSUIT_MAX);
+			forge_set_status("AI linked to it chase whoever they fight up to %.0f units past its sides",
+				(double)settings.damage);
+			break;
+		}
 		if (settings.effect != _forge_volume_apply_damage && settings.effect != _forge_volume_constant_damage)
 		{
-			forge_set_status("Only APPLY DAMAGE, CONSTANT DAMAGE and GRAVITY have an amount");
+			forge_set_status("Only APPLY DAMAGE, CONSTANT DAMAGE, GRAVITY and AI PATROL have an amount");
 			return 0;
 		}
 		settings.damage = PIN(settings.damage + (float)dir * (settings.damage < 10.0f || (dir < 0 && settings.damage <= 10.0f) ?
@@ -1552,11 +1606,27 @@ void forge_volumes_render(
 		draw.color = volume->effect == _forge_volume_insta_kill || volume->effect == _forge_volume_map_script ?
 			_volume_color_kill : volume->effect == _forge_volume_off ? _volume_color_off :
 			volume->effect == _forge_volume_gravity ? _volume_color_gravity :
-			volume->effect == _forge_volume_one_way ? _volume_color_one_way : _volume_color_damage;
+			volume->effect == _forge_volume_one_way ? _volume_color_one_way :
+			volume->effect == _forge_volume_ai_patrol ? _volume_color_patrol : _volume_color_damage;
 		draw.highlighted = i == g_forge.grabbed_live_index || i == g_forge.hovered_live_index;
 		if (draw_face)
 			volume_faces(volume, &frame, volume_draw_face, &draw);
 		volume_edges(volume, &frame, volume_draw_edge, &draw);
+		/* (AI PATROL: its PURSUIT RANGE, the same shape that much bigger) */
+		if (volume->effect == _forge_volume_ai_patrol && volume->damage > 0.0f)
+		{
+			struct forge_volume pursuit = *volume;
+			struct volume_frame pursuit_frame;
+			struct volume_draw_context pursuit_draw = draw;
+			int k;
+
+			for (k = 0; k < 3; k++)
+				pursuit.size[k] = volume->size[k] + volume->damage * 2.0f;
+			volume_frame_make(inst, &pursuit, &pursuit_frame);
+			pursuit_draw.color = _volume_color_pursuit;
+			pursuit_draw.highlighted = 0;
+			volume_edges(&pursuit, &pursuit_frame, volume_draw_edge, &pursuit_draw);
+		}
 		/* (GRAVITY: an arrow down its own down, the way things fall in it;
 		ONE WAY: up its own up, the way it lets them through) */
 		if ((volume->effect == _forge_volume_gravity && volume->damage > 0.0f) || volume->effect == _forge_volume_one_way)
@@ -1747,4 +1817,80 @@ int forge_volumes_effect_damage_blocked(long object_index)
 		}
 	}
 	return 0;
+}
+
+/* ---------- AI PATROL volumes */
+
+int32_t forge_volume_patrol_find(int number)
+{
+	int32_t i;
+
+	if (number <= 0)
+		return -1;
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		if (volume_instance(i) && s_volumes[i].effect == _forge_volume_ai_patrol &&
+			FORGE_VOLUME_PATROL_NUMBER(s_volumes[i].flags) == number)
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
+int forge_volumes_patrol_numbers(int *numbers, int max)
+{
+	int count = 0, number;
+
+	for (number = 1; number <= FORGE_VOLUME_PATROL_MAX && count < max; number++)
+	{
+		if (forge_volume_patrol_find(number) >= 0)
+			numbers[count++] = number;
+	}
+	return count;
+}
+
+int forge_volume_patrol_free_number(void)
+{
+	int number;
+
+	for (number = 1; number <= FORGE_VOLUME_PATROL_MAX; number++)
+	{
+		if (forge_volume_patrol_find(number) < 0)
+			return number;
+	}
+	return 0;
+}
+
+int forge_volume_shape_contains(int shape, float const position[3], float yaw, float pitch, float roll,
+	float const size[3], float margin, float const point[3])
+{
+	real_vector3d forward, left, up;
+	float dx = point[0] - position[0], dy = point[1] - position[1], dz = point[2] - position[2];
+	float hx = size[0] * 0.5f + margin, hy = size[1] * 0.5f + margin, hz = size[2] * 0.5f + margin;
+	float local[3];
+
+	if (hx <= 0.0f || hy <= 0.0f || hz <= 0.0f)
+		return 0;
+	euler_basis(yaw, pitch, roll, &forward, &left, &up);
+	local[0] = dx * forward.i + dy * forward.j + dz * forward.k;
+	local[1] = dx * left.i + dy * left.j + dz * left.k;
+	local[2] = dx * up.i + dy * up.j + dz * up.k;
+	switch (shape)
+	{
+	case _forge_volume_cylinder:
+	{
+		float u = local[0] / hx, v = local[1] / hy;
+
+		return u * u + v * v <= 1.0f && fabs((double)local[2]) <= hz;
+	}
+	case _forge_volume_sphere:
+	{
+		float u = local[0] / hx, v = local[1] / hy, w = local[2] / hz;
+
+		return u * u + v * v + w * w <= 1.0f;
+	}
+	default:
+		return fabs((double)local[0]) <= hx && fabs((double)local[1]) <= hy && fabs((double)local[2]) <= hz;
+	}
 }

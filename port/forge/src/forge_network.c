@@ -2,7 +2,7 @@
  * OpenCE : Faber ("OpenCE - Faber.exe")
  * Collaborative P2P Forge Network Synchronization:
  * - Bidirectional Spawn (!FS: / !FH:), Transform (!FM:), Delete (!FD:) and Firefight marker usage (!FU:) replication
- * - AI spawn settings (!FA:), a placed scenery's SCALE (!FZ:), a volume's settings (!FW:),
+ * - AI spawn settings (!FA:) and GOAL (!FJ:), a placed scenery's SCALE (!FZ:), a volume's settings (!FW:),
  *   an emitter's DEAL DAMAGE (!FN:), a scenery's COLLISION (!FK:)
  * - Per-Player Monitor vs. Spartan mode & 3D Monitor flight state synchronization (!FT:)
  * - Late-join / full-session state synchronization (!FQ)
@@ -30,6 +30,10 @@
 #include "forge_engine.h"
 #include "forge_map_settings.h"
 #include "forge_volumes.h"
+
+/* (an AI spawn's settings and GOAL as packets: below) */
+static int forge_ai_spawn_packet(int32_t live_idx, char *msg, size_t msg_size);
+static int forge_ai_goal_packet(int32_t live_idx, char *msg, size_t msg_size);
 
 extern unsigned long system_milliseconds(void);
 extern void orig_network_objects_handle_changes(void const *entries, short count);
@@ -589,6 +593,20 @@ void forge_network_sync_tick(void)
 					forge_send_packet_to_machine(m, msg);
 					packets_sent++;
 				}
+				/* (an AI spawn's settings and GOAL) */
+				if (inst->active && inst->group_tag == FORGE_GROUP_AI_SPAWN)
+				{
+					if (forge_ai_spawn_packet(idx, msg, sizeof(msg)))
+					{
+						forge_send_packet_to_machine(m, msg);
+						packets_sent++;
+					}
+					if (forge_ai_goal_packet(idx, msg, sizeof(msg)))
+					{
+						forge_send_packet_to_machine(m, msg);
+						packets_sent++;
+					}
+				}
 				/* (a volume's shape, size and effect; an emitter's DEAL DAMAGE off) */
 				if (inst->active && forge_volume_packet(idx, msg, sizeof(msg)))
 				{
@@ -950,6 +968,35 @@ static int forge_ai_spawn_packet_apply(char const *text, int32_t *target_idx)
 	return 1;
 }
 
+/* an AI spawn's GOAL (forge_ai_spawn_entry.goal*): a packet of its own, so a
+peer of before reads its !FA: as ever */
+static int forge_ai_goal_packet(int32_t live_idx, char *msg, size_t msg_size)
+{
+	struct forge_ai_spawn_entry const *entry = NULL;
+	uint32_t variant_hash = 0, weapon_hash = 0;
+
+	forge_ai_spawn_net_settings(live_idx, &variant_hash, &weapon_hash, &entry);
+	if (!entry)
+		return 0;
+	snprintf(msg, msg_size, "!FJ:%X:%X:%X:%X:%X:%X", (unsigned int)live_idx, (unsigned int)entry->goal,
+		(unsigned int)entry->goal_link, (unsigned int)entry->goal_who, (unsigned int)entry->goal_start,
+		(unsigned int)entry->goal_follow);
+	return 1;
+}
+
+static int forge_ai_goal_packet_apply(char const *text, int32_t *target_idx)
+{
+	unsigned int live_idx = 0, goal = 0, link = 0, who = 0, start = 0, follow = 0;
+
+	if (sscanf(text + 4, "%X:%X:%X:%X:%X:%X", &live_idx, &goal, &link, &who, &start, &follow) != 6)
+		return 0;
+	*target_idx = forge_resolve_target_live_idx((int)live_idx, -1);
+	if (*target_idx < 0)
+		return 0;
+	forge_ai_spawn_goal_apply(*target_idx, (int)goal, (int)link, (int)who, (int)start, (int)follow);
+	return 1;
+}
+
 /* (the host's: the AI is its own, so only a unit's appearing has to be told) */
 void forge_network_send_spawn_effect(int effect, union real_point3d const *point)
 {
@@ -964,18 +1011,26 @@ void forge_network_send_spawn_effect(int effect, union real_point3d const *point
 void forge_network_send_ai_spawn(int32_t live_idx)
 {
 	char msg[64];
+	char goal[64];
 
-	if (!forge_is_multiplayer_session() || !forge_ai_spawn_packet(live_idx, msg, sizeof(msg)))
+	if (!forge_is_multiplayer_session() || !forge_ai_spawn_packet(live_idx, msg, sizeof(msg)) ||
+		!forge_ai_goal_packet(live_idx, goal, sizeof(goal)))
+	{
 		return;
+	}
 	if (game_connection() == _game_connection_network_client)
 	{
 		/* (one the host has not answered for yet says so once it has) */
 		if ((g_forge.live_instances[live_idx].pad_inst & 0x80u) == 0)
+		{
 			forge_send_packet_to_host(msg);
+			forge_send_packet_to_host(goal);
+		}
 	}
 	else if (game_connection() == _game_connection_network_server)
 	{
 		forge_broadcast_packet_to_clients(msg, -1);
+		forge_broadcast_packet_to_clients(goal, -1);
 	}
 }
 
@@ -1534,6 +1589,19 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 			}
 			return 1;
 		}
+		else if (strncmp(text, "!FJ:", 4) == 0)
+		{
+			int32_t target_idx = -1;
+
+			if (forge_ai_goal_packet_apply(text, &target_idx))
+			{
+				char relay[64];
+
+				if (forge_ai_goal_packet(target_idx, relay, sizeof(relay)))
+					forge_broadcast_packet_to_clients(relay, machine_index);
+			}
+			return 1;
+		}
 		else if (strncmp(text, "!FV:", 4) == 0)
 		{
 			int live_idx = -1, on = 0;
@@ -1739,6 +1807,13 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 			int32_t target_idx = -1;
 
 			forge_ai_spawn_packet_apply(text, &target_idx);
+			return 1;
+		}
+		else if (strncmp(text, "!FJ:", 4) == 0)
+		{
+			int32_t target_idx = -1;
+
+			forge_ai_goal_packet_apply(text, &target_idx);
 			return 1;
 		}
 		else if (strncmp(text, "!FU:", 4) == 0)
