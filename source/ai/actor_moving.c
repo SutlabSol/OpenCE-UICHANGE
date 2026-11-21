@@ -226,8 +226,12 @@ as Firefight's AI do (port/forge/src/forge_ai.c) */
 #if OPENCE_ENABLE_FORGE
 extern boolean forge_ai_actor_walks_straight(long actor_index);
 #define forge_ai_walks_straight(actor_index) forge_ai_actor_walks_straight(actor_index)
+/* (a Forge goal unit's straight walk's most climb per half unit: past it a
+slope is a wall - about 40 degrees) */
+#define FORGE_GOAL_STEP_UP 0.4f
 #else
 #define forge_ai_walks_straight(actor_index) FALSE
+#define FORGE_GOAL_STEP_UP 0.8f
 #endif
 #include "main/console.h"
 #include "physics/collision_bsp.h"
@@ -2100,19 +2104,74 @@ boolean actor_path_refresh(
 					/* port: the straight line walked only over ground (no
 					drop over 1.2 units, no wall, no kill volume): House 2's
 					grunts walked it off the roofs and died of the fall */
-					real walked = firefight_straight_walk(&actor->input.position.body_position, destination_point,
-						8.0f, &stop, &edge, &landing);
+					/* port: a Forge goal's unit's (port/forge/src/forge_ai.c):
+					round objects too (a map's rocks, its parked vehicles) and
+					other units (its squad's: nothing else keeps them apart on a
+					map with no pathfinding), and up no slope steeper than a
+					biped climbs, or it pushed into them at full throttle for
+					good */
+					boolean forge_goal = forge_ai_walks_straight(actor_index);
+					real step_up = forge_goal ? FORGE_GOAL_STEP_UP : 0.8f;
+					real walked = firefight_straight_walk_ex(&actor->input.position.body_position, destination_point,
+						8.0f, &stop, &edge, &landing, step_up, forge_goal ? 2 : 0, actor->meta.unit_index);
+					real_point3d via;
+					boolean detour = FALSE;
 
+					/* port: blocked short of it: round the side the walk goes
+					further from (firefight_straight_detour) */
+					if (forge_goal && walked < MIN(full, 8.0f) - 0.51f &&
+						firefight_straight_detour(&actor->input.position.body_position, destination_point, step_up, 2,
+							actor->meta.unit_index, &via))
+					{
+						detour = TRUE;
+					}
+
+#if OPENCE_ENABLE_FORGE
+					/* port: a Forge goal's unit's straight walk, logged a
+					second apart: it walks the part it can, and again from there
+					(below, at the end of one) */
+					if (destination_type == _destination_move_position && forge_ai_walks_straight(actor_index))
+					{
+						static long last_logged = -1000;
+
+						if (game_time_get() - last_logged > 30)
+						{
+							last_logged = game_time_get();
+							error(_error_silent, "forge ai: no path for a goal unit from (%.1f %.1f %.1f) surface %ld to "
+								"(%.1f %.1f %.1f) surface %ld, %.1f away: straight walk %.1f of it%s",
+								(double)actor->input.position.body_position.x, (double)actor->input.position.body_position.y,
+								(double)actor->input.position.body_position.z, (long)actor->input.pathfinding_surface_index,
+								(double)destination_point->x, (double)destination_point->y, (double)destination_point->z,
+								(long)actor->control.path.destination.surface_index, (double)full, (double)walked,
+								detour ? ", round the side" : "");
+						}
+					}
+#endif
 					csmemset(fallback_path, 0, sizeof(*fallback_path));
 					fallback_path->endpoint = actor->control.path.destination;
 					fallback_path->step_index = 0;
 					fallback_path->step_count = 1;
 					fallback_path->steps[0].surface_index = actor->input.pathfinding_surface_index;
-					if (walked >= 0.75f)
+					if (detour)
+					{
+						/* (the side spot first, then on towards it, the path
+						taken again from there at its end) */
+						fallback_path->valid = TRUE;
+						fallback_path->step_count = 2;
+						fallback_path->steps[0].point = via;
+						fallback_path->steps[1].point = *destination_point;
+						fallback_path->steps[1].surface_index = actor->control.path.destination.surface_index;
+						fallback_path->steps_finish_path = FALSE;
+						success = TRUE;
+					}
+					else if (walked >= 0.75f)
 					{
 						fallback_path->valid = TRUE;
-						fallback_path->steps[0].point = walked >= full - 0.25f ? *destination_point : stop;
-						fallback_path->steps_finish_path = walked >= full - 0.25f;
+						/* port: the walk is measured in steps of half a unit
+						(firefight_straight_walk): within one of the end is
+						there */
+						fallback_path->steps[0].point = walked >= full - 0.51f ? *destination_point : stop;
+						fallback_path->steps_finish_path = walked >= full - 0.51f;
 						success = TRUE;
 					}
 					/* port: at an edge with what it goes for below and ground
@@ -2235,7 +2294,11 @@ void actor_destination_update(
 			{
 				actor_path_clear(actor_index);
 			}
-			else if (firefight_active())
+			/* port: and a Forge goal's unit (port/forge/src/forge_ai.c): a
+			map with no pathfinding (Blood Gulch, any multiplayer map's)
+			gives it only straight walks of 8 units at most, and at the end of
+			one short of its point it stood for good */
+			else if (firefight_active() || forge_ai_walks_straight(actor_index))
 			{
 				actor_path_refresh(actor_index, FALSE, NULL);
 			}

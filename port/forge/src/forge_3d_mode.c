@@ -7446,6 +7446,13 @@ static void forge_props_open(void)
 	g_forge.props_cursor = 0;
 	s_props_factions_open = 0;
 	s_route_taken.count = 0;
+	/* (each panel opens on its first page) */
+	if (g_forge.grabbed_live_index >= 0)
+	{
+		forge_volume_page_back(g_forge.grabbed_live_index);
+		forge_ai_spawn_page_back(g_forge.grabbed_live_index);
+		forge_ai_route_page_back(g_forge.grabbed_live_index);
+	}
 	forge_props_snapshot_take(g_forge.grabbed_live_index, &s_props_opened);
 }
 
@@ -8590,6 +8597,20 @@ void forge_3d_update(float dt)
 						g_forge.props_cursor = k;
 				}
 			}
+			/* (out of a volume's EFFECT or SIZE, to its first page) */
+			else if (modal_before_hotkeys == _forge_modal_object_properties && props_live >= 0 &&
+				forge_volume_is(props_live) && forge_volume_page_back(props_live))
+			{
+				int rows[NUMBER_OF_FORGE_VOLUME_ROWS];
+				int count = forge_volume_rows(props_live, rows), k;
+
+				g_forge.props_cursor = 0;
+				for (k = 0; k < count; k++)
+				{
+					if (rows[k] == forge_volume_page_return_row())
+						g_forge.props_cursor = k;
+				}
+			}
 			/* (out of an AI route's settings, to its point) */
 			else if (modal_before_hotkeys == _forge_modal_object_properties && props_live >= 0 &&
 				forge_ai_route_page_back(props_live))
@@ -9067,7 +9088,9 @@ void forge_3d_update(float dt)
 		int route_row_count = is_ai_route ? forge_ai_route_rows(g_forge.grabbed_live_index, route_rows) : 0;
 		int zone_rows[FORGE_FF_ZONE_MAX_ROWS];
 		int zone_row_count = is_zone ? forge_ff_zone_rows(inst, zone_rows) : 0;
-		int max_props_row = is_volume ? NUMBER_OF_FORGE_VOLUME_ROWS - 1 :
+		int volume_rows[NUMBER_OF_FORGE_VOLUME_ROWS];
+		int volume_row_count = is_volume ? forge_volume_rows(g_forge.grabbed_live_index, volume_rows) : 0;
+		int max_props_row = is_volume ? volume_row_count - 1 :
 			is_ai_route ? route_row_count - 1 :
 			is_ai_spawn ? ai_row_count - 1 : is_tele ? (snap_row ? 6 : 5) :
 			(is_zone ? FORGE_FF_ZONE_FIRST_ROW - 1 + zone_row_count :
@@ -9174,25 +9197,47 @@ void forge_3d_update(float dt)
 		{
 			if (is_volume)
 			{
-				if (g_forge.props_cursor < _forge_volume_row_rot_snap)
+				int row = g_forge.props_cursor < volume_row_count ? volume_rows[g_forge.props_cursor] : -1;
+
+				if (row == _forge_volume_row_rot_snap)
 				{
+					g_forge.snap_mode = (enum forge_snap_angle_mode)((g_forge.snap_mode + NUMBER_OF_FORGE_SNAP_MODES + dir) % NUMBER_OF_FORGE_SNAP_MODES);
+				}
+				else if (row == _forge_volume_row_floor)
+				{
+					cur_z = 1;
+				}
+				/* (EFFECT >, SIZE > and BACK open and close their pages on a
+				press; the others step left and right) */
+				else if (row >= 0 && row != _forge_volume_row_delete &&
+					(!FORGE_VOLUME_ROW_IS_PAGE_BUTTON(row) || (cur_enter && !prev_enter)))
+				{
+					int press = forge_volume_row_step(g_forge.grabbed_live_index, row, dir);
 					char what[96];
 
-					if (forge_volume_row_step(g_forge.grabbed_live_index, g_forge.props_cursor, dir))
+					if (press == FORGE_VOLUME_PRESS_PAGE_OPENED)
+					{
+						g_forge.props_cursor = 0;
+					}
+					else if (press == FORGE_VOLUME_PRESS_PAGE_CLOSED)
+					{
+						int rows[NUMBER_OF_FORGE_VOLUME_ROWS];
+						int count = forge_volume_rows(g_forge.grabbed_live_index, rows), k;
+
+						g_forge.props_cursor = 0;
+						for (k = 0; k < count; k++)
+						{
+							if (rows[k] == forge_volume_page_return_row())
+								g_forge.props_cursor = k;
+						}
+					}
+					else if (press && row != _forge_volume_row_keep_ratio)
 					{
 						forge_volume_describe(g_forge.grabbed_live_index, what, sizeof(what));
 						forge_set_status("%s", what);
 					}
 				}
-				else if (g_forge.props_cursor == _forge_volume_row_rot_snap)
-				{
-					g_forge.snap_mode = (enum forge_snap_angle_mode)((g_forge.snap_mode + NUMBER_OF_FORGE_SNAP_MODES + dir) % NUMBER_OF_FORGE_SNAP_MODES);
-				}
-				else if (g_forge.props_cursor == _forge_volume_row_floor)
-				{
-					cur_z = 1;
-				}
-				else if (g_forge.props_cursor == _forge_volume_row_delete && cur_enter && !prev_enter)
+				else if (row == _forge_volume_row_delete && cur_enter && !prev_enter)
 				{
 					int map_volume = forge_volume_get(g_forge.grabbed_live_index)->map_index >= 0;
 
@@ -11592,9 +11637,11 @@ void forge_3d_draw_hud(
 			int route_row_count = is_ai_route ? forge_ai_route_rows(g_forge.grabbed_live_index, route_rows) : 0;
 			int zone_rows[FORGE_FF_ZONE_MAX_ROWS];
 			int zone_row_count = is_zone ? forge_ff_zone_rows(inst, zone_rows) : 0;
+			int volume_rows[NUMBER_OF_FORGE_VOLUME_ROWS];
+			int volume_row_count = is_volume ? forge_volume_rows(g_forge.grabbed_live_index, volume_rows) : 0;
 			/* (a drop point's FACTIONS TO SPAWN page: its three, then BACK alone) */
 			int factions_page = is_zone && s_props_factions_open;
-			int row_count = factions_page ? 3 : is_volume ? NUMBER_OF_FORGE_VOLUME_ROWS :
+			int row_count = factions_page ? 3 : is_volume ? volume_row_count :
 				is_ai_route ? route_row_count :
 				is_ai_spawn ? ai_row_count : is_tele ? (snap_row ? 7 : 6) :
 				(is_zone ? FORGE_FF_ZONE_FIRST_ROW + zone_row_count :
@@ -11616,8 +11663,7 @@ void forge_3d_draw_hud(
 			draw_ce_pause_box(px0, py0, box_w, box_h, 1);
 
 			draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 4),
-				factions_page ? "FACTIONS TO SPAWN" : is_volume ?
-					(forge_volume_get(g_forge.grabbed_live_index)->map_index >= 0 ? "MAP VOLUME" : "VOLUME") :
+				factions_page ? "FACTIONS TO SPAWN" : is_volume ? forge_volume_panel_title(g_forge.grabbed_live_index) :
 					is_ai_route ? forge_ai_route_panel_title(g_forge.grabbed_live_index) :
 					is_ai_spawn ? forge_ai_spawn_panel_title(g_forge.grabbed_live_index) :
 					(is_tele ? "TELEPORTER" :
@@ -11627,18 +11673,26 @@ void forge_3d_draw_hud(
 
 			if (is_volume)
 			{
-				for (r = 0; r < _forge_volume_row_rot_snap; r++)
+				for (r = 0; r < volume_row_count; r++)
 				{
-					forge_volume_row_text(g_forge.grabbed_live_index, r,
-						labels[r], sizeof(labels[r]), values[r], sizeof(values[r]));
+					int row = volume_rows[r];
+
+					labels[r][0] = 0;
+					values[r][0] = 0;
+					if (row == _forge_volume_row_rot_snap)
+					{
+						snprintf(labels[r], sizeof(labels[0]), "ROT SNAP:");
+						snprintf(values[r], sizeof(values[0]), "%s", snap_names[g_forge.snap_mode]);
+					}
+					else if (row == _forge_volume_row_floor)
+						snprintf(labels[r], sizeof(labels[0]), "DROP TO FLOOR");
+					else if (row == _forge_volume_row_delete)
+						snprintf(labels[r], sizeof(labels[0]), "%s",
+							forge_volume_get(g_forge.grabbed_live_index)->map_index >= 0 ? "TURN OFF" : "DELETE OBJECT");
+					else
+						forge_volume_row_text(g_forge.grabbed_live_index, row, labels[r], sizeof(labels[r]), values[r],
+							sizeof(values[r]));
 				}
-				snprintf(labels[_forge_volume_row_rot_snap], sizeof(labels[0]), "ROT SNAP:");
-				snprintf(values[_forge_volume_row_rot_snap], sizeof(values[0]), "%s", snap_names[g_forge.snap_mode]);
-				snprintf(labels[_forge_volume_row_floor], sizeof(labels[0]), "DROP TO FLOOR");
-				values[_forge_volume_row_floor][0] = 0;
-				snprintf(labels[_forge_volume_row_delete], sizeof(labels[0]), "%s",
-					forge_volume_get(g_forge.grabbed_live_index)->map_index >= 0 ? "TURN OFF" : "DELETE OBJECT");
-				values[_forge_volume_row_delete][0] = 0;
 			}
 			else if (is_ai_route)
 			{
@@ -11932,8 +11986,20 @@ void forge_3d_draw_hud(
 					/* (a page's button: its summary on the right, a press opens it;
 					the arrows are for the rows stepped left and right) */
 					int page_button = (is_ai_spawn && r < ai_row_count && FORGE_AI_ROW_IS_PAGE_BUTTON(ai_rows[r])) ||
-						(is_ai_route && r < route_row_count && route_rows[r] == _forge_ai_route_row_settings);
+						(is_ai_route && r < route_row_count && route_rows[r] == _forge_ai_route_row_settings) ||
+						(is_volume && !factions_page && r < volume_row_count &&
+							(volume_rows[r] == _forge_volume_row_effect_page || volume_rows[r] == _forge_volume_row_size_page));
 					short label_w = 0;
+
+					/* (a page's button: a click anywhere on it opens it) */
+					if (page_button)
+						s_props_row_has_value[r & 15] = 0;
+					/* (a size KEEP RATIO holds: shown, dimmed) */
+					if (is_volume && !factions_page && r < volume_row_count &&
+						forge_volume_row_disabled(g_forge.grabbed_live_index, volume_rows[r]))
+					{
+						col = sel ? 0xFF8C8C8Cu : 0xFF3C5A78u;
+					}
 
 					if (values[r][0])
 					{

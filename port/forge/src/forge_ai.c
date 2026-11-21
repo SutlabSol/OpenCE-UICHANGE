@@ -957,6 +957,9 @@ VOLUME| and AI_ROUTE| lines (forge_ai_saved_parse). */
 /* (a route's units' leader is followed from this far, to this far) */
 #define FORGE_AI_FOLLOWER_START 4.0f
 #define FORGE_AI_FOLLOWER_DISTANCE 2.5f
+/* (a goal unit this near its point, held from it - a squadmate on it - has
+reached it) */
+#define FORGE_AI_ARRIVE_DISTANCE 2.0f
 /* (rings of firing positions laid again once their middle is this far behind) */
 #define FORGE_AI_GOAL_RING_MOVE 6.0f
 /* (a squad's alarm: once one of its units fights, is hurt or dies, all of them
@@ -1328,6 +1331,33 @@ int forge_ai_route_place_toward(float const from[3], float const to[3], float ou
 
 /* the ground in a volume (each side `margin` further out), spread: at most
 `max` of it, each as far from the others as can be */
+/* whether an object stands on a spot of the ground (a Forge block over
+the floor): the paths know only the structure, so a unit sent there walks into
+it and pushes for good. A ray down onto it and one up from it, both sides of
+the object's surfaces */
+static boolean forge_ai_ground_covered(real_point3d const *point)
+{
+	unsigned long const flags = FLAG(_collision_test_objects_bit) | FLAG(_collision_test_objects_scenery_bit) |
+		FLAG(_collision_test_objects_machines_bit) | FLAG(_collision_test_objects_vehicles_bit) |
+		FLAG(_collision_test_objects_light_fixtures_bit) | FLAG(_collision_test_objects_controls_bit);
+	struct collision_result collision;
+	real_point3d start;
+	real_vector3d vector;
+
+	start = *point;
+	start.z += 1.8f;
+	vector.i = vector.j = 0.0f;
+	vector.k = -1.65f;
+	memset(&collision, 0, sizeof(collision));
+	if (collision_test_vector(flags, &start, &vector, NONE, &collision))
+		return TRUE;
+	start = *point;
+	start.z += 0.15f;
+	vector.k = 1.65f;
+	memset(&collision, 0, sizeof(collision));
+	return collision_test_vector(flags, &start, &vector, NONE, &collision);
+}
+
 static int forge_ai_volume_ground(struct forge_ai_goal_volume const *volume, float margin, struct forge_ai_ground *out,
 	int max)
 {
@@ -1360,7 +1390,8 @@ static int forge_ai_volume_ground(struct forge_ai_goal_volume const *volume, flo
 				raised[1] = column[f].point.y;
 				raised[2] = column[f].point.z + 0.3f;
 				if (forge_volume_shape_contains(volume->shape, volume->position, volume->yaw, volume->pitch,
-						volume->roll, volume->size, margin, raised))
+						volume->roll, volume->size, margin, raised) &&
+					!forge_ai_ground_covered(&column[f].point))
 				{
 					candidates[count++] = column[f];
 				}
@@ -1683,69 +1714,114 @@ static short forge_ai_route_step(struct forge_ai_goal_slot const *slot, short at
 	}
 }
 
-/* (from action_alert.c's next position) where a ROUTE's unit goes next. The
-squad keeps where its walk is (route_target, route_forward), not its leader:
-the first point the first time; on from the point reached; and the point it
-was going to when it starts again - a new leader as the old one dies, or the
-leader after a fight - so none goes back to the first. None while the squad
-is alarmed, none past the end of a STAY AT END route, and none for any but
-the leader, who is followed */
+static short forge_ai_patrol_point_pick(struct forge_ai_goal_slot const *slot, real_point3d const *at);
+
+/* each ROUTE unit's own walk along its route: the point it goes to and
+which way it goes (a PING PONG's), by the actor (its unit: a slot used again
+starts again) */
+static struct
+{
+	long unit_index;
+	short target;
+	short forward;
+	boolean started;
+} s_route_walks[MAXIMUM_ACTORS];
+
+static void *forge_ai_route_walk_of(long actor_index, struct actor_datum const *actor)
+{
+	int index = DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index);
+
+	if (index < 0 || index >= MAXIMUM_ACTORS)
+		return NULL;
+	if (s_route_walks[index].unit_index != actor->meta.unit_index)
+	{
+		s_route_walks[index].unit_index = actor->meta.unit_index;
+		s_route_walks[index].target = NONE;
+		s_route_walks[index].forward = 1;
+		s_route_walks[index].started = FALSE;
+	}
+	return &s_route_walks[index];
+}
+
+/* a route unit that cannot reach its point: on to the next, its walk's own */
+static void forge_ai_route_walk_skip(struct forge_ai_goal_slot const *slot, long actor_index,
+	struct actor_datum const *actor)
+{
+	int index = DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index);
+	short count, next;
+
+	if (!slot || !slot->squad || !forge_ai_route_walk_of(actor_index, actor) || s_route_walks[index].target == NONE)
+		return;
+	count = (short)MIN(slot->squad->move_positions.count, FORGE_AI_GOAL_MOVE_POSITIONS);
+	next = forge_ai_route_step(slot, s_route_walks[index].target, count, &s_route_walks[index].forward);
+	error(_error_silent, "forge ai: a route unit cannot reach point %d: on to %d", (int)s_route_walks[index].target,
+		(int)next);
+	if (next != NONE && next >= 0 && next < count)
+		s_route_walks[index].target = next;
+}
+
+/* (from action_alert.c's next position) where a ROUTE's unit goes next. Each
+walks the route on its own, as a unit alone does (a squad following its
+leader crowded onto one point, and stood there in each other's way): the first
+point the first time; on from the point reached; and the point it was going to
+when it starts again after a fight, so none goes back to the first. None while
+the squad is alarmed, none past the end of a STAY AT END route */
 short forge_ai_route_next_position(long actor_index, short move_position_order, short current_position_index,
 	boolean *handled)
 {
 	struct actor_datum *actor = actor_try_and_get(actor_index);
 	struct forge_ai_goal_slot *slot = forge_ai_goal_of_actor(actor);
+	struct move_position_definition const *moves;
 	short count, next;
+	int index;
 
 	(void)move_position_order;
 	*handled = FALSE;
-	if (!slot || slot->goal != _forge_ai_goal_route || !slot->squad)
+	/* (a PATROL's next point: away from where its squadmates stand and go,
+	or they crowd one spot and stand in each other's way) */
+	if (slot && slot->goal == _forge_ai_goal_patrol && slot->squad && actor)
+	{
+		next = forge_ai_patrol_point_pick(slot, &actor->input.position.body_position);
+		*handled = next != NONE;
+		return next;
+	}
+	if (!slot || slot->goal != _forge_ai_goal_route || !slot->squad || !forge_ai_route_walk_of(actor_index, actor))
 		return NONE;
 	*handled = TRUE;
-	if (slot->leader_unit == NONE)
-		slot->leader_unit = actor->meta.unit_index;
+	index = DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index);
 	count = (short)MIN(slot->squad->move_positions.count, FORGE_AI_GOAL_MOVE_POSITIONS);
 	if (count <= 0 || forge_ai_goal_alarmed(slot))
 		return NONE;
-	/* (the others: to the point the leader walks to, by the engine's own
-	walk, as the leader goes - forge_ai_goals_update stops them short of it,
-	and sends them on as the leader does) */
-	if (actor->meta.unit_index != slot->leader_unit)
+	moves = (struct move_position_definition const *)slot->squad->move_positions.address;
+	if (!s_route_walks[index].started)
 	{
-		if (slot->route_target == NONE || slot->route_target >= count || current_position_index == slot->route_target)
-			return NONE;
-		return slot->route_target;
-	}
-	if (!slot->route_started)
-	{
-		slot->route_started = 1;
-		slot->route_forward = 1;
-		slot->route_target = 0;
+		s_route_walks[index].started = TRUE;
+		s_route_walks[index].forward = 1;
+		s_route_walks[index].target = 0;
 		return 0;
 	}
-	/* (starting again: on to where the walk was going, unless that is where
+	/* (starting again: on to where its walk was going, unless that is where
 	it stands) */
-	if (current_position_index == NONE || current_position_index != slot->route_target)
+	if (current_position_index == NONE || current_position_index != s_route_walks[index].target)
 	{
-		struct move_position_definition const *moves =
-			(struct move_position_definition const *)slot->squad->move_positions.address;
+		short target = s_route_walks[index].target;
 
-		if (slot->route_target == NONE)
+		if (target == NONE || target < 0 || target >= count)
 			return NONE;
-		if (slot->route_target >= 0 && slot->route_target < count &&
-			distance_squared3d(&actor->input.position.body_position, &moves[slot->route_target].position) > 1.0f)
+		if (distance_squared3d(&actor->input.position.body_position, &moves[target].position) >
+			FORGE_AI_ARRIVE_DISTANCE * FORGE_AI_ARRIVE_DISTANCE)
 		{
-			return slot->route_target;
+			return target;
 		}
-		current_position_index = slot->route_target;
+		current_position_index = target;
 	}
-	next = forge_ai_route_step(slot, current_position_index, count, &slot->route_forward);
+	next = forge_ai_route_step(slot, current_position_index, count, &s_route_walks[index].forward);
 	if (next == NONE || next < 0 || next >= count)
 	{
 		/* (STAY AT END: there for good) */
 		return NONE;
 	}
-	slot->route_target = next;
+	s_route_walks[index].target = next;
 	return next;
 }
 
@@ -1842,90 +1918,263 @@ static void forge_ai_goal_move_toward(long actor_index, struct actor_datum *acto
 	actor_move_to_point(actor_index, &destination, surface_index, NONE);
 }
 
-/* a route's leader, out of a fight (every third of a second): one that has
-not moved half a unit in three seconds, waiting nowhere, is sent again for its
-point; on the third time, on to the next point, which it may reach */
-#define FORGE_AI_ROUTE_STUCK_TICKS (3 * 30)
-static void forge_ai_route_leader_unstick(struct forge_ai_goal_slot *slot, long actor_index, struct actor_datum *actor,
-	float to_goal, long now)
+
+/* a goal unit walking to its point (a PATROL's, a ROUTE's) that is within
+FORGE_AI_ARRIVE_DISTANCE of it and held there - not moving, or a squadmate on
+the point - has reached it: its point taken as where it stands, so its wait
+counts down and it goes on (action_alert_update), not pushing for the point */
+static float s_unit_last_at[MAXIMUM_ACTORS][3];
+
+static boolean forge_ai_goal_arrive_near(struct forge_ai_goal_slot const *slot, long actor_index,
+	struct actor_datum *actor)
 {
-	struct alert_state_data const *alert = &actor->state.action_data.alert;
+	struct alert_state_data *alert = &actor->state.action_data.alert;
 	real_point3d const *at = &actor->input.position.body_position;
-	float dx = at->x - slot->stuck_point[0], dy = at->y - slot->stuck_point[1], dz = at->z - slot->stuck_point[2];
+	int index = DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index);
+	float to_point, dx, dy, dz;
+	boolean held, crowded = FALSE;
 
-	if (dx * dx + dy * dy + dz * dz > 0.25f || alert->wait_ticks > 0 || to_goal < 1.0f || slot->stuck_since == 0)
+	if (index < 0 || index >= MAXIMUM_ACTORS || actor->state.action != _actor_action_alert ||
+		alert->target_move_position_index == NONE || alert->pending_move_position_index != NONE)
 	{
-		slot->stuck_point[0] = at->x;
-		slot->stuck_point[1] = at->y;
-		slot->stuck_point[2] = at->z;
-		slot->stuck_since = now;
-		if (dx * dx + dy * dy + dz * dz > 4.0f || to_goal < 1.0f)
-			slot->stuck_tries = 0;
-		return;
+		return FALSE;
 	}
-	if (now - slot->stuck_since < FORGE_AI_ROUTE_STUCK_TICKS)
-		return;
-	slot->stuck_since = now;
-	slot->stuck_tries++;
-	if (slot->stuck_tries >= 3 && slot->squad)
+	dx = at->x - s_unit_last_at[index][0];
+	dy = at->y - s_unit_last_at[index][1];
+	dz = at->z - s_unit_last_at[index][2];
+	s_unit_last_at[index][0] = at->x;
+	s_unit_last_at[index][1] = at->y;
+	s_unit_last_at[index][2] = at->z;
+	to_point = distance3d(at, &alert->target_position_definition.position);
+	if (to_point < 0.5f || to_point > FORGE_AI_ARRIVE_DISTANCE)
+		return FALSE;
+	held = dx * dx + dy * dy + dz * dz < 0.15f * 0.15f;
+	if (!held)
 	{
-		short count = (short)MIN(slot->squad->move_positions.count, FORGE_AI_GOAL_MOVE_POSITIONS);
-		short next = forge_ai_route_step(slot, slot->route_target, count, &slot->route_forward);
+		struct data_iterator mates;
+		struct actor_datum *mate;
 
-		error(_error_silent, "forge ai: a route's leader is stuck going to point %d: on to %d", (int)slot->route_target,
-			(int)next);
-		if (next != NONE)
-			slot->route_target = next;
-		slot->stuck_tries = 0;
+		data_iterator_new(&mates, actor_data);
+		while (!crowded && (mate = (struct actor_datum *)data_iterator_next(&mates)) != NULL)
+		{
+			if (mate != actor && forge_ai_goal_of_actor(mate) == slot &&
+				distance3d(&mate->input.position.body_position, &alert->target_position_definition.position) < 1.5f)
+			{
+				crowded = TRUE;
+			}
+		}
 	}
-	action_alert_flush_position_indices(actor_index);
+	if (!held && !crowded)
+		return FALSE;
+	alert->target_position_definition.position = *at;
+	actor_move_halt(actor_index);
+	return TRUE;
 }
 
-/* any goal unit walking to a move position (a PATROL's or a route's
-follower): the engine's alert walk never gives up on its point, so one held
-against something the paths do not know (a Forge object, a ledge) pushes there
-for good. Not moved half a unit in three seconds, away from the point it is
-going to: first sent a step aside, then given its point again */
+/* any goal unit out of a fight but its route's leader (a PATROL's, a
+route's follower). The engine's alert walk can leave one standing for good:
+a failed path keeps its point's wait, which counts down only at the point
+(action_alert_update); one held short of its point (a Forge object, a
+squadmate on it) pushes there; one out of the walk (guarding, or a walk with no
+order or no point) waits for nothing. So a unit that has neither moved half a
+unit nor had its wait count down in FORGE_AI_UNIT_STUCK_TICKS is put back on its
+walk: the squad's walk again if it is out of it, else another point (a PATROL),
+or a step aside, then its point again (a follower). A failed path is given up
+in a second, and that PATROL point retired. Each logged with the unit's state */
+#define FORGE_AI_UNIT_STUCK_TICKS (4 * 30)
 static struct
 {
 	long unit_index;
 	long since;
 	float at[3];
+	short wait_ticks;
 	unsigned char tries;
 } s_unit_stuck[MAXIMUM_ACTORS];
 
-static void forge_ai_goal_unit_unstick(long actor_index, struct actor_datum *actor, int place, long now)
+static void forge_ai_patrol_point_retire(struct forge_ai_goal_slot *slot, short index);
+/* (actor_moving.c's, in no header) */
+extern void actor_path_clear(long actor_index);
+static short forge_ai_patrol_point_pick(struct forge_ai_goal_slot const *slot, real_point3d const *at);
+
+/* a PATROL's point for a unit with none: by weight, a couple of units off */
+static short forge_ai_patrol_point_pick(struct forge_ai_goal_slot const *slot, real_point3d const *at)
 {
-	struct alert_state_data const *alert = &actor->state.action_data.alert;
+	struct move_position_definition const *moves;
+	short count, k, chosen = NONE;
+	float total = 0.0f, roll;
+	char crowded[FORGE_AI_GOAL_MOVE_POSITIONS];
+
+	if (!slot || !slot->squad)
+		return NONE;
+	moves = (struct move_position_definition const *)slot->squad->move_positions.address;
+	count = (short)MIN(slot->squad->move_positions.count, FORGE_AI_GOAL_MOVE_POSITIONS);
+	/* (none where a squadmate stands or is going: they crowded one spot) */
+	{
+		struct data_iterator mates;
+		struct actor_datum *mate;
+
+		memset(crowded, 0, sizeof(crowded));
+		data_iterator_new(&mates, actor_data);
+		while ((mate = (struct actor_datum *)data_iterator_next(&mates)) != NULL)
+		{
+			if (forge_ai_goal_of_actor(mate) != slot || &mate->input.position.body_position == at)
+				continue;
+			if (mate->state.action == _actor_action_alert &&
+				mate->state.action_data.alert.target_move_position_index >= 0 &&
+				mate->state.action_data.alert.target_move_position_index < count)
+			{
+				crowded[mate->state.action_data.alert.target_move_position_index] = 1;
+			}
+			for (k = 0; k < count; k++)
+			{
+				if (distance_squared3d(&mate->input.position.body_position, &moves[k].position) < 9.0f)
+					crowded[k] = 1;
+			}
+		}
+	}
+	for (k = 0; k < count; k++)
+	{
+		if (moves[k].weight > 0.0f && !crowded[k] && distance_squared3d(at, &moves[k].position) > 4.0f)
+			total += moves[k].weight;
+	}
+	/* (all crowded: any) */
+	if (total <= 0.0f)
+	{
+		memset(crowded, 0, sizeof(crowded));
+		for (k = 0; k < count; k++)
+		{
+			if (moves[k].weight > 0.0f && distance_squared3d(at, &moves[k].position) > 4.0f)
+				total += moves[k].weight;
+		}
+	}
+	if (total <= 0.0f)
+		return NONE;
+	roll = real_random_range(0.0f, total);
+	for (k = 0; k < count; k++)
+	{
+		if (moves[k].weight > 0.0f && !crowded[k] && distance_squared3d(at, &moves[k].position) > 4.0f)
+		{
+			chosen = k;
+			roll -= moves[k].weight;
+			if (roll <= 0.0f)
+				break;
+		}
+	}
+	return chosen;
+}
+
+static void forge_ai_goal_unit_unstick(struct forge_ai_goal_slot *slot, long actor_index, struct actor_datum *actor,
+	int place, long now, int patrol)
+{
+	struct alert_state_data *alert = &actor->state.action_data.alert;
 	real_point3d const *at = &actor->input.position.body_position;
 	int slot_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index);
+	int walking = actor->state.action == _actor_action_alert;
+	short target = walking ? alert->target_move_position_index : NONE;
+	short wait = walking ? alert->wait_ticks : 0;
 	float dx, dy, dz, to_point;
 
 	if (slot_index < 0 || slot_index >= MAXIMUM_ACTORS)
 		return;
+	to_point = target == NONE ? 0.0f : distance3d(at, &alert->target_position_definition.position);
 	dx = at->x - s_unit_stuck[slot_index].at[0];
 	dy = at->y - s_unit_stuck[slot_index].at[1];
 	dz = at->z - s_unit_stuck[slot_index].at[2];
-	to_point = alert->target_move_position_index == NONE ? 0.0f :
-		distance3d(at, &alert->target_position_definition.position);
+	/* (moving, or its wait counting down at a point: well) */
 	if (s_unit_stuck[slot_index].unit_index != actor->meta.unit_index || dx * dx + dy * dy + dz * dz > 0.25f ||
-		to_point < 1.5f)
+		(wait > 0 && wait < s_unit_stuck[slot_index].wait_ticks))
 	{
-		if (s_unit_stuck[slot_index].unit_index != actor->meta.unit_index || to_point < 1.5f ||
-			dx * dx + dy * dy + dz * dz > 4.0f)
-		{
+		if (s_unit_stuck[slot_index].unit_index != actor->meta.unit_index)
 			s_unit_stuck[slot_index].tries = 0;
-		}
+		/* (a point reached: the tries over) */
+		if (target != NONE && to_point < 1.0f)
+			s_unit_stuck[slot_index].tries = 0;
 		s_unit_stuck[slot_index].unit_index = actor->meta.unit_index;
 		s_unit_stuck[slot_index].since = now;
 		s_unit_stuck[slot_index].at[0] = at->x;
 		s_unit_stuck[slot_index].at[1] = at->y;
 		s_unit_stuck[slot_index].at[2] = at->z;
+		s_unit_stuck[slot_index].wait_ticks = wait;
 		return;
 	}
-	if (now - s_unit_stuck[slot_index].since < FORGE_AI_ROUTE_STUCK_TICKS)
+	s_unit_stuck[slot_index].wait_ticks = wait;
+	/* (a failed path: given up in a second, its point no PATROL's) */
+	if (walking && target != NONE && alert->pending_move_position_index == NONE && to_point > 1.0f &&
+		!actor_path_has_path(actor_index) && now - s_unit_stuck[slot_index].since >= 30)
+	{
+		error(_error_silent, "forge ai: a goal unit has no path to its point %d (%.1f away, standing on surface %ld): "
+			"another", (int)target, (double)to_point, (long)actor->input.pathfinding_surface_index);
+		/* (the point's fault only when the unit stands where paths start) */
+		if (patrol && actor->input.pathfinding_surface_index != NONE)
+			forge_ai_patrol_point_retire(slot, target);
+		alert->wait_ticks = 0;
+		action_alert_flush_position_indices(actor_index);
+		s_unit_stuck[slot_index].since = now;
+		return;
+	}
+	if (now - s_unit_stuck[slot_index].since < FORGE_AI_UNIT_STUCK_TICKS)
 		return;
 	s_unit_stuck[slot_index].since = now;
+	{
+		/* (the engine's own view of its walk, and its squad's nearness) */
+		struct path_result const *path = &actor->control.path.path;
+		real_point3d const *step = path->valid && path->step_index >= 0 && path->step_index < path->step_count ?
+			&path->steps[(int)path->step_index].point : at;
+		struct data_iterator mates;
+		struct actor_datum *mate;
+		float nearest = 1.0e9f;
+		int close = 0;
+
+		data_iterator_new(&mates, actor_data);
+		while ((mate = (struct actor_datum *)data_iterator_next(&mates)) != NULL)
+		{
+			float d;
+
+			if (mate == actor || forge_ai_goal_of_actor(mate) != slot)
+				continue;
+			d = distance3d(at, &mate->input.position.body_position);
+			if (d < nearest)
+				nearest = d;
+			if (d < 2.0f)
+				close++;
+		}
+		error(_error_silent, "forge ai: a %s unit stands at (%.1f %.1f %.1f): action %d, combat %d, order %d, point %d, "
+			"pending %d, wait %d, path %d (dest type %d, step %d/%d %.1f away, finishes %d), %.1f from its point, "
+			"moving %d, complete %d, thwarted %d, at dest %d, midair %d, emergency %.2f, throttle %.2f, "
+			"nearest mate %.1f, %d within 2, try %d",
+			patrol ? "patrol" : "route", (double)at->x, (double)at->y, (double)at->z, (int)actor->state.action,
+			(int)actor->state.combat_status, walking ? (int)alert->move_position_order : -1, (int)target,
+			walking ? (int)alert->pending_move_position_index : -1, (int)wait, (int)path->valid,
+			(int)actor->control.path.destination_orders.destination_type, (int)path->step_index, (int)path->step_count,
+			(double)distance3d(at, step), (int)path->steps_finish_path, (double)to_point, (int)actor->control.moving,
+			(int)actor->control.movement_complete, (int)actor->control.movement_thwarted,
+			(int)actor->control.path.at_destination, (int)actor->input.in_midair,
+			(double)actor->control.vector_avoidance_rotation_emergency_instantaneous,
+			(double)magnitude3d(&actor->output.throttle), nearest > 1.0e8f ? -1.0 : (double)nearest, close,
+			(int)s_unit_stuck[slot_index].tries);
+	}
+	/* (out of its walk, or on one with no order: the squad's walk again) */
+	if (!walking || alert->move_position_order == 0)
+	{
+		if (slot->squad)
+			actor_action_set_default_state(actor_index, slot->squad->default_state);
+		return;
+	}
+	alert->wait_ticks = 0;
+	if (patrol)
+	{
+		/* (another point, chosen here, for the walk may find none: its old
+		path gone with it) */
+		actor_path_clear(actor_index);
+		action_alert_flush_position_indices(actor_index);
+		alert->pending_move_position_index = forge_ai_patrol_point_pick(slot, at);
+		return;
+	}
+	if (target == NONE)
+	{
+		action_alert_flush_position_indices(actor_index);
+		return;
+	}
 	if ((s_unit_stuck[slot_index].tries++ & 1) == 0)
 	{
 		/* (a step aside, square to the way it was going, left or right in turn) */
@@ -1944,13 +2193,43 @@ static void forge_ai_goal_unit_unstick(long actor_index, struct actor_datum *act
 		aside.x = at->x - gy / length * side - gx / length;
 		aside.y = at->y + gx / length * side - gy / length;
 		aside.z = at->z;
-		error(_error_silent, "forge ai: a goal unit is stuck %.1f from its point: a step aside", (double)to_point);
 		forge_ai_goal_move_toward(actor_index, actor, &aside, 0.0f, place);
 	}
 	else
 	{
-		/* (its point again, from where the step took it) */
+		/* (its point again; a fourth time stuck, the next point instead) */
+		if (s_unit_stuck[slot_index].tries >= 4)
+		{
+			forge_ai_route_walk_skip(slot, actor_index, actor);
+			s_unit_stuck[slot_index].tries = 0;
+		}
 		action_alert_flush_position_indices(actor_index);
+	}
+}
+
+/* a PATROL's point a unit gave up on: weighed nothing from now on, so the
+random walk (action_alert_next_position) picks it no more - unless it is the
+last left */
+static void forge_ai_patrol_point_retire(struct forge_ai_goal_slot *slot, short index)
+{
+	struct move_position_definition *moves;
+	short count, k, left = 0;
+
+	if (!slot || !slot->squad || index < 0)
+		return;
+	moves = (struct move_position_definition *)slot->squad->move_positions.address;
+	count = (short)MIN(slot->squad->move_positions.count, FORGE_AI_GOAL_MOVE_POSITIONS);
+	if (index >= count)
+		return;
+	for (k = 0; k < count; k++)
+	{
+		if (k != index && moves[k].weight > 0.0f)
+			left++;
+	}
+	if (left > 0)
+	{
+		moves[index].weight = 0.0f;
+		error(_error_silent, "forge ai: patrol point %d retired, %d left", (int)index, (int)left);
 	}
 }
 
@@ -2050,7 +2329,7 @@ static void forge_ai_goals_update(long now)
 		}
 		else if (was_alarmed && now + 1 >= slot->alarm_until)
 		{
-			error(_error_silent, "forge ai: goal squad %d calm again: on to route point %d", k, (int)slot->route_target);
+			error(_error_silent, "forge ai: goal squad %d calm again: back on its walk", k);
 		}
 		slot->alive_count = slot->alive_now;
 	}
@@ -2074,14 +2353,6 @@ static void forge_ai_goals_update(long now)
 		actor->meta.dormant_desire = FALSE;
 		at = &actor->input.position.body_position;
 		alarmed = forge_ai_goal_alarmed(slot);
-		if (slot->goal == _forge_ai_goal_route && slot->leader_unit == NONE)
-		{
-			slot->leader_unit = actor->meta.unit_index;
-			/* (the new leader goes on to the point the walk was going to:
-			forge_ai_route_next_position) */
-			if (actor->state.action == _actor_action_alert)
-				action_alert_flush_position_indices(actor_index);
-		}
 		/* (a third of a second apart, each its own tick) */
 		if ((place + now) % 10 != 0 || unit->object.parent_object_index != NONE)
 			continue;
@@ -2114,8 +2385,8 @@ static void forge_ai_goals_update(long now)
 		{
 			float point[3];
 
-			if (idle && actor->state.action == _actor_action_alert)
-				forge_ai_goal_unit_unstick(actor_index, actor, place, now);
+			if (idle && !forge_ai_goal_arrive_near(slot, actor_index, actor))
+				forge_ai_goal_unit_unstick(slot, actor_index, actor, place, now, 1);
 			actor->external_orders.disable_charging = TRUE;
 			point[0] = at->x;
 			point[1] = at->y;
@@ -2131,45 +2402,9 @@ static void forge_ai_goals_update(long now)
 			break;
 		}
 		case _forge_ai_goal_route:
-			if (idle && actor->state.action == _actor_action_alert && slot->squad && slot->route_target != NONE &&
-				slot->route_target < slot->squad->move_positions.count)
-			{
-				struct alert_state_data *alert = &actor->state.action_data.alert;
-				struct move_position_definition const *moves =
-					(struct move_position_definition const *)slot->squad->move_positions.address;
-				real_point3d const *goal_point = &moves[slot->route_target].position;
-				float to_goal = distance3d(at, goal_point);
-
-				if (actor->meta.unit_index == slot->leader_unit)
-				{
-					forge_ai_route_leader_unstick(slot, actor_index, actor, to_goal, now);
-				}
-				else if (alert->target_move_position_index == slot->route_target)
-				{
-					/* (near the leader's point: stopped short of it, a step
-					apart by its place, so they do not crowd onto it) */
-					if (to_goal < FORGE_AI_FOLLOWER_DISTANCE + (float)(place % 3))
-						actor_move_halt(actor_index);
-					else
-						forge_ai_goal_unit_unstick(actor_index, actor, place, now);
-				}
-				else if (alert->target_move_position_index != NONE || alert->pending_move_position_index == NONE)
-				{
-					/* (going for a point the leader has gone past, or none: on
-					to its) */
-					action_alert_flush_position_indices(actor_index);
-				}
-			}
-			else if (idle && actor->meta.unit_index != slot->leader_unit && slot->leader_unit != NONE)
-			{
-				union real_point3d leader;
-
-				/* (not walking the route: after the leader as FOLLOW goes) */
-				object_get_origin(slot->leader_unit, &leader);
-				if (distance3d(at, (real_point3d const *)&leader) > FORGE_AI_FOLLOWER_START)
-					forge_ai_goal_move_toward(actor_index, actor, (real_point3d const *)&leader, FORGE_AI_FOLLOWER_DISTANCE,
-						place);
-			}
+			/* (each on its own walk: forge_ai_route_next_position) */
+			if (idle && !forge_ai_goal_arrive_near(slot, actor_index, actor))
+				forge_ai_goal_unit_unstick(slot, actor_index, actor, place, now, 0);
 			break;
 		case _forge_ai_goal_hunt:
 			/* (GO TO PLAYER: the nearest player within RANGE - anywhere, 0 - is

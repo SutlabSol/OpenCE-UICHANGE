@@ -1213,7 +1213,23 @@ landing, TRUE into edge: firefight_actor_drop's */
 real firefight_straight_walk(real_point3d const *from, real_point3d const *to, real most, real_point3d *end,
 	boolean *edge, real_point3d *landing)
 {
-	unsigned long const flags = FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit);
+	return firefight_straight_walk_ex(from, to, most, end, edge, landing, FF_STRAIGHT_STEP_UP, 0, NONE);
+}
+
+/* (the objects a walk goes round: not units, not what lies on the ground) */
+#define FF_STRAIGHT_OBJECT_FLAGS (FLAG(_collision_test_objects_bit) | FLAG(_collision_test_objects_scenery_bit) | \
+	FLAG(_collision_test_objects_machines_bit) | FLAG(_collision_test_objects_vehicles_bit) | \
+	FLAG(_collision_test_objects_controls_bit) | FLAG(_collision_test_objects_light_fixtures_bit))
+
+real firefight_straight_walk_ex(real_point3d const *from, real_point3d const *to, real most, real_point3d *end,
+	boolean *edge, real_point3d *landing, real step_up, int objects, long ignore_object_index)
+{
+	/* (the walls: the level's; 1, its objects too; 2, and its units, but the
+	walker's own) */
+	unsigned long const flags = FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit) |
+		(objects ? FF_STRAIGHT_OBJECT_FLAGS : 0) | (objects > 1 ? FLAG(_collision_test_objects_bipeds_bit) : 0);
+	unsigned long const ground_flags = FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit) |
+		(objects ? FF_STRAIGHT_OBJECT_FLAGS : 0);
 	real_point3d ground;
 	real_vector3d along;
 	real length, walked = 0.0f;
@@ -1238,26 +1254,26 @@ real firefight_straight_walk(real_point3d const *from, real_point3d const *to, r
 		struct collision_result collision;
 		real_point3d start = ground, next;
 		real_vector3d step = { along.i * FF_STRAIGHT_STEP, along.j * FF_STRAIGHT_STEP, 0.0f };
-		real_vector3d down = { 0.0f, 0.0f, -(FF_STRAIGHT_STEP_UP + FF_STRAIGHT_DROP) };
+		real_vector3d down = { 0.0f, 0.0f, -(step_up + FF_STRAIGHT_DROP) };
 
 		/* (a wall before it) */
-		start.z += FF_STRAIGHT_STEP_UP + 0.1f;
-		if (collision_test_vector(flags, &start, &step, NONE, &collision))
+		start.z += step_up + 0.1f;
+		if (collision_test_vector(flags, &start, &step, ignore_object_index, &collision))
 			break;
 		/* (ground no further down than a safe drop; else an edge, and
 		where a drop over it lands) */
 		start.x += step.i;
 		start.y += step.j;
-		if (!collision_test_vector(flags, &start, &down, NONE, &collision) ||
+		if (!collision_test_vector(ground_flags, &start, &down, NONE, &collision) ||
 			collision.type != _collision_result_structure)
 		{
-			real_vector3d deep = { 0.0f, 0.0f, -(FF_STRAIGHT_STEP_UP + FF_STRAIGHT_LANDING_DEPTH) };
+			real_vector3d deep = { 0.0f, 0.0f, -(step_up + FF_STRAIGHT_LANDING_DEPTH) };
 			struct location location;
 
 			/* (a little past the edge, so the fall clears it) */
 			start.x += step.i * 2.0f;
 			start.y += step.j * 2.0f;
-			if (collision_test_vector(flags, &start, &deep, NONE, &collision) &&
+			if (collision_test_vector(ground_flags, &start, &deep, NONE, &collision) &&
 				collision.type == _collision_result_structure && !death_volume_column(&collision.point, 2.0f))
 			{
 				scenario_location_from_point(&location, &collision.point);
@@ -1277,6 +1293,65 @@ real firefight_straight_walk(real_point3d const *from, real_point3d const *to, r
 	}
 	*end = ground;
 	return walked;
+}
+
+/* port: a straight walk blocked short of its point (a rock, a parked
+vehicle, a slope too steep): a spot off to one side, walked to all the way,
+from which the point is walked to further than from here - all the way at
+best. FALSE: none, round either side */
+boolean firefight_straight_detour(real_point3d const *from, real_point3d const *to, real step_up, int objects,
+	long ignore_object_index, real_point3d *via)
+{
+	static real const angles[] = { 0.6f, -0.6f, 1.2f, -1.2f, 1.8f, -1.8f };
+	static real const lengths[] = { 3.0f, 5.0f };
+	real_point3d end, landing, best_via;
+	boolean edge, found = FALSE;
+	real dx = to->x - from->x, dy = to->y - from->y;
+	real full = (real)sqrt(dx * dx + dy * dy);
+	real base, best = 0.0f;
+	int a, l;
+
+	if (full < 1.0f)
+		return FALSE;
+	base = firefight_straight_walk_ex(from, to, 8.0f, &end, &edge, &landing, step_up, objects, ignore_object_index);
+	best = base + 1.0f;
+	dx /= full;
+	dy /= full;
+	for (a = 0; a < (int)NUMBEROF(angles); a++)
+	{
+		real c = (real)cos(angles[a]), sn = (real)sin(angles[a]);
+		real rx = dx * c - dy * sn, ry = dx * sn + dy * c;
+
+		for (l = 0; l < (int)NUMBEROF(lengths); l++)
+		{
+			real_point3d candidate, reached;
+			real first, second, rest;
+
+			candidate.x = from->x + rx * lengths[l];
+			candidate.y = from->y + ry * lengths[l];
+			candidate.z = from->z;
+			first = firefight_straight_walk_ex(from, &candidate, lengths[l], &reached, &edge, &landing, step_up, objects, ignore_object_index);
+			if (first < lengths[l] - 0.51f)
+				continue;
+			rest = (real)sqrt((to->x - reached.x) * (to->x - reached.x) + (to->y - reached.y) * (to->y - reached.y));
+			second = firefight_straight_walk_ex(&reached, to, 8.0f, &end, &edge, &landing, step_up, objects, ignore_object_index);
+			/* (from there all the way, or as far as a walk goes: taken at once) */
+			if (second >= MIN(rest, 8.0f) - 0.51f)
+			{
+				*via = reached;
+				return TRUE;
+			}
+			if (second > best)
+			{
+				best = second;
+				best_via = reached;
+				found = TRUE;
+			}
+		}
+	}
+	if (found)
+		*via = best_via;
+	return found;
 }
 
 /* port: an actor's drop over an edge it chose (actor_moving.c: no path, the

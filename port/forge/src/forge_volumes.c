@@ -146,6 +146,23 @@ static float size_clamp(float size)
 	return size < FORGE_VOLUME_SIZE_MIN ? FORGE_VOLUME_SIZE_MIN : size > FORGE_VOLUME_SIZE_MAX ? FORGE_VOLUME_SIZE_MAX : size;
 }
 
+/* (the panel's pages: forge_volume_rows) */
+enum
+{
+	VOLUME_PAGE_MAIN = 0,
+	VOLUME_PAGE_EFFECT,
+	VOLUME_PAGE_SIZE
+};
+
+static int32_t s_page_live_idx = -1;
+static int s_page = VOLUME_PAGE_MAIN;
+static int s_page_return_row = _forge_volume_row_effect_page;
+/* KEEP RATIO: on for one volume, its sizes as it was turned on and the
+factor they are times */
+static int32_t s_ratio_live_idx = -1;
+static float s_ratio_base[3];
+static float s_ratio_factor = 1.0f;
+
 /* the shape a path places */
 static int path_shape(char const *tag_path)
 {
@@ -507,6 +524,9 @@ void forge_volume_set(int32_t live_idx, struct forge_volume const *settings, int
 void forge_volumes_level_reset(void)
 {
 	memset(s_volumes, 0, sizeof(s_volumes));
+	s_page_live_idx = -1;
+	s_page = VOLUME_PAGE_MAIN;
+	s_ratio_live_idx = -1;
 	s_occupant_count = 0;
 	s_last_tick = -1;
 	s_gravity_count = 0;
@@ -634,6 +654,111 @@ void forge_volume_describe(int32_t live_idx, char *text, unsigned long size)
 	}
 }
 
+/* ---------- the panel's pages */
+
+static int volume_page(int32_t live_idx)
+{
+	if (s_page_live_idx != live_idx)
+		return VOLUME_PAGE_MAIN;
+	return s_page;
+}
+
+static int volume_ratio_on(int32_t live_idx)
+{
+	return s_ratio_live_idx >= 0 && s_ratio_live_idx == live_idx;
+}
+
+/* whether an effect has an amount (`damage`): its STRENGTH, PURSUIT RANGE or damage */
+static int volume_effect_has_amount(int effect)
+{
+	return effect == _forge_volume_apply_damage || effect == _forge_volume_constant_damage ||
+		effect == _forge_volume_gravity || effect == _forge_volume_ai_patrol;
+}
+
+int forge_volume_rows(int32_t live_idx, int *rows)
+{
+	struct forge_volume const *volume = forge_volume_get(live_idx);
+	int count = 0;
+
+	if (!volume)
+		return 0;
+	if (s_page_live_idx >= 0 && s_page_live_idx != live_idx)
+	{
+		s_page_live_idx = -1;
+		s_page = VOLUME_PAGE_MAIN;
+	}
+	if (s_ratio_live_idx >= 0 && s_ratio_live_idx != live_idx)
+		s_ratio_live_idx = -1;
+	switch (volume_page(live_idx))
+	{
+	case VOLUME_PAGE_EFFECT:
+		rows[count++] = _forge_volume_row_effect;
+		if (volume_effect_has_amount(volume->effect))
+			rows[count++] = _forge_volume_row_damage;
+		/* (GRAVITY's; any other's that has them set, to be turned off) */
+		if (volume->effect == _forge_volume_gravity || (volume->flags & FORGE_VOLUME_FALL_MASK))
+			rows[count++] = _forge_volume_row_fall_damage;
+		if (volume->effect == _forge_volume_gravity || (volume->flags & FORGE_VOLUME_FLAG_STOP_INERTIA))
+			rows[count++] = _forge_volume_row_inertia;
+		rows[count++] = _forge_volume_row_back;
+		break;
+	case VOLUME_PAGE_SIZE:
+		rows[count++] = _forge_volume_row_keep_ratio;
+		rows[count++] = _forge_volume_row_size_x;
+		rows[count++] = _forge_volume_row_size_y;
+		rows[count++] = _forge_volume_row_size_z;
+		if (volume_ratio_on(live_idx))
+			rows[count++] = _forge_volume_row_factor;
+		rows[count++] = _forge_volume_row_back;
+		break;
+	default:
+		rows[count++] = _forge_volume_row_shape;
+		rows[count++] = _forge_volume_row_effect_page;
+		rows[count++] = _forge_volume_row_size_page;
+		rows[count++] = _forge_volume_row_rot_snap;
+		rows[count++] = _forge_volume_row_floor;
+		rows[count++] = _forge_volume_row_delete;
+		break;
+	}
+	return count;
+}
+
+int forge_volume_row_disabled(int32_t live_idx, int row)
+{
+	return volume_ratio_on(live_idx) &&
+		(row == _forge_volume_row_size_x || row == _forge_volume_row_size_y || row == _forge_volume_row_size_z);
+}
+
+int forge_volume_page_return_row(void)
+{
+	return s_page_return_row;
+}
+
+int forge_volume_page_back(int32_t live_idx)
+{
+	if (volume_page(live_idx) == VOLUME_PAGE_MAIN)
+		return 0;
+	s_page_live_idx = -1;
+	s_page = VOLUME_PAGE_MAIN;
+	return 1;
+}
+
+char const *forge_volume_panel_title(int32_t live_idx)
+{
+	struct forge_volume const *volume = forge_volume_get(live_idx);
+	int map_volume = volume && volume->map_index >= 0;
+
+	switch (volume_page(live_idx))
+	{
+	case VOLUME_PAGE_EFFECT:
+		return map_volume ? "MAP VOLUME EFFECT" : "VOLUME EFFECT";
+	case VOLUME_PAGE_SIZE:
+		return map_volume ? "MAP VOLUME SIZE" : "VOLUME SIZE";
+	default:
+		return map_volume ? "MAP VOLUME" : "VOLUME";
+	}
+}
+
 void forge_volume_row_text(int32_t live_idx, int row, char *label, unsigned long label_size, char *value,
 	unsigned long value_size)
 {
@@ -683,6 +808,29 @@ void forge_volume_row_text(int32_t live_idx, int row, char *label, unsigned long
 	case _forge_volume_row_inertia:
 		snprintf(label, label_size, "REMOVE INERTIA:");
 		snprintf(value, value_size, "%s", volume->flags & FORGE_VOLUME_FLAG_STOP_INERTIA ? "ON" : "OFF");
+		break;
+	case _forge_volume_row_effect_page:
+		snprintf(label, label_size, "EFFECT");
+		if (volume->effect == _forge_volume_ai_patrol)
+			snprintf(value, value_size, "AI PATROL #%d", FORGE_VOLUME_PATROL_NUMBER(volume->flags));
+		else
+			snprintf(value, value_size, "%s", s_effect_names[volume->effect]);
+		break;
+	case _forge_volume_row_size_page:
+		snprintf(label, label_size, "SIZE");
+		snprintf(value, value_size, "%.2f x %.2f x %.2f", (double)volume->size[0], (double)volume->size[1],
+			(double)volume->size[2]);
+		break;
+	case _forge_volume_row_keep_ratio:
+		snprintf(label, label_size, "KEEP RATIO:");
+		snprintf(value, value_size, "%s", volume_ratio_on(live_idx) ? "ON" : "OFF");
+		break;
+	case _forge_volume_row_factor:
+		snprintf(label, label_size, "FACTOR:");
+		snprintf(value, value_size, "X%.2f", (double)s_ratio_factor);
+		break;
+	case _forge_volume_row_back:
+		snprintf(label, label_size, "< BACK");
 		break;
 	case _forge_volume_row_size_x:
 	case _forge_volume_row_size_y:
@@ -740,6 +888,61 @@ int forge_volume_row_step(int32_t live_idx, int row, int dir)
 	settings = *now;
 	switch (row)
 	{
+	case _forge_volume_row_effect_page:
+	case _forge_volume_row_size_page:
+		s_page_live_idx = live_idx;
+		s_page = row == _forge_volume_row_effect_page ? VOLUME_PAGE_EFFECT : VOLUME_PAGE_SIZE;
+		s_page_return_row = row;
+		return FORGE_VOLUME_PRESS_PAGE_OPENED;
+	case _forge_volume_row_back:
+		forge_volume_page_back(live_idx);
+		return FORGE_VOLUME_PRESS_PAGE_CLOSED;
+	case _forge_volume_row_keep_ratio:
+		if (volume_ratio_on(live_idx))
+		{
+			/* (off: the sizes stay as the factor made them) */
+			s_ratio_live_idx = -1;
+			forge_set_status("Keep ratio off: each size on its own");
+		}
+		else
+		{
+			s_ratio_live_idx = live_idx;
+			s_ratio_base[0] = settings.size[0];
+			s_ratio_base[1] = settings.size[1];
+			s_ratio_base[2] = settings.size[2];
+			s_ratio_factor = 1.0f;
+			forge_set_status("Keep ratio on: FACTOR scales all three sizes together");
+		}
+		return 1;
+	case _forge_volume_row_factor:
+	{
+		/* (tenths to 2, quarters to 5, halves past) */
+		float factor = s_ratio_factor;
+		float step = factor < 2.0f - 0.001f || (dir < 0 && factor <= 2.0f + 0.001f) ? 0.1f :
+			factor < 5.0f - 0.001f || (dir < 0 && factor <= 5.0f + 0.001f) ? 0.25f : 0.5f;
+		int k;
+
+		if (!volume_ratio_on(live_idx))
+			return 0;
+		factor = (float)floor((double)((factor + step * (float)dir) / step) + 0.5) * step;
+		if (factor < 0.1f)
+			factor = 0.1f;
+		/* (no further than a size's least or most allows) */
+		for (k = 0; k < 3; k++)
+		{
+			float size = s_ratio_base[k] * factor;
+
+			if (size < FORGE_VOLUME_SIZE_MIN - 0.001f || size > FORGE_VOLUME_SIZE_MAX + 0.001f)
+			{
+				forge_set_status("A size would go past %s", size < FORGE_VOLUME_SIZE_MIN ? "its least" : "its most");
+				return 0;
+			}
+		}
+		s_ratio_factor = factor;
+		for (k = 0; k < 3; k++)
+			settings.size[k] = size_clamp(s_ratio_base[k] * factor);
+		break;
+	}
 	case _forge_volume_row_shape:
 		if (settings.map_index >= 0)
 		{
@@ -831,6 +1034,11 @@ int forge_volume_row_step(int32_t live_idx, int row, int dir)
 	case _forge_volume_row_size_x:
 	case _forge_volume_row_size_y:
 	case _forge_volume_row_size_z:
+		if (forge_volume_row_disabled(live_idx, row))
+		{
+			forge_set_status("Keep ratio is on: FACTOR sizes it");
+			return 0;
+		}
 		settings.size[row - _forge_volume_row_size_x] = size_step(settings.size[row - _forge_volume_row_size_x], dir);
 		break;
 	default:

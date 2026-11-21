@@ -842,6 +842,15 @@ end; stopped at an edge with ground to land on beyond it, TRUE into edge and
 the landing (firefight_spawner.c) */
 real firefight_straight_walk(real_point3d const *from, real_point3d const *to, real most, real_point3d *end,
 	boolean *edge, real_point3d *landing);
+/* the same with its most climb per half unit (`step_up`: firefight_straight_walk's
+0.8) and, `objects` 1, round objects as well as the level's walls; 2, round
+units too, but `ignore_object_index` (the walker) */
+real firefight_straight_walk_ex(real_point3d const *from, real_point3d const *to, real most, real_point3d *end,
+	boolean *edge, real_point3d *landing, real step_up, int objects, long ignore_object_index);
+/* a spot to one side to walk to first, when the straight walk to `to` is
+blocked short of it: FALSE for none (firefight_spawner.c) */
+boolean firefight_straight_detour(real_point3d const *from, real_point3d const *to, real step_up, int objects,
+	long ignore_object_index, real_point3d *via);
 /* an actor's chosen drop over an edge: no falling damage until it lands;
 the drops landed each Firefight tick; forgotten at a game's start */
 void firefight_actor_drop(long unit_index);

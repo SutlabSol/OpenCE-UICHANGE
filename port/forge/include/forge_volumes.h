@@ -119,8 +119,22 @@ enum forge_volume_row
 	_forge_volume_row_rot_snap,
 	_forge_volume_row_floor,
 	_forge_volume_row_delete,
+	/* (the pages: EFFECT > and SIZE > on the first, and theirs) */
+	_forge_volume_row_effect_page,
+	_forge_volume_row_size_page,
+	/* (SIZE's KEEP RATIO, and its FACTOR, the sizes it was turned on with
+	times it) */
+	_forge_volume_row_keep_ratio,
+	_forge_volume_row_factor,
+	_forge_volume_row_back,
 	NUMBER_OF_FORGE_VOLUME_ROWS
 };
+
+#define FORGE_VOLUME_ROW_IS_PAGE_BUTTON(row) ((row) == _forge_volume_row_effect_page || \
+	(row) == _forge_volume_row_size_page || (row) == _forge_volume_row_back)
+/* forge_volume_row_step's results past changed (1) */
+#define FORGE_VOLUME_PRESS_PAGE_OPENED 2
+#define FORGE_VOLUME_PRESS_PAGE_CLOSED 3
 
 /* a volume's flags (forge_volume.flags) */
 enum
@@ -198,8 +212,19 @@ void forge_volumes_level_reset(void);
 /* the text of a volume's rows (forge_3d_mode.c's panel) */
 void forge_volume_row_text(int32_t live_idx, int row, char *label, unsigned long label_size, char *value,
 	unsigned long value_size);
-/* a row stepped (`dir` -1/1); TRUE when it changed something */
+/* a row stepped (`dir` -1/1); 1 when it changed something, or
+FORGE_VOLUME_PRESS_PAGE_OPENED/CLOSED */
 int forge_volume_row_step(int32_t live_idx, int row, int dir);
+/* the rows of the page shown, in order (room for NUMBER_OF_FORGE_VOLUME_ROWS) */
+int forge_volume_rows(int32_t live_idx, int *rows);
+/* a row shown but not to be changed (a size while KEEP RATIO is on) */
+int forge_volume_row_disabled(int32_t live_idx, int row);
+/* the page row (EFFECT >, SIZE >) the last page closed came back to */
+int forge_volume_page_return_row(void);
+/* a page closed (back/Esc): 1 when one was open */
+int forge_volume_page_back(int32_t live_idx);
+/* the panel's title on its page */
+char const *forge_volume_panel_title(int32_t live_idx);
 /* a volume's name: what it is and does ("KILL BOX") */
 void forge_volume_describe(int32_t live_idx, char *text, unsigned long size);
 
