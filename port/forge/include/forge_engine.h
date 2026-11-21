@@ -597,7 +597,16 @@ char const *forge_ai_group_name(int group);
 int forge_ai_row_is_random(struct forge_catalog_entry const *entry);
 int forge_ai_row_group(struct forge_catalog_entry const *entry);
 int forge_ai_tag_is_poor(char const *path);
-/* the rows of an AI spawn's properties: its own, then the panel's */
+/* the rows of an AI spawn's properties. Its panel's first page has UNIT
+SETTINGS >, SPAWN SETTINGS > and GOAL SETTINGS >, then ROT SNAP, DROP TO FLOOR
+and DELETE; each page opens on its rows and closes on < BACK:
+	UNIT    AI, TEAM, LOADOUT, CLOAKED, GAME MODE, FLYING HEIGHT (a flying
+	        unit's alone)
+	SPAWN   AT START, RESPAWN (keep alive), RESPAWN DELAY, RESPAWN LIMIT,
+	        SPAWN EFFECT
+	GOAL    GOAL, then what it has of PATROL VOLUME or ROUTE (the target row),
+	        PLAYER, RANGE and STOP DISTANCE (a team friendly to players), SPEED
+	        and ALERT TIME */
 enum forge_ai_spawn_row
 {
 	_forge_ai_row_variant = 0,
@@ -611,14 +620,14 @@ enum forge_ai_spawn_row
 	_forge_ai_row_spawn_effect,
 	_forge_ai_row_cloaked,
 	_forge_ai_row_hover_height,
-	/* (GOAL >: opens the goal's page) */
+	/* (the pages, opened on a press) */
+	_forge_ai_row_unit_page,
+	_forge_ai_row_spawn_page,
 	_forge_ai_row_goal_page,
 	NUMBER_OF_FORGE_AI_SETTING_ROWS,
 	_forge_ai_row_rot_snap = NUMBER_OF_FORGE_AI_SETTING_ROWS,
 	_forge_ai_row_floor,
 	_forge_ai_row_delete,
-	/* the goal's page: GOAL, then what it has of PATROL VOLUME or ROUTE (the
-	target row), WHO, START DISTANCE and FOLLOW DISTANCE, then BACK */
 	_forge_ai_row_goal,
 	_forge_ai_row_goal_target,
 	_forge_ai_row_goal_who,
@@ -626,9 +635,16 @@ enum forge_ai_spawn_row
 	_forge_ai_row_goal_follow,
 	/* (SPEED: WALK or RUN, any goal but none) */
 	_forge_ai_row_goal_speed,
+	/* (ALERT TIME: how long the squad stays alert, any goal but none) */
+	_forge_ai_row_goal_alert,
+	/* (< BACK: any page's, to the first) */
 	_forge_ai_row_goal_back,
 	NUMBER_OF_FORGE_AI_ROWS
 };
+
+/* whether an AI spawn's row opens or closes a page (on a press, not a step) */
+#define FORGE_AI_ROW_IS_PAGE_BUTTON(row) ((row) == _forge_ai_row_unit_page || (row) == _forge_ai_row_spawn_page || \
+	(row) == _forge_ai_row_goal_page || (row) == _forge_ai_row_goal_back)
 
 /* an AI spawn's GOAL (forge_ai_spawn_entry.goal): what its units do when they
 are not fighting */
@@ -642,15 +658,18 @@ enum forge_ai_goal
 	/* walk an AI route (goal_link its number): a leader walks it, the others
 	follow the leader */
 	_forge_ai_goal_route,
-	/* go for the nearest player of goal_who once farther than goal_start */
+	/* GO TO PLAYER: go to the nearest player of goal_who within goal_start (0:
+	anywhere), stopping goal_follow from it when their team is a players'
+	(red, blue, all players); others go all the way, at a run */
 	_forge_ai_goal_hunt,
-	/* keep near the nearest player of goal_who: once farther than goal_start,
-	back to goal_follow from them */
-	_forge_ai_goal_follow,
 	NUMBER_OF_FORGE_AI_GOALS
 };
+/* (FOLLOW PLAYER, a map's of before: read as GO TO PLAYER) */
+#define FORGE_AI_GOAL_LEGACY_FOLLOW 4
+/* (ALERT TIME, goal_alert's seconds: 0 is this) */
+#define FORGE_AI_GOAL_ALERT_DEFAULT 12
 
-/* whom HUNT and FOLLOW go for (goal_who) */
+/* whom GO TO PLAYER goes for (goal_who) */
 enum
 {
 	_forge_ai_goal_who_any = 0,
@@ -673,7 +692,7 @@ are */
 how many */
 int forge_ai_spawn_rows(int32_t live_idx, int *rows);
 /* a spawn's goal, as the network has it (!FJ:) */
-void forge_ai_spawn_goal_apply(int32_t live_idx, int goal, int link, int who, int start, int follow);
+void forge_ai_spawn_goal_apply(int32_t live_idx, int goal, int link, int who, int start, int follow, int alert);
 /* the spawns' lines to their goals, in Forge mode: those of a spawn held or
 pointed at, and those of all the spawns linked to a route or AI PATROL volume
 held or pointed at */
@@ -710,8 +729,14 @@ void forge_ai_spawn_settings_set(int32_t live_idx, struct forge_ai_spawn_entry c
 void forge_ai_spawn_copy_settings(int source_entry, int32_t live_idx);
 void forge_ai_spawn_row_text(int32_t live_idx, int row, char *label, size_t label_size, char *value, size_t value_size);
 /* a row stepped: 0, or FORGE_AI_ROUTE_PRESS_PAGE_OPENED/CLOSED (forge_ai_routes.h)
-for the goal's page opened or closed */
+for a page opened or closed */
 int forge_ai_spawn_row_step(int32_t live_idx, int row, int dir);
+/* the page row (UNIT/SPAWN/GOAL SETTINGS >) the last BACK came back to */
+int forge_ai_spawn_page_return_row(void);
+/* a page closed (back/Esc): 1 when one was open, the page row then forge_ai_spawn_page_return_row */
+int forge_ai_spawn_page_back(int32_t live_idx);
+/* the title of the panel's page */
+char const *forge_ai_spawn_panel_title(int32_t live_idx);
 void forge_ai_spawn_label(struct forge_live_instance const *inst, char *text, size_t text_size);
 void forge_ai_spawn_net_apply(
 	int32_t live_idx,

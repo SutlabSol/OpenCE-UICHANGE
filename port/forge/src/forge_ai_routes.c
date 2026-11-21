@@ -31,6 +31,10 @@ static char const *const s_behavior_names[NUMBER_OF_FORGE_AI_ROUTE_BEHAVIORS] = 
 
 /* the ROUTE SETTINGS page: open for this point (-1: closed) */
 static int32_t s_settings_live_idx = -1;
+/* the ADD row's button chosen: 0 BEFORE, 1 AFTER */
+static int s_add_side = 1;
+/* the panel's title */
+static char s_title[48];
 
 /* a new route's second point, following its first while it is held */
 static struct
@@ -473,20 +477,29 @@ int forge_ai_route_rows(int32_t live_idx, int *rows)
 		rows[count++] = _forge_ai_route_row_back;
 		return count;
 	}
-	rows[count++] = _forge_ai_route_row_point;
-	rows[count++] = _forge_ai_route_row_wait;
-	rows[count++] = _forge_ai_route_row_add_before;
-	rows[count++] = _forge_ai_route_row_add_after;
 	rows[count++] = _forge_ai_route_row_settings;
+	rows[count++] = _forge_ai_route_row_wait;
 	rows[count++] = _forge_ai_route_row_rot_snap;
 	rows[count++] = _forge_ai_route_row_floor;
 	rows[count++] = _forge_ai_route_row_delete;
+	rows[count++] = _forge_ai_route_row_add;
 	return count;
 }
 
 char const *forge_ai_route_panel_title(int32_t live_idx)
 {
-	return s_settings_live_idx >= 0 && s_settings_live_idx == live_idx ? "AI ROUTE SETTINGS" : "AI ROUTE POINT";
+	struct forge_live_instance const *inst = route_point(live_idx);
+	int count = 0, rank;
+
+	if (!inst)
+		return "AI ROUTE POINT";
+	rank = route_rank(live_idx, &count);
+	if (s_settings_live_idx >= 0 && s_settings_live_idx == live_idx)
+		snprintf(s_title, sizeof(s_title), "AI ROUTE #%d SETTINGS", FORGE_AI_ROUTE_NUMBER(inst->team_designator));
+	else
+		snprintf(s_title, sizeof(s_title), "AI ROUTE #%d POINT %d OF %d", FORGE_AI_ROUTE_NUMBER(inst->team_designator),
+			rank + 1, count);
+	return s_title;
 }
 
 void forge_ai_route_row_text(int32_t live_idx, int row, char *label, unsigned long label_size, char *value,
@@ -517,8 +530,12 @@ void forge_ai_route_row_text(int32_t live_idx, int row, char *label, unsigned lo
 		snprintf(label, label_size, "ADD POINT AFTER");
 		break;
 	case _forge_ai_route_row_settings:
-		snprintf(label, label_size, "ROUTE SETTINGS >");
-		snprintf(value, value_size, "#%d", FORGE_AI_ROUTE_NUMBER(inst->team_designator));
+		snprintf(label, label_size, "ROUTE #%d SETTINGS", FORGE_AI_ROUTE_NUMBER(inst->team_designator));
+		snprintf(value, value_size, "%s", forge_ai_route_behavior_name(FORGE_AI_ROUTE_BEHAVIOR(inst->team_designator)));
+		break;
+	case _forge_ai_route_row_add:
+		snprintf(label, label_size, "ADD POINT BEFORE");
+		snprintf(value, value_size, "ADD POINT AFTER");
 		break;
 	case _forge_ai_route_row_number:
 		snprintf(label, label_size, "ROUTE NUMBER:");
@@ -565,6 +582,15 @@ int forge_ai_route_row_press(int32_t live_idx, int row, int dir, int enter)
 			return FORGE_AI_ROUTE_PRESS_NONE;
 		route_insert(live_idx, row == _forge_ai_route_row_add_after);
 		return FORGE_AI_ROUTE_PRESS_CHANGED;
+	case _forge_ai_route_row_add:
+		/* (left and right choose the button, a press adds there) */
+		if (!enter)
+		{
+			s_add_side = dir < 0 ? 0 : 1;
+			return FORGE_AI_ROUTE_PRESS_NONE;
+		}
+		route_insert(live_idx, s_add_side);
+		return FORGE_AI_ROUTE_PRESS_CHANGED;
 	case _forge_ai_route_row_settings:
 		if (!enter)
 			return FORGE_AI_ROUTE_PRESS_NONE;
@@ -602,6 +628,24 @@ int forge_ai_route_row_press(int32_t live_idx, int row, int dir, int enter)
 	default:
 		return FORGE_AI_ROUTE_PRESS_NONE;
 	}
+}
+
+int forge_ai_route_add_side(void)
+{
+	return s_add_side;
+}
+
+void forge_ai_route_add_side_set(int after)
+{
+	s_add_side = after ? 1 : 0;
+}
+
+int forge_ai_route_page_back(int32_t live_idx)
+{
+	if (s_settings_live_idx < 0 || s_settings_live_idx != live_idx)
+		return 0;
+	s_settings_live_idx = -1;
+	return 1;
 }
 
 void forge_ai_route_describe(int32_t live_idx, char *text, unsigned long size)

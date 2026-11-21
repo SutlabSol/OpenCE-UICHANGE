@@ -978,22 +978,25 @@ static int forge_ai_goal_packet(int32_t live_idx, char *msg, size_t msg_size)
 	forge_ai_spawn_net_settings(live_idx, &variant_hash, &weapon_hash, &entry);
 	if (!entry)
 		return 0;
-	snprintf(msg, msg_size, "!FJ:%X:%X:%X:%X:%X:%X", (unsigned int)live_idx, (unsigned int)entry->goal,
+	/* (ALERT TIME last: a peer of before reads the six it knows) */
+	snprintf(msg, msg_size, "!FJ:%X:%X:%X:%X:%X:%X:%X", (unsigned int)live_idx, (unsigned int)entry->goal,
 		(unsigned int)entry->goal_link, (unsigned int)entry->goal_who, (unsigned int)entry->goal_start,
-		(unsigned int)entry->goal_follow);
+		(unsigned int)entry->goal_follow, (unsigned int)entry->goal_alert);
 	return 1;
 }
 
 static int forge_ai_goal_packet_apply(char const *text, int32_t *target_idx)
 {
-	unsigned int live_idx = 0, goal = 0, link = 0, who = 0, start = 0, follow = 0;
+	unsigned int live_idx = 0, goal = 0, link = 0, who = 0, start = 0, follow = 0, alert = 0;
+	int fields = sscanf(text + 4, "%X:%X:%X:%X:%X:%X:%X", &live_idx, &goal, &link, &who, &start, &follow, &alert);
 
-	if (sscanf(text + 4, "%X:%X:%X:%X:%X:%X", &live_idx, &goal, &link, &who, &start, &follow) != 6)
+	if (fields < 6)
 		return 0;
 	*target_idx = forge_resolve_target_live_idx((int)live_idx, -1);
 	if (*target_idx < 0)
 		return 0;
-	forge_ai_spawn_goal_apply(*target_idx, (int)goal, (int)link, (int)who, (int)start, (int)follow);
+	forge_ai_spawn_goal_apply(*target_idx, (int)goal, (int)link, (int)who, (int)start, (int)follow,
+		fields >= 7 ? (int)alert : -1);
 	return 1;
 }
 

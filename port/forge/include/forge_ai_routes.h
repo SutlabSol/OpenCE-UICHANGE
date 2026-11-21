@@ -19,9 +19,10 @@ so the network's spawn (!FH:/!FS:) and usage (!FU:) packets, Forge's
 history and its copies carry a point whole. A saved map keeps each point on
 an AI_ROUTE| line of its trailer.
 
-A point's Object Settings: POINT (its place), WAIT TIME, ADD POINT BEFORE and
-AFTER (on the line, or on past an end), ROUTE SETTINGS (a page: the route's
-NUMBER, its BEHAVIOR, DELETE ROUTE, BACK), then those of every marker.
+A point's Object Settings, titled AI ROUTE #X POINT Y: ROUTE #X SETTINGS > (a
+page: the route's NUMBER, its BEHAVIOR, DELETE ROUTE, BACK), WAIT TIME, ROT
+SNAP, DROP TO FLOOR, DELETE POINT, then ADD POINT BEFORE and ADD POINT AFTER
+side by side on one row (on the line, or on past an end).
 */
 
 #ifndef __FORGE_AI_ROUTES_H
@@ -70,6 +71,9 @@ enum forge_ai_route_row
 	_forge_ai_route_row_rot_snap,
 	_forge_ai_route_row_floor,
 	_forge_ai_route_row_delete,
+	/* (ADD POINT BEFORE and AFTER, two buttons on one row: left and right
+	choose, a press adds) */
+	_forge_ai_route_row_add,
 	NUMBER_OF_FORGE_AI_ROUTE_ROWS
 };
 
@@ -134,6 +138,11 @@ char const *forge_ai_route_panel_title(int32_t live_idx);
 void forge_ai_route_row_text(int32_t live_idx, int row, char *label, unsigned long label_size, char *value,
 	unsigned long value_size);
 int forge_ai_route_row_press(int32_t live_idx, int row, int dir, int enter);
+/* the ADD row's button chosen: 0 BEFORE, 1 AFTER */
+int forge_ai_route_add_side(void);
+void forge_ai_route_add_side_set(int after);
+/* the settings page closed (back/Esc): 1 when one was open */
+int forge_ai_route_page_back(int32_t live_idx);
 /* a point as the view's label calls it ("AI Route #2: Point 3 of 5") */
 void forge_ai_route_describe(int32_t live_idx, char *text, unsigned long size);
 

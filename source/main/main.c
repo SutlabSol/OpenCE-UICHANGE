@@ -391,6 +391,10 @@ symbols in this file:
 #include "network_privacy.h" /* port: port/linux/game/network_privacy.c */
 #include "network_riding_map.h" /* port: port/linux/game/network_riding_map.c */
 #include "map_share.h" /* port: port/linux/game/map_share.c */
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
+#if OPENCE_ENABLE_FORGE
+extern int forge_level_is_session(void); /* port/forge/src/forge_hooks.c */
+#endif
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
 #ifdef HALO_PROFILE
 #include "profile_trace.h" /* port: port/linux/src/profile_trace.c */
@@ -2417,6 +2421,13 @@ static void main_lost_map_private(
 		{
 			if (skull_active(_skull_iron) && local_player_count() < 2 && players_are_all_dead())
 				main_reset_map();
+#if OPENCE_ENABLE_FORGE
+			/* port: a solo Forge game's death respawns the player: a revert
+			would rewind every object to the checkpoint, the map's edits since
+			with them (port/forge/src/forge_hooks.c) */
+			else if (players_are_all_dead() && forge_level_is_session())
+				players_respawn_at_checkpoint();
+#endif
 			else
 				game_state_revert();
 		}

@@ -672,6 +672,8 @@ static void set_forge_hud_ui_scale(float scale, float origin_x, float origin_y)
 }
 
 static int s_props_row_has_value[16];
+/* (a row of two buttons, its halves each its own: a route point's ADD) */
+static int s_props_row_split[16];
 
 /* ---------- a Forge menu's mouse
 
@@ -755,7 +757,11 @@ static void forge_pointer_poll(void)
 		if (hit->kind == _forge_hit_palette_row)
 			g_forge.palette_cursor = hit->index;
 		else if (hit->kind == _forge_hit_props_row)
+		{
 			g_forge.props_cursor = hit->index;
+			if (s_props_row_split[hit->index & 15])
+				forge_ai_route_add_side_set(pointer.x >= (hit->x0 + hit->x1) / 2);
+		}
 		else if (hit->kind == _forge_hit_settings_row)
 			forge_map_settings_menu_hover(hit->index);
 	}
@@ -802,8 +808,14 @@ static void forge_pointer_poll(void)
 		break;
 	case _forge_hit_props_row:
 		g_forge.props_cursor = hit->index;
+		/* (a row of two buttons: the half clicked, pressed) */
+		if (s_props_row_split[hit->index & 15])
+		{
+			forge_ai_route_add_side_set(pointer.click_x >= (hit->x0 + hit->x1) / 2);
+			s_pointer_input.enter = 1;
+		}
 		/* (on a value's left, back; anything else, as A) */
-		if (pointer.click_x < (hit->x0 + hit->x1) / 2 && s_props_row_has_value[hit->index & 15])
+		else if (pointer.click_x < (hit->x0 + hit->x1) / 2 && s_props_row_has_value[hit->index & 15])
 			s_pointer_input.left = 1;
 		else
 			s_pointer_input.enter = 1;
@@ -8561,8 +8573,39 @@ void forge_3d_update(float dt)
 			modal_before_hotkeys != _forge_modal_none &&
 			modal_before_hotkeys != _forge_modal_save_copy_as)
 		{
+			int props_live = g_forge.grabbed_live_index;
+
+			/* (out of an AI spawn's UNIT/SPAWN/GOAL page, to its first page,
+			on the row it was opened from) */
+			if (modal_before_hotkeys == _forge_modal_object_properties && props_live >= 0 &&
+				forge_ai_spawn_page_back(props_live))
+			{
+				int rows[NUMBER_OF_FORGE_AI_ROWS];
+				int count = forge_ai_spawn_rows(props_live, rows), k;
+
+				g_forge.props_cursor = 0;
+				for (k = 0; k < count; k++)
+				{
+					if (rows[k] == forge_ai_spawn_page_return_row())
+						g_forge.props_cursor = k;
+				}
+			}
+			/* (out of an AI route's settings, to its point) */
+			else if (modal_before_hotkeys == _forge_modal_object_properties && props_live >= 0 &&
+				forge_ai_route_page_back(props_live))
+			{
+				int rows[NUMBER_OF_FORGE_AI_ROUTE_ROWS];
+				int count = forge_ai_route_rows(props_live, rows), k;
+
+				g_forge.props_cursor = 0;
+				for (k = 0; k < count; k++)
+				{
+					if (rows[k] == _forge_ai_route_row_settings)
+						g_forge.props_cursor = k;
+				}
+			}
 			/* (out of a drop point's FACTIONS TO SPAWN, to its panel) */
-			if (modal_before_hotkeys == _forge_modal_object_properties && s_props_factions_open)
+			else if (modal_before_hotkeys == _forge_modal_object_properties && s_props_factions_open)
 			{
 				s_props_factions_open = 0;
 				g_forge.props_cursor = FORGE_FF_ZONE_FIRST_ROW;
@@ -9231,16 +9274,28 @@ void forge_3d_update(float dt)
 					g_forge.active_modal = _forge_modal_none;
 					goto update_prev_keys;
 				}
-				/* (GOAL > and BACK open and close the goal's page on a press) */
-				else if (row >= 0 && ((row != _forge_ai_row_goal_page && row != _forge_ai_row_goal_back) ||
-					(cur_enter && !prev_enter)))
+				/* (UNIT/SPAWN/GOAL SETTINGS > and BACK open and close their
+				pages on a press) */
+				else if (row >= 0 && (!FORGE_AI_ROW_IS_PAGE_BUTTON(row) || (cur_enter && !prev_enter)))
 				{
 					int press = forge_ai_spawn_row_step(g_forge.grabbed_live_index, row, dir);
 
 					if (press == FORGE_AI_ROUTE_PRESS_PAGE_OPENED)
+					{
 						g_forge.props_cursor = 0;
+					}
 					else if (press == FORGE_AI_ROUTE_PRESS_PAGE_CLOSED)
-						g_forge.props_cursor = _forge_ai_row_goal_page;
+					{
+						int rows[NUMBER_OF_FORGE_AI_ROWS];
+						int count = forge_ai_spawn_rows(g_forge.grabbed_live_index, rows), k;
+
+						g_forge.props_cursor = 0;
+						for (k = 0; k < count; k++)
+						{
+							if (rows[k] == forge_ai_spawn_page_return_row())
+								g_forge.props_cursor = k;
+						}
+					}
 				}
 			}
 			else if (is_tele)
@@ -11564,7 +11619,7 @@ void forge_3d_draw_hud(
 				factions_page ? "FACTIONS TO SPAWN" : is_volume ?
 					(forge_volume_get(g_forge.grabbed_live_index)->map_index >= 0 ? "MAP VOLUME" : "VOLUME") :
 					is_ai_route ? forge_ai_route_panel_title(g_forge.grabbed_live_index) :
-					is_ai_spawn ? (ai_row_count > 0 && ai_rows[0] == _forge_ai_row_goal ? "AI SPAWN GOAL" : "AI SPAWN") :
+					is_ai_spawn ? forge_ai_spawn_panel_title(g_forge.grabbed_live_index) :
 					(is_tele ? "TELEPORTER" :
 					(is_route_point ? "DROPSHIP ROUTE" : (is_zone ? "ENEMY DROP POINT" :
 					(is_ff_spawn ? forge_ff_spawn_kind_title(FORGE_FF_UNPACK_TYPE(inst->team_designator)) :
@@ -11854,19 +11909,60 @@ void forge_3d_draw_hud(
 				int sel = (g_forge.props_cursor == r);
 				uint32_t col = sel ? 0xFFFFFFFFu : 0xFF2896FFu;
 
+				/* (a route point's ADD POINT BEFORE and AFTER: two buttons side
+				by side, the one chosen lit while the row is) */
+				s_props_row_split[r & 15] = 0;
+				if (is_ai_route && r < route_row_count && route_rows[r] == _forge_ai_route_row_add)
+				{
+					short half = (short)((rx1 - rx0 - 8) / 2);
+					int after = forge_ai_route_add_side();
+
+					forge_hit_add(_forge_hit_props_row, r, rx0, ry0, rx1, ry1);
+					s_props_row_split[r & 15] = 1;
+					s_props_row_has_value[r & 15] = 0;
+					draw_ce_text_button(font_index, rx0, ry0, half, 25, sel && !after, labels[r]);
+					draw_ce_text_button(font_index, (short)(rx1 - half), ry0, half, 25, sel && after, values[r]);
+					continue;
+				}
 				draw_ce_rounded_row_bar((short)(sel ? 1 : 0), rx0, ry0, rx1, ry1);
 				forge_hit_add(_forge_hit_props_row, r, rx0, ry0, rx1, ry1);
 				s_props_row_has_value[r & 15] = values[r][0] != 0;
 
-				draw_ce_menu_str_box(1, font_index, (short)(rx0 + 10), (short)(ry0 + 2), (short)(rx1 - 10), ry1, 0, labels[r], col);
-				if (values[r][0])
 				{
-					short vx0 = (short)(rx0 + 118);
-					short vx1 = (short)(rx1 - 8);
-					draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_left", 0, vx0, (short)(ry0 + 6), (short)(vx0 + 6), (short)(ry0 + 18), 6, 12, 0xFFFFFFFFu);
-					draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_right", 0, (short)(vx1 - 6), (short)(ry0 + 6), vx1, (short)(ry0 + 18), 6, 12, 0xFFFFFFFFu);
-					forge_text_fit(0, font_index, values[r], (short)(vx1 - 10 - (vx0 + 10)));
-					draw_ce_menu_str_box(0, font_index, (short)(vx0 + 10), (short)(ry0 + 3), (short)(vx1 - 10), ry1, 2 /* center */, values[r], col);
+					/* (a page's button: its summary on the right, a press opens it;
+					the arrows are for the rows stepped left and right) */
+					int page_button = (is_ai_spawn && r < ai_row_count && FORGE_AI_ROW_IS_PAGE_BUTTON(ai_rows[r])) ||
+						(is_ai_route && r < route_row_count && route_rows[r] == _forge_ai_route_row_settings);
+					short label_w = 0;
+
+					if (values[r][0])
+					{
+						/* (the label keeps at most 3/5 of the row, the value the rest) */
+						forge_text_fit(1, font_index, labels[r], (short)((rx1 - rx0) * 3 / 5));
+						label_w = (short)measure_ce_menu_str_pixels(1, font_index, labels[r]);
+					}
+					draw_ce_menu_str_box(1, font_index, (short)(rx0 + 10), (short)(ry0 + 2), (short)(rx1 - 10), ry1, 0, labels[r], col);
+					if (values[r][0] && page_button)
+					{
+						short vx0 = (short)(rx0 + 10 + label_w + 12);
+						short vx1 = (short)(rx1 - 8);
+
+						draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_right", 0, (short)(vx1 - 6), (short)(ry0 + 6), vx1, (short)(ry0 + 18), 6, 12, 0xFFFFFFFFu);
+						forge_text_fit(0, font_index, values[r], (short)(vx1 - 10 - vx0));
+						draw_ce_menu_str_box(0, font_index, vx0, (short)(ry0 + 3), (short)(vx1 - 10), ry1, 1 /* right */, values[r], col);
+					}
+					else if (values[r][0])
+					{
+						short vx0 = (short)(rx0 + 118);
+						short vx1 = (short)(rx1 - 8);
+
+						if (vx0 < rx0 + 10 + label_w + 6)
+							vx0 = (short)(rx0 + 10 + label_w + 6);
+						draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_left", 0, vx0, (short)(ry0 + 6), (short)(vx0 + 6), (short)(ry0 + 18), 6, 12, 0xFFFFFFFFu);
+						draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_right", 0, (short)(vx1 - 6), (short)(ry0 + 6), vx1, (short)(ry0 + 18), 6, 12, 0xFFFFFFFFu);
+						forge_text_fit(0, font_index, values[r], (short)(vx1 - 10 - (vx0 + 10)));
+						draw_ce_menu_str_box(0, font_index, (short)(vx0 + 10), (short)(ry0 + 3), (short)(vx1 - 10), ry1, 2 /* center */, values[r], col);
+					}
 				}
 			}
 

@@ -154,7 +154,8 @@ struct forge_ai_spawn_entry
 	uint8_t goal_link; /* PATROL VOLUME's or ROUTE's number */
 	uint8_t goal_who; /* HUNT's and FOLLOW's players: any, red or blue; top bit the SPEED's RUN (FORGE_AI_GOAL_RUN_BIT) */
 	uint8_t goal_start; /* HUNT and FOLLOW move once their player is farther than this (world units) */
-	uint8_t goal_follow; /* FOLLOW stops this far from them (world units) */
+	uint8_t goal_follow; /* GO TO PLAYER's STOP DISTANCE, a friendly team's (world units) */
+	uint8_t goal_alert; /* ALERT TIME: seconds its squad stays alert once one is hurt or dies (0: FORGE_AI_GOAL_ALERT_DEFAULT) */
 };
 
 /* a campaign tag a saved map's spawns use: copied into the level as it loads,
