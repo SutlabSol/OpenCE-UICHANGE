@@ -4219,6 +4219,18 @@ FF_OBJECTIVES_SETUP_SCREENS = [
             "A weapon class or grenade most of you carry: one\\nshot or throw fails it for everyone.",
             "Never this objective.",
         ]),
+        ("ffo_vehicle_kills", "VEHICLE KILLS:", OBJECTIVE_SWITCH, [
+            "So many kills from a vehicle of a kind, one given\\nyou if the map has none of it there.",
+            "Never this objective.",
+        ]),
+        ("ffo_travel", "TRAVEL:", OBJECTIVE_SWITCH, [
+            "Reach a marked point of the map, far from you,\\nbefore the waves are cleared.",
+            "Never this objective.",
+        ]),
+        ("ffo_weapon_only", "USE ONLY:", OBJECTIVE_SWITCH, [
+            "A weapon is dropped to each of you: from the first\\nwave, firing any other fails it.",
+            "Never this objective.",
+        ]),
     ]),
     ("ff_set_objectives", "SET OBJECTIVES",
      "Optional set pieces on the map for a set: a camp,\\na hill, a flag. Kept for every map.", [
@@ -4256,6 +4268,14 @@ FF_OBJECTIVES_SETUP_SCREENS = [
             "A boss drops a skull: hold it while every enemy\\nhunts you. Needs an oddball spawn.",
             "Never this objective.",
         ]),
+        ("ffo_collect", "COLLECT:", OBJECTIVE_SWITCH, [
+            "Kills drop skulls: carry them to a hill or a flag\\nbase. Die and you drop all you carry.",
+            "Never this objective.",
+        ]),
+        ("ffo_bomb", "BOMB:", OBJECTIVE_SWITCH, [
+            "Carry the bomb to a far target and plant it, then\\ndefend it so it isn't disarmed.",
+            "Never this objective.",
+        ]),
     ]),
 ]
 # (the set screen's extra helps: a row's objective the map cannot play, in
@@ -4268,6 +4288,8 @@ FF_OBJECTIVES_UNAVAILABLE = [
     "NOT ON THIS MAP: it has fewer than 2 flags. Kept\\non for other maps.",
     "NOT ON THIS MAP: no marines or no spot for them.\\nKept on for other maps.",
     "NOT ON THIS MAP: it has no oddball spawn. Kept on\\nfor other maps.",
+    "NOT ON THIS MAP: it has no hill or flag base to\\nbank at. Kept on for other maps.",
+    "NOT ON THIS MAP: it needs 2 objective points and\\nan oddball. Kept on for other maps.",
 ]
 # Server Setup's sections (_server_settings): the hub's rows, each opening a
 # screen of the rows named (row keys, op_<key>); BOTS is a row of the hub's

@@ -139,6 +139,9 @@ Optional objectives beside a Firefight game's waves, which the host's settings c
 | `game.firefight_objective_shields` | `true` | All | SHIELDS INTACT: no more than half the players' shields broken (falls, their own blasts and friendly fire count). |
 | `game.firefight_objective_kill_first` | `true` | All | KILL THE MARKED ENEMY FIRST: one of the first wave's, marked, killed before any other. |
 | `game.firefight_objective_dont_use` | `true` | All | DON'T USE: a weapon class (or a grenade) most players carry, never fired (or thrown). |
+| `game.firefight_objective_vehicle_kills` | `true` | All | VEHICLE KILLS: so many kills from a vehicle of a kind, one given the players if the map has none there. |
+| `game.firefight_objective_travel` | `true` | All | TRAVEL: a player reaches a marked point far from them. |
+| `game.firefight_objective_weapon_only` | `true` | All | USE ONLY: a weapon dropped to every player; from the first wave, firing any other fails it. |
 | `game.firefight_objectives_set` | `false` | All | A set can have a set objective, from its second or third round to its end, of those whose settings below are true and whose points the map has. |
 | `game.firefight_objectives_set_chance` | `80` | All | The chance, in percent, that a set has one. |
 | `game.firefight_objective_target` | `true` | All | HIGH VALUE TARGET: an enemy camp round a map objective; its VIP killed before they teleport out. |
@@ -148,6 +151,8 @@ Optional objectives beside a Firefight game's waves, which the host's settings c
 | `game.firefight_objective_flag` | `true` | All | FLAG: a flag carried to the other base; every enemy goes for its carrier. |
 | `game.firefight_objective_rescue` | `true` | All | RESCUE: marines reached in time and their attackers cleared; they follow the players. |
 | `game.firefight_objective_oddball` | `true` | All | ODDBALL: a boss's skull held for a quarter of the set's time; every enemy goes for its holder. |
+| `game.firefight_objective_collect` | `true` | All | COLLECT: kills drop skulls, carried to a hill or a flag's base and banked; a carrier who dies drops them all. |
+| `game.firefight_objective_bomb` | `true` | All | BOMB: the oddball carried to a far target, planted and defended until it goes off. |
 
 ## Bots
 

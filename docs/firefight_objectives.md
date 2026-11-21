@@ -121,6 +121,28 @@ Both chances can be changed in the settings.
 - A weapon's type is worked out from its tag (trigger behaviour, projectile,
   plasma/energy use) and cached per map. Not rolled in Fiesta.
 
+### Vehicle kills (added 2026-11-21)
+
+- So many kills (5, times the players' scale) by players riding a vehicle
+  of one type, driving or in any seat. The type is one of the vehicles the
+  players could have; if none of it is on the map, one is made for them at
+  the map's nearest free spot of that type, else beside them. It is marked
+  until you get in.
+
+### Travel (added 2026-11-21)
+
+- A marked point far from the players (a flag spot, hill or oddball spawn
+  they can walk to): won when a counted player reaches it before the round's
+  waves are cleared.
+
+### Use X only (added 2026-11-21)
+
+- A weapon from the ordnance drops' own, one no player is carrying, dropped
+  to every player in a pod as an ordnance drop is (nothing else in it).
+- From the first wave (the pods are down by then), a counted player firing
+  any other weapon fails it for everyone. Grenades and melee are allowed.
+  Won when the round's waves are cleared.
+
 ## Set objectives
 
 ### Shared parts
@@ -224,6 +246,32 @@ taking the farthest one **(proposed)**. The spawner's reachability code
 - The goal is team hold time, so handing the ball off counts **(proposed)**.
 - **Won**: X seconds held. **Failed**: the set ends first **(proposed)**.
 
+### Collect (added 2026-11-21)
+
+- Gambit's motes: every enemy a player kills drops a skull (the map's
+  oddball, which no one can pick up as a weapon). Walking into one takes it;
+  a player's count is on their card ("CARRYING 7").
+- Bank them at the deposit, a KOTH hill (a flag's base on a map with none):
+  walking in adds all you carry. A carrier who dies drops one skull worth
+  everything they carried, for anyone. Skulls on the ground go after 30
+  seconds.
+- Won when 20 (plus 8 a player past the first, 60 at most) are banked before
+  the set ends. Contribution: what each banked.
+
+### Bomb (added 2026-11-21)
+
+- A bomb (the map's oddball) waits at the objective point nearest the
+  players; its target is one far from them. Every enemy goes for its
+  carrier.
+- Carried into the target (3.5 units), it is planted: out of the carrier's
+  hands, on the spot, no one can take it. It arms for a sixth of the set time
+  (50 s by default); 4 enemies come for it, and 2 more every 15 seconds.
+- Enemies within 3 units of it with no player there disarm it in 5 seconds
+  (a player there makes it go back down). Disarmed, it goes back to where it
+  waited, to be carried again.
+- Armed, it goes off: every enemy within 10 units dies, and the objective is
+  won. Contribution: carrying, planting, and time near it while it arms.
+
 ## Rewards
 
 - **Points** for both kinds, split among the counted players by how much
@@ -277,6 +325,9 @@ Contribution by objective **(proposed)**:
 | Flag | Two flag spots, and the globals' flag |
 | Rescue | A flag spot, hill or oddball spawn, and marines in the roster |
 | Oddball | An oddball spawn, and the globals' ball |
+| Collect | A KOTH hill or a flag spot, and the globals' ball |
+| Bomb | Two objective points, and the globals' ball |
+| Vehicle kills, Travel, Use X only | A vehicle the players could have; an objective point; a weapon of the drops' |
 
 - On a map that lacks the data, the objective is left out for that match.
   The config keeps it on for the next map.

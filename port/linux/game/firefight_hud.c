@@ -1347,6 +1347,17 @@ static void draw_objective_card(
 		base_x + 6.0f, base_x + card_w - 6.0f, y + 14.0f, 0.5f, _ff_text_left, &white);
 }
 
+/* this view's player's absolute index, NONE for none */
+static short objective_local_absolute(void)
+{
+	long player_index;
+
+	if (render.local_player_index == NONE)
+		return NONE;
+	player_index = local_player_get_player_index(render.local_player_index);
+	return player_index != NONE ? (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index) : NONE;
+}
+
 /* whether this view's player is the one carrying (an absolute index) */
 static boolean objective_local_carrier(short carrier)
 {
@@ -1381,14 +1392,15 @@ static void draw_objectives(
 			view->round_state == _ff_objective_failed);
 		y += 34.0f;
 	}
-	if (firefight_objectives_set_card(title, sizeof(title), status, sizeof(status)))
+	if (firefight_objectives_set_card(title, sizeof(title), status, sizeof(status), objective_local_absolute()))
 	{
 		draw_objective_card(font_index, line_height, vx0, vy0, scale, y, "SET", title, status,
 			view->set_state == _ff_objective_failed || (view->set_flags & FF_OBJECTIVE_CONTESTED));
 		/* (a hold's, a generator's, the marines' life: a bar under it) */
 		if (view->set_state == _ff_objective_running && view->set_goal > 0 &&
 			view->set_kind != _ff_set_objective_flag && view->set_kind != _ff_set_objective_purge &&
-			view->set_kind != _ff_set_objective_target)
+			view->set_kind != _ff_set_objective_target &&
+			(view->set_kind != _ff_set_objective_bomb || (view->set_flags & FF_OBJECTIVE_PLANTED)))
 		{
 			real fraction = PIN((real)view->set_progress / (real)view->set_goal, 0.0f, 1.0f);
 
@@ -1411,12 +1423,41 @@ static void draw_objectives(
 	}
 
 	/* the markers */
-	if (view->round_state == _ff_objective_running && view->round_target != NONE)
+	if (view->round_state == _ff_objective_running && view->round_kind == _ff_round_objective_kill_first &&
+		view->round_target != NONE)
 	{
 		long target = firefight_objectives_object(view->round_target);
 
 		if (target != NONE && object_try_and_get_and_verify_type(target, _object_mask_unit))
 			draw_hostile_navpoint(font_index, line_height, scale, target, hostile_nav_arrow_index(), "FIRST", &red);
+	}
+	/* (Vehicle kills' vehicle, while this view's player is not in it) */
+	if (view->round_state == _ff_objective_running && view->round_kind == _ff_round_objective_vehicle_kills &&
+		view->round_target != NONE)
+	{
+		long vehicle = firefight_objectives_object(view->round_target);
+		struct object_datum *object = vehicle != NONE ? object_try_and_get_and_verify_type(vehicle, _object_mask_vehicle) : NULL;
+		long player_index = render.local_player_index != NONE ? local_player_get_player_index(render.local_player_index) : NONE;
+		struct player_datum *player = player_index != NONE ? (struct player_datum *)datum_try_and_get(player_data, player_index) : NULL;
+		struct object_datum *unit = player ? object_try_and_get(player->unit_index) : NULL;
+
+		if (object && !TEST_FLAG(object->object.damage_flags, _object_dead_bit) &&
+			(!unit || unit->object.parent_object_index != vehicle))
+		{
+			real_point3d at;
+
+			object_get_origin(vehicle, &at);
+			at.z += 1.5f;
+			draw_world_navpoint(font_index, line_height, scale, &at, view->round_label, FF_HUD_LOCK_BAR, &gold, FALSE);
+		}
+	}
+	/* (Travel's point) */
+	if (view->round_state == _ff_objective_running && view->round_kind == _ff_round_objective_travel)
+	{
+		real_point3d at = view->round_point;
+
+		at.z += 1.0f;
+		draw_world_navpoint(font_index, line_height, scale, &at, "GO HERE", FF_HUD_LOCK_BAR, &gold, FALSE);
 	}
 	if (view->set_state != _ff_objective_running)
 		return;
@@ -1476,6 +1517,43 @@ static void draw_objectives(
 				flag_at.z += 0.8f;
 				draw_world_navpoint(font_index, line_height, scale, &flag_at,
 					view->set_carrier != NONE ? "FLAG CARRIER" : "FLAG", FF_HUD_LOCK_BAR, &gold, FALSE);
+			}
+		}
+		break;
+	}
+	case _ff_set_objective_collect:
+	{
+		real_point3d at = view->set_site;
+
+		at.z += 1.0f;
+		draw_world_navpoint(font_index, line_height, scale, &at, "DEPOSIT", FF_HUD_LOCK_BAR, &gold, FALSE);
+		break;
+	}
+	case _ff_set_objective_bomb:
+	{
+		real_point3d at = view->set_site;
+
+		at.z += 1.0f;
+		if (view->set_flags & FF_OBJECTIVE_PLANTED)
+		{
+			draw_world_navpoint(font_index, line_height, scale, &at, "BOMB",
+				(view->set_flags & FF_OBJECTIVE_DISARMING) ? FF_HUD_WARN_EDGE : FF_HUD_LOCK_BAR,
+				(view->set_flags & FF_OBJECTIVE_DISARMING) ? &red : &gold, FALSE);
+			break;
+		}
+		draw_world_navpoint(font_index, line_height, scale, &at, "TARGET", FF_HUD_LOCK_BAR, &gold, FALSE);
+		if (!objective_local_carrier(view->set_carrier))
+		{
+			long bomb = firefight_objectives_object(view->set_target);
+
+			if (bomb != NONE && object_try_and_get(bomb))
+			{
+				real_point3d bomb_at;
+
+				object_get_origin(bomb, &bomb_at);
+				bomb_at.z += 0.8f;
+				draw_world_navpoint(font_index, line_height, scale, &bomb_at,
+					view->set_carrier != NONE ? "BOMB CARRIER" : "BOMB", FF_HUD_LOCK_BAR, &gold, FALSE);
 			}
 		}
 		break;

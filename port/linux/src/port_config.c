@@ -749,6 +749,16 @@ static const struct config_setting config_settings[] =
 	{ "game.firefight_objective_dont_use", _config_boolean, "true", NULL, _environment_value, _platform_all,
 		"Round objective DON'T USE: a weapon class (or a grenade) most players\n"
 		"carry, never fired (or thrown) all round." },
+	{ "game.firefight_objective_vehicle_kills", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Round objective VEHICLE KILLS: so many kills from a vehicle of a kind,\n"
+		"one given the players if the map has none of it there." },
+	{ "game.firefight_objective_travel", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Round objective TRAVEL: a player reaches a marked point of the map, far\n"
+		"from them, before the round's waves are cleared." },
+	{ "game.firefight_objective_weapon_only", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Round objective USE ONLY: a weapon dropped to every player in an\n"
+		"ordnance pod; from the first wave, firing any other fails it (grenades\n"
+		"and melee are fine)." },
 	{ "game.firefight_objectives_set", _config_boolean, "false", NULL, _environment_value, _platform_all,
 		"Firefight's SET OBJECTIVES (Server Setup > GAME SETTINGS): a set piece on\n"
 		"the map, rolled once a set (game.firefight_objectives_set_chance) and starting at\n"
@@ -782,6 +792,14 @@ static const struct config_setting config_settings[] =
 		"Set objective ODDBALL: a boss carries a skull; killed, the skull is held\n"
 		"for a quarter of the set's time, every enemy going for its holder. A map\n"
 		"with an oddball spawn." },
+	{ "game.firefight_objective_collect", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Set objective COLLECT: enemies the players kill drop skulls, taken by\n"
+		"walking into them and banked at a hill or a flag's base; a carrier who\n"
+		"dies drops all of theirs for anyone. A map with a hill or a flag." },
+	{ "game.firefight_objective_bomb", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Set objective BOMB: a bomb (the oddball) carried to a far target and\n"
+		"planted; defended until it goes off, enemies at it unopposed disarm it\n"
+		"and it goes back. A map with two objective points." },
 	{ "game.campaign_score", _config_boolean, "false", "HALO_CAMPAIGN_SCORE", _environment_value, _platform_all,
 		"Settings > Gameplay > Scoring's SCORING. Score the campaign as Halo 3: a\n"
 		"kill is its enemy's points times its style (one shot one kill, headshot,\n"

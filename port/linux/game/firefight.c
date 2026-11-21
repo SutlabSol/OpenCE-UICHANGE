@@ -2122,8 +2122,8 @@ static boolean firefight_allow_pick_up(
 	long weapon_index)
 {
 	(void)unit_index;
-	(void)weapon_index;
-	return TRUE;
+	/* (an objective's skulls and planted bomb: firefight_objectives.c) */
+	return !firefight_objectives_pickup_blocked(weapon_index);
 }
 
 static void firefight_player_damaged_player(

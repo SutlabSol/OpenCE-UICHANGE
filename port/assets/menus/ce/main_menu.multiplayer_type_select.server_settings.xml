@@ -1402,12 +1402,15 @@
 		<data input="game settings lists text update"/>
 		<on event="created" run="port setup options init"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_round_enabled" x="54" y="73"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_round_chance" x="54" y="103"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_kills" x="54" y="133"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_no_deaths" x="54" y="163"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_shields" x="54" y="193"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_kill_first" x="54" y="223"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_dont_use" x="54" y="253"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_round_chance" x="54" y="99"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_kills" x="54" y="125"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_no_deaths" x="54" y="151"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_shields" x="54" y="177"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_kill_first" x="54" y="203"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_dont_use" x="54" y="229"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_vehicle_kills" x="54" y="255"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_travel" x="54" y="281"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_weapon_only" x="54" y="307"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ff_round_objectives_button_bar" y="414"/>
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ff_round_objectives_button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
@@ -1420,7 +1423,7 @@
 		<on event="start" run="port setup options save" back="true"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
 	</widget>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_round_enabled" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_round_enabled" width="512" height="26" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_round_enabled_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_round_enabled_spinner" x="286" y="1"/>
 	</widget>
@@ -1433,7 +1436,7 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_round_chance" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_round_chance" width="512" height="26" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_round_chance_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_round_chance_spinner" x="286" y="1"/>
 	</widget>
@@ -1449,7 +1452,7 @@
 		<string text="75%"/>
 		<string text="100%"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_kills" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_kills" width="512" height="26" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_kills_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_kills_spinner" x="286" y="1"/>
 	</widget>
@@ -1462,7 +1465,7 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_no_deaths" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_no_deaths" width="512" height="26" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_no_deaths_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_no_deaths_spinner" x="286" y="1"/>
 	</widget>
@@ -1475,7 +1478,7 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_shields" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_shields" width="512" height="26" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_shields_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_shields_spinner" x="286" y="1"/>
 	</widget>
@@ -1488,7 +1491,7 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_kill_first" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_kill_first" width="512" height="26" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_kill_first_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_kill_first_spinner" x="286" y="1"/>
 	</widget>
@@ -1501,7 +1504,7 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_dont_use" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_dont_use" width="512" height="26" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_dont_use_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_dont_use_spinner" x="286" y="1"/>
 	</widget>
@@ -1514,6 +1517,45 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_vehicle_kills" width="512" height="26" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_vehicle_kills_label"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_vehicle_kills_spinner" x="286" y="1"/>
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_vehicle_kills_label" type="text" controller="1" width="300" height="22" string_list="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ff_round_objectives_labels" string_index="7" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_vehicle_kills_spinner" type="spinner" top="2" width="206" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" string_list="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/var_ffo_vehicle_kills" font="ui\large_ui" color="#FF2896FF" align="center" text_y="4" list_flags="items_from_strings" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -13 19 -7" footer_bounds="7 208 19 214">
+		<on event="left_mouse" run="mouse spinner 1wide click"/>
+	</widget>
+	<strings name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/var_ffo_vehicle_kills">
+		<string text="ON"/>
+		<string text="OFF"/>
+	</strings>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_travel" width="512" height="26" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_travel_label"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_travel_spinner" x="286" y="1"/>
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_travel_label" type="text" controller="1" width="300" height="22" string_list="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ff_round_objectives_labels" string_index="8" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_travel_spinner" type="spinner" top="2" width="206" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" string_list="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/var_ffo_travel" font="ui\large_ui" color="#FF2896FF" align="center" text_y="4" list_flags="items_from_strings" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -13 19 -7" footer_bounds="7 208 19 214">
+		<on event="left_mouse" run="mouse spinner 1wide click"/>
+	</widget>
+	<strings name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/var_ffo_travel">
+		<string text="ON"/>
+		<string text="OFF"/>
+	</strings>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_weapon_only" width="512" height="26" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_weapon_only_label"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_weapon_only_spinner" x="286" y="1"/>
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_weapon_only_label" type="text" controller="1" width="300" height="22" string_list="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ff_round_objectives_labels" string_index="9" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ffo_weapon_only_spinner" type="spinner" top="2" width="206" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" string_list="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/var_ffo_weapon_only" font="ui\large_ui" color="#FF2896FF" align="center" text_y="4" list_flags="items_from_strings" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -13 19 -7" footer_bounds="7 208 19 214">
+		<on event="left_mouse" run="mouse spinner 1wide click"/>
+	</widget>
+	<strings name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/var_ffo_weapon_only">
+		<string text="ON"/>
+		<string text="OFF"/>
+	</strings>
 	<strings name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ff_round_objectives_labels">
 		<string text="ROUND OBJECTIVES:"/>
 		<string text="CHANCE:"/>
@@ -1522,6 +1564,9 @@
 		<string text="SHIELDS INTACT:"/>
 		<string text="KILL MARKED FIRST:"/>
 		<string text="DON'T USE:"/>
+		<string text="VEHICLE KILLS:"/>
+		<string text="TRAVEL:"/>
+		<string text="USE ONLY:"/>
 	</strings>
 	<strings name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/cap_ff_round_objectives">
 		<string text="A round can have an objective of those on below,\ndone before its waves are cleared."/>
@@ -1541,6 +1586,12 @@
 		<string text="Never this objective."/>
 		<string text="A weapon class or grenade most of you carry: one\nshot or throw fails it for everyone."/>
 		<string text="Never this objective."/>
+		<string text="So many kills from a vehicle of a kind, one given\nyou if the map has none of it there."/>
+		<string text="Never this objective."/>
+		<string text="Reach a marked point of the map, far from you,\nbefore the waves are cleared."/>
+		<string text="Never this objective."/>
+		<string text="A weapon is dropped to each of you: from the first\nwave, firing any other fails it."/>
+		<string text="Never this objective."/>
 	</strings>
 	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ff_set_objectives_screen" width="640" height="480" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/gradient">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/header_ff_set_objectives"/>
@@ -1554,14 +1605,16 @@
 		<data input="game settings lists text update"/>
 		<on event="created" run="port setup options init"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_set_enabled" x="54" y="73"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_set_chance" x="54" y="102"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_target" x="54" y="131"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_generator" x="54" y="160"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_purge" x="54" y="189"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_data_link" x="54" y="218"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_flag" x="54" y="247"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_rescue" x="54" y="276"/>
-		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_oddball" x="54" y="305"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_set_chance" x="54" y="96"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_target" x="54" y="119"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_generator" x="54" y="142"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_purge" x="54" y="165"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_data_link" x="54" y="188"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_flag" x="54" y="211"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_rescue" x="54" y="234"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_oddball" x="54" y="257"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_collect" x="54" y="280"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_bomb" x="54" y="303"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ff_set_objectives_button_bar" y="414"/>
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ff_set_objectives_button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
@@ -1574,7 +1627,7 @@
 		<on event="start" run="port setup options save" back="true"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
 	</widget>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_set_enabled" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_set_enabled" width="512" height="23" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_set_enabled_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_set_enabled_spinner" x="286" y="1"/>
 	</widget>
@@ -1587,7 +1640,7 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_set_chance" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_set_chance" width="512" height="23" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_set_chance_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_set_chance_spinner" x="286" y="1"/>
 	</widget>
@@ -1602,7 +1655,7 @@
 		<string text="80%"/>
 		<string text="100%"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_target" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_target" width="512" height="23" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_target_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_target_spinner" x="286" y="1"/>
 	</widget>
@@ -1615,7 +1668,7 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_generator" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_generator" width="512" height="23" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_generator_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_generator_spinner" x="286" y="1"/>
 	</widget>
@@ -1628,7 +1681,7 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_purge" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_purge" width="512" height="23" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_purge_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_purge_spinner" x="286" y="1"/>
 	</widget>
@@ -1641,7 +1694,7 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_data_link" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_data_link" width="512" height="23" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_data_link_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_data_link_spinner" x="286" y="1"/>
 	</widget>
@@ -1654,7 +1707,7 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_flag" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_flag" width="512" height="23" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_flag_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_flag_spinner" x="286" y="1"/>
 	</widget>
@@ -1667,7 +1720,7 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_rescue" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_rescue" width="512" height="23" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_rescue_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_rescue_spinner" x="286" y="1"/>
 	</widget>
@@ -1680,7 +1733,7 @@
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
-	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_oddball" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_oddball" width="512" height="23" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_oddball_label"/>
 		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_oddball_spinner" x="286" y="1"/>
 	</widget>
@@ -1690,6 +1743,32 @@
 		<on event="left_mouse" run="mouse spinner 1wide click"/>
 	</widget>
 	<strings name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/var_ffo_oddball">
+		<string text="ON"/>
+		<string text="OFF"/>
+	</strings>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_collect" width="512" height="23" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_collect_label"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_collect_spinner" x="286" y="1"/>
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_collect_label" type="text" controller="1" width="300" height="22" string_list="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ff_set_objectives_labels" string_index="9" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_collect_spinner" type="spinner" top="2" width="206" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" string_list="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/var_ffo_collect" font="ui\large_ui" color="#FF2896FF" align="center" text_y="4" list_flags="items_from_strings" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -13 19 -7" footer_bounds="7 208 19 214">
+		<on event="left_mouse" run="mouse spinner 1wide click"/>
+	</widget>
+	<strings name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/var_ffo_collect">
+		<string text="ON"/>
+		<string text="OFF"/>
+	</strings>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_bomb" width="512" height="23" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_bomb_label"/>
+		<child widget="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_bomb_spinner" x="286" y="1"/>
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_bomb_label" type="text" controller="1" width="300" height="22" string_list="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ff_set_objectives_labels" string_index="10" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ffo_bomb_spinner" type="spinner" top="2" width="206" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" string_list="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/var_ffo_bomb" font="ui\large_ui" color="#FF2896FF" align="center" text_y="4" list_flags="items_from_strings" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -13 19 -7" footer_bounds="7 208 19 214">
+		<on event="left_mouse" run="mouse spinner 1wide click"/>
+	</widget>
+	<strings name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/var_ffo_bomb">
 		<string text="ON"/>
 		<string text="OFF"/>
 	</strings>
@@ -1703,6 +1782,8 @@
 		<string text="FLAG:"/>
 		<string text="RESCUE:"/>
 		<string text="ODDBALL:"/>
+		<string text="COLLECT:"/>
+		<string text="BOMB:"/>
 	</strings>
 	<strings name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/cap_ff_set_objectives">
 		<string text="A set can have an objective of those on below,\nfrom its 2nd or 3rd round to its end."/>
@@ -1725,6 +1806,10 @@
 		<string text="Never this objective."/>
 		<string text="A boss drops a skull: hold it while every enemy\nhunts you. Needs an oddball spawn."/>
 		<string text="Never this objective."/>
+		<string text="Kills drop skulls: carry them to a hill or a flag\nbase. Die and you drop all you carry."/>
+		<string text="Never this objective."/>
+		<string text="Carry the bomb to a far target and plant it, then\ndefend it so it isn't disarmed."/>
+		<string text="Never this objective."/>
 		<string text="NOT ON THIS MAP: it has no flag, hill or oddball\nspawn for a camp. Kept on for other maps."/>
 		<string text="NOT ON THIS MAP: it has no flag, hill or oddball\nspawn for a camp. Kept on for other maps."/>
 		<string text="NOT ON THIS MAP: it has no flag, hill or oddball\nspawn for a camp. Kept on for other maps."/>
@@ -1732,6 +1817,8 @@
 		<string text="NOT ON THIS MAP: it has fewer than 2 flags. Kept\non for other maps."/>
 		<string text="NOT ON THIS MAP: no marines or no spot for them.\nKept on for other maps."/>
 		<string text="NOT ON THIS MAP: it has no oddball spawn. Kept on\nfor other maps."/>
+		<string text="NOT ON THIS MAP: it has no hill or flag base to\nbank at. Kept on for other maps."/>
+		<string text="NOT ON THIS MAP: it needs 2 objective points and\nan oddball. Kept on for other maps."/>
 	</strings>
 	<widget name="main_menu/multiplayer_type_select/server_settings/lobby_settings/lobby_settings_screen" width="640" height="480" flags="pass_unhandled_to_focused_child pause_game" bitmap="bitmaps/gradient">
 		<on event="b" back="true"/>

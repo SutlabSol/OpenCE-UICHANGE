@@ -1333,6 +1333,9 @@ enum firefight_round_objective
 	_ff_round_objective_shields,
 	_ff_round_objective_kill_first,
 	_ff_round_objective_dont_use,
+	_ff_round_objective_vehicle_kills,
+	_ff_round_objective_travel,
+	_ff_round_objective_weapon_only,
 	NUMBER_OF_FF_ROUND_OBJECTIVES
 };
 
@@ -1346,6 +1349,8 @@ enum firefight_set_objective
 	_ff_set_objective_flag,
 	_ff_set_objective_rescue,
 	_ff_set_objective_oddball,
+	_ff_set_objective_collect,
+	_ff_set_objective_bomb,
 	NUMBER_OF_FF_SET_OBJECTIVES
 };
 
@@ -1399,8 +1404,13 @@ enum
 	FF_OBJECTIVE_CONTESTED = 1 << 0,
 	FF_OBJECTIVE_ARRIVED = 1 << 1,
 	FF_OBJECTIVE_RESCUED = 1 << 2,
-	FF_OBJECTIVE_HELD = 1 << 3
+	FF_OBJECTIVE_HELD = 1 << 3,
+	/* (Bomb's: planted, and being disarmed) */
+	FF_OBJECTIVE_PLANTED = 1 << 4,
+	FF_OBJECTIVE_DISARMING = 1 << 5
 };
+
+#define FF_OBJECTIVE_LABEL_LENGTH 30
 
 #define FF_OBJECTIVE_NOTICE_LENGTH 62
 
@@ -1441,6 +1451,12 @@ struct firefight_objectives_view
 	real set_radius;
 	real_point3d set_goal_point;
 	char notice[FF_OBJECTIVE_NOTICE_LENGTH + 2];
+	/* (Travel's point; Vehicle kills' and Use X only's vehicle or weapon, by
+	name) */
+	real_point3d round_point;
+	char round_label[FF_OBJECTIVE_LABEL_LENGTH + 2];
+	/* (Collect's: what each player carries, by absolute index) */
+	byte carried[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
 };
 
 /* the objectives as this machine shows them, and an object of the view's
@@ -1450,7 +1466,11 @@ long firefight_objectives_object(short absolute_index);
 /* (firefight_hud.c) the round objective's card and the set objective's: its
 title and status, FALSE for none shown */
 boolean firefight_objectives_round_card(char *title, size_t title_size, char *status, size_t status_size);
-boolean firefight_objectives_set_card(char *title, size_t title_size, char *status, size_t status_size);
+boolean firefight_objectives_set_card(char *title, size_t title_size, char *status, size_t status_size,
+	short local_player_absolute);
+/* (firefight.c's allow_pick_up) whether a weapon is an objective's that is
+never picked up (Collect's skulls, a planted bomb) */
+boolean firefight_objectives_pickup_blocked(long weapon_index);
 /* (firefight_network.c) the host's, a client's copy */
 void firefight_objectives_view_set(struct firefight_objectives_view const *view);
 /* (firefight.c) a game's start, each tick (every machine's: the host decides,
@@ -1502,8 +1522,16 @@ long firefight_objective_ground(real_point3d const *point, real_point3d *ground)
 boolean firefight_objective_reachable(real_point3d const *from, real_point3d const *to);
 long firefight_objective_reach_group(real_point3d const *point);
 void firefight_objective_direct_at(long actor_index, long target_unit_index);
-/* an ordnance drop for some players alone (their absolute indices' bits) */
+/* an ordnance drop for some players alone (their absolute indices' bits);
+one of a single weapon for every player, and that weapon chosen */
 void firefight_spawn_ordnance_drop_for(unsigned long const *players, short words);
+void firefight_spawn_ordnance_weapon_for_all(long weapon_tag);
+long firefight_objective_ordnance_weapon(long const *avoid, short avoid_count);
+/* the vehicle types the players could be given, and one given them */
+short firefight_objective_vehicle_types(long *tags, short maximum);
+long firefight_objective_give_vehicle(long vehicle_tag);
+/* an effect on this machine, the first of the names the map has */
+void firefight_objective_effect(char const *const *names, short count, real_point3d const *position);
 /* (firefight_generators.c) the generator's looks and its hidden target unit's tag */
 long firefight_generator_scenery_tag(void);
 long firefight_generator_unit_tag(void);

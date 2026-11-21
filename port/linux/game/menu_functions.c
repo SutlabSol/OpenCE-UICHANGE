@@ -22765,6 +22765,11 @@ static struct gametype_option const gametype_options[] =
 	{ "ffo_shields_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_shields", { "true", "false" } },
 	{ "ffo_kill_first_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_kill_first", { "true", "false" } },
 	{ "ffo_dont_use_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_dont_use", { "true", "false" } },
+	{ "ffo_vehicle_kills_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_vehicle_kills",
+		{ "true", "false" } },
+	{ "ffo_travel_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_travel", { "true", "false" } },
+	{ "ffo_weapon_only_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_weapon_only",
+		{ "true", "false" } },
 	{ "ffo_set_enabled_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objectives_set", { "true", "false" } },
 	{ "ffo_set_chance_spinner", _option_setting, 0, 0, 4, { 0 }, "game.firefight_objectives_set_chance", { "25", "50", "80", "100" } },
 	{ "ffo_target_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_target", { "true", "false" } },
@@ -22774,6 +22779,8 @@ static struct gametype_option const gametype_options[] =
 	{ "ffo_flag_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_flag", { "true", "false" } },
 	{ "ffo_rescue_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_rescue", { "true", "false" } },
 	{ "ffo_oddball_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_oddball", { "true", "false" } },
+	{ "ffo_collect_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_collect", { "true", "false" } },
+	{ "ffo_bomb_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_bomb", { "true", "false" } },
 	/* the vehicle options' VEHICLE RIDING, the gametype's (vehicle_riding.c) */
 	{ "vehicle_riding_spinner", _option_flag, 0, FLAG(_game_variant_vehicle_riding_bit), 2, { 1, 0 } },
 	/* vehicle options (the side's set and counts: vehicles_update) */
@@ -24472,17 +24479,18 @@ OBJECTIVES and SET OBJECTIVES, their screens of the host's settings
 
 static char const *const ff_round_objective_settings[] = {
 	"game.firefight_objective_kills", "game.firefight_objective_no_deaths", "game.firefight_objective_shields",
-	"game.firefight_objective_kill_first", "game.firefight_objective_dont_use"
+	"game.firefight_objective_kill_first", "game.firefight_objective_dont_use", "game.firefight_objective_vehicle_kills",
+	"game.firefight_objective_travel", "game.firefight_objective_weapon_only"
 };
 /* (in enum firefight_set_objective's order, from HIGH VALUE TARGET) */
 static char const *const ff_set_objective_settings[NUMBER_OF_FF_SET_OBJECTIVES - 1] = {
 	"game.firefight_objective_target", "game.firefight_objective_generator", "game.firefight_objective_purge",
 	"game.firefight_objective_data_link", "game.firefight_objective_flag", "game.firefight_objective_rescue",
-	"game.firefight_objective_oddball"
+	"game.firefight_objective_oddball", "game.firefight_objective_collect", "game.firefight_objective_bomb"
 };
 static char const *const ff_set_objective_rows[NUMBER_OF_FF_SET_OBJECTIVES - 1] = {
 	"op_ffo_target", "op_ffo_generator", "op_ffo_purge", "op_ffo_data_link", "op_ffo_flag", "op_ffo_rescue",
-	"op_ffo_oddball"
+	"op_ffo_oddball", "op_ffo_collect", "op_ffo_bomb"
 };
 
 /* the rows' values on Server Setup ("50%, 4 OF 5 ON"; the set's those the map

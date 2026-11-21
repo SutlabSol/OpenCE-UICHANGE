@@ -5875,6 +5875,9 @@ static void ordnance_roll_add(struct ff_ordnance_roll *roll, short kind, byte ow
 drop is for, when it is for some alone) */
 static unsigned long g_ordnance_players[(HALO_PORT_MAXIMUM_NETWORK_PLAYERS + 31) / 32];
 static boolean g_ordnance_players_only;
+/* (firefight_spawn_ordnance_weapon_for_all: every player's pod this weapon,
+and nothing else, NONE for a drop's own) */
+static long g_ordnance_forced_weapon = NONE;
 
 void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 {
@@ -6019,10 +6022,10 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 			if (unit && !TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
 				health = unit->object.body_vitality;
 			odds = &g_ordnance_odds[health < 0.25f ? 2 : health < 0.5f ? 1 : 0];
-			ordnance_roll_add(&roll, _ff_pod_kind_weapon, owner, ordnance_weapon_pick(
-				heavy || ordnance_roll(FF_ORDNANCE_HEAVY_PERCENT),
+			ordnance_roll_add(&roll, _ff_pod_kind_weapon, owner, g_ordnance_forced_weapon != NONE ? g_ordnance_forced_weapon :
+				ordnance_weapon_pick(heavy || ordnance_roll(FF_ORDNANCE_HEAVY_PERCENT),
 				regular, regular_count, heavy_pool, heavy_count, custom, custom_count));
-			if (first_drop)
+			if (first_drop || g_ordnance_forced_weapon != NONE)
 				continue;
 			if (ordnance_roll(odds->extra_weapon))
 			{
@@ -6111,7 +6114,7 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 		3 * TICKS_PER_SECOND);
 
 	/* (none with an objective's drop, firefight_spawn_ordnance_drop_for) */
-	if (g_ordnance_players_only)
+	if (g_ordnance_players_only || g_ordnance_forced_weapon != NONE)
 		return;
 	/* (VEHICLES' ORDNANCE REWARDS: a vehicle with each drop past the game's
 	first, after its banner) */
@@ -6122,6 +6125,47 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 /* (firefight_objectives.c) a drop as firefight_spawn_ordnance_drop's, its pods
 for the players whose absolute indices `players` has alone: an objective's
 reward to those who did most */
+/* (firefight_objectives.c's Use X only) a drop of one weapon, a pod of it for
+each player, nothing else in it */
+void firefight_spawn_ordnance_weapon_for_all(long weapon_tag)
+{
+	if (weapon_tag == NONE)
+		return;
+	g_ordnance_forced_weapon = weapon_tag;
+	firefight_spawn_ordnance_drop(FALSE);
+	g_ordnance_forced_weapon = NONE;
+}
+
+/* (firefight_objectives.c's Use X only) a weapon of the drops' own, never
+`avoid` (what the players start with): NONE for none */
+long firefight_objective_ordnance_weapon(long const *avoid, short avoid_count)
+{
+	long regular[FF_ORDNANCE_BAG_SIZE];
+	long heavy_pool[FF_ORDNANCE_BAG_SIZE];
+	long candidates[2 * FF_ORDNANCE_BAG_SIZE];
+	short regular_count;
+	short heavy_count;
+	short count = 0;
+	short i;
+
+	if (ff_power_weapon_tag_count == 0 && ff_standard_weapon_tag_count == 0)
+		scan_ordnance_weapon_and_equipment_tags();
+	ordnance_pools_build(regular, &regular_count, heavy_pool, &heavy_count);
+	for (i = 0; i < regular_count + heavy_count; i++)
+	{
+		long tag = i < regular_count ? regular[i] : heavy_pool[i - regular_count];
+		short a;
+
+		if (tag == NONE || firefight_weapon_is_objective(tag, "an objective's weapon"))
+			continue;
+		for (a = 0; a < avoid_count && avoid[a] != tag; a++)
+			;
+		if (a == avoid_count)
+			candidates[count++] = tag;
+	}
+	return count ? candidates[spawner_rand() % (unsigned long)count] : NONE;
+}
+
 void firefight_spawn_ordnance_drop_for(unsigned long const *players, short words)
 {
 	short word;
@@ -10056,4 +10100,104 @@ enemy is */
 void firefight_objective_direct_at(long actor_index, long target_unit_index)
 {
 	direct_actor_toward_unit(actor_index, target_unit_index);
+}
+
+/* the vehicle types the players could be given (drivable, the game's or
+the map's own MAP CONTENT takes), at most `maximum` */
+short firefight_objective_vehicle_types(long *tags, short maximum)
+{
+	struct tag_iterator iterator;
+	long tag_index;
+	short count = 0;
+
+	tag_iterator_new(&iterator, VEHICLE_DEFINITION_TAG);
+	while ((tag_index = tag_iterator_next(&iterator)) != NONE && count < maximum)
+	{
+		char lowered[256];
+
+		lowercase_copy(tag_get_name(tag_index), lowered, sizeof(lowered));
+		if (strstr(lowered, "turret") || strstr(lowered, "dropship") || strstr(lowered, "pelican") ||
+			strstr(lowered, "spirit") || !player_vehicle_tag_allowed(tag_index))
+		{
+			continue;
+		}
+		tags[count++] = tag_index;
+	}
+	return count;
+}
+
+/* a vehicle of a type for the players: one already there and empty of
+enemies, else one made at the map's nearest free spot of that type, else by
+the players; NONE for none */
+long firefight_objective_give_vehicle(long vehicle_tag)
+{
+	struct object_iterator iterator;
+	struct object_datum *object;
+	struct object_placement_data placement;
+	real_point3d players[16];
+	short player_count = get_living_human_player_positions(players, NULL, 16);
+	real_point3d position;
+	real facing = 0.0f;
+	long vehicle_index;
+
+	if (vehicle_tag == NONE)
+		return NONE;
+	object_iterator_new(&iterator, _object_mask_vehicle, 0);
+	while ((object = (struct object_datum *)object_iterator_next(&iterator)) != NULL)
+	{
+		if (object->definition_index == vehicle_tag && !TEST_FLAG(object->object.damage_flags, _object_dead_bit) &&
+			!enemy_vehicle_noted(iterator.index))
+		{
+			return iterator.index;
+		}
+	}
+	if (!map_vehicle_spot(vehicle_tag, &position, &facing))
+	{
+		short tries;
+
+		if (!player_count)
+			return NONE;
+		position = players[central_player_index(players, player_count)];
+		for (tries = 0; tries < 8; tries++)
+		{
+			real angle = spawner_rand_range(0.0f, 2.0f * _pi);
+			real_point3d spot = position;
+			real_point3d ground;
+
+			spot.x += cosine(angle) * 6.0f;
+			spot.y += sine(angle) * 6.0f;
+			if (spot_reachable_from(&position, &spot) && reach_ground(&spot, &ground) != NONE &&
+				map_vehicle_spot_clear(&ground))
+			{
+				position = ground;
+				facing = angle;
+				break;
+			}
+		}
+		project_point_to_ground(&position, 0.75f);
+	}
+	object_placement_data_new(&placement, vehicle_tag, NONE);
+	placement.position = position;
+	vector3d_from_angle(&placement.forward, facing);
+	placement.owner_team_index = _game_team_player;
+	vehicle_index = object_new(&placement);
+	if (vehicle_index != NONE)
+		object_set_automatic_deactivation(vehicle_index, FALSE);
+	return vehicle_index;
+}
+
+/* an effect on this machine alone (as the pods' are), the first of `names`
+the map has */
+void firefight_objective_effect(char const *const *names, short count, real_point3d const *position)
+{
+	short i;
+
+	for (i = 0; i < count; i++)
+	{
+		if (tag_loaded(EFFECT_DEFINITION_TAG, names[i]) != NONE)
+		{
+			pod_effect(names[i], position);
+			return;
+		}
+	}
 }
