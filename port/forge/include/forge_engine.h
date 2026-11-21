@@ -624,6 +624,8 @@ enum forge_ai_spawn_row
 	_forge_ai_row_goal_who,
 	_forge_ai_row_goal_start,
 	_forge_ai_row_goal_follow,
+	/* (SPEED: WALK or RUN, any goal but none) */
+	_forge_ai_row_goal_speed,
 	_forge_ai_row_goal_back,
 	NUMBER_OF_FORGE_AI_ROWS
 };
@@ -656,6 +658,16 @@ enum
 	_forge_ai_goal_who_blue,
 	NUMBER_OF_FORGE_AI_GOAL_WHO
 };
+
+/* goal_who's byte also holds the GOAL's SPEED: its low bits whom (above), its
+top bit RUN (they go at a fight's pace out of one too; 0: WALK, the engine's
+alert pace). Packed there, the saved |gw= and the !FJ: packet carry it as they
+are */
+#define FORGE_AI_GOAL_WHO_MASK 0x0F
+#define FORGE_AI_GOAL_RUN_BIT 0x80
+#define FORGE_AI_GOAL_WHO(value) ((int)((value) & FORGE_AI_GOAL_WHO_MASK) < NUMBER_OF_FORGE_AI_GOAL_WHO ? \
+	(int)((value) & FORGE_AI_GOAL_WHO_MASK) : 0)
+#define FORGE_AI_GOAL_RUNS(value) (((value) & FORGE_AI_GOAL_RUN_BIT) != 0)
 
 /* the rows an AI spawn's panel shows (the goal's page's while it is open),
 how many */

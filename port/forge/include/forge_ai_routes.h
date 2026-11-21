@@ -137,6 +137,15 @@ int forge_ai_route_row_press(int32_t live_idx, int row, int dir, int enter);
 /* a point as the view's label calls it ("AI Route #2: Point 3 of 5") */
 void forge_ai_route_describe(int32_t live_idx, char *text, unsigned long size);
 
+/* (forge_ai.c) where a point stands on the ground: the walkable ground
+under `x, y, z`, else, under a hill or over a drop, the nearest above or
+below; 0 for none */
+int forge_ai_route_ground(float x, float y, float z, float *ground_z);
+/* (forge_ai.c) a new point asked for at `to`, placed from `from`: the ground
+nearest `to` back along the way that `from` sees (no wall between, none out
+of the map or under it); `from` itself, returning 0, when there is none */
+int forge_ai_route_place_toward(float const from[3], float const to[3], float out[3]);
+
 /* the saved map's lines (forge_cache_builder.c): how many bytes */
 int forge_ai_routes_save_lines(char *text, unsigned long size);
 /* a saved AI_ROUTE| line (forge_runtime_tags.c): the point made */

@@ -10625,6 +10625,17 @@ void forge_3d_update(float dt)
 					struct forge_live_instance const *held = &g_forge.live_instances[g_forge.grabbed_live_index];
 					float from_x = held->x, from_y = held->y, from_z = held->z;
 
+					/* (an AI route's point stays on the ground under it, or
+					over it when it is held under a hill: never in the air) */
+					if (forge_ai_route_is(held))
+					{
+						float ground_z;
+
+						if (forge_ai_route_ground(tx, ty, tz, &ground_z))
+							tz = ground_z + 0.05f;
+						spitch = 0.0f;
+						sroll = 0.0f;
+					}
 					forge_3d_move_instance_ext(g_forge.grabbed_live_index, tx, ty, tz, syaw, spitch, sroll, 1, 1);
 					if (g_forge.route_follow_live_index == g_forge.grabbed_live_index)
 					{

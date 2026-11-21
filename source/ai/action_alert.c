@@ -154,6 +154,21 @@ void action_alert_control(
 		actor->orders.move.moving_crouch = TRUE;
 	}
 
+	/* port: a Forge AI spawn's GOAL SPEED RUN, or its squad alarmed: out of
+	a fight at a fight's pace (port/forge/src/forge_ai.c) */
+#if OPENCE_ENABLE_FORGE
+	{
+		extern boolean forge_ai_actor_runs(long actor_index);
+
+		if (!actor->meta.swarm && forge_ai_actor_runs(actor_index))
+		{
+			actor->orders.move.override_movement_type = _actor_movement_type_combat;
+			actor->orders.move.stationary_crouch = FALSE;
+			actor->orders.move.moving_crouch = FALSE;
+		}
+	}
+#endif
+
 	return;
 }
 

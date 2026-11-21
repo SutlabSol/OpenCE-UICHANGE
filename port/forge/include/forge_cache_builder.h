@@ -152,7 +152,7 @@ struct forge_ai_spawn_entry
 	uint8_t hover_height; /* a flying unit kept this many world units over the ground (sentinels, drones), 0: as it flies */
 	uint8_t goal; /* enum forge_ai_goal (forge_engine.h): what its units do out of a fight */
 	uint8_t goal_link; /* PATROL VOLUME's or ROUTE's number */
-	uint8_t goal_who; /* HUNT's and FOLLOW's players: any, red or blue */
+	uint8_t goal_who; /* HUNT's and FOLLOW's players: any, red or blue; top bit the SPEED's RUN (FORGE_AI_GOAL_RUN_BIT) */
 	uint8_t goal_start; /* HUNT and FOLLOW move once their player is farther than this (world units) */
 	uint8_t goal_follow; /* FOLLOW stops this far from them (world units) */
 };

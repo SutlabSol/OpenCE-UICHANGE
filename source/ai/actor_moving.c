@@ -2086,7 +2086,10 @@ boolean actor_path_refresh(
 					(firefight_active() || forge_ai_walks_straight(actor_index)) &&
 					!actor->state.flying &&
 					(destination_type == _destination_prop ||
-						destination_type == _destination_raw_location))
+						destination_type == _destination_raw_location ||
+						/* port: a Forge goal's route point, as its leader walks
+						it (port/forge/src/forge_ai.c) */
+						(destination_type == _destination_move_position && forge_ai_walks_straight(actor_index))))
 				{
 					struct path_result *fallback_path = &actor->control.path.path;
 					real_point3d const *destination_point = &actor->control.path.destination.point;

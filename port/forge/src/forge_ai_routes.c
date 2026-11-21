@@ -42,6 +42,24 @@ static struct
 
 /* ---------- private code */
 
+/* a point asked for at x, y, z, placed from `from`: on the ground nearest it
+that `from` sees (forge_ai_route_place_toward) */
+static void route_ground_place(struct forge_live_instance const *from, float *x, float *y, float *z)
+{
+	float start[3], want[3], at[3];
+
+	start[0] = from->x;
+	start[1] = from->y;
+	start[2] = from->z;
+	want[0] = *x;
+	want[1] = *y;
+	want[2] = *z;
+	forge_ai_route_place_toward(start, want, at);
+	*x = at[0];
+	*y = at[1];
+	*z = at[2];
+}
+
 static struct forge_live_instance *route_point(int32_t live_idx)
 {
 	struct forge_live_instance *inst;
@@ -184,6 +202,9 @@ static void route_insert(int32_t live_idx, int after)
 			z = inst->z;
 		}
 	}
+	/* (on ground the point it is added from sees: not behind a wall, out of
+	the map, under it or in the air) */
+	route_ground_place(inst, &x, &y, &z);
 	new_rank = after ? rank + 1 : rank;
 	route_renumber(number, new_rank);
 	made = route_point_spawn(number, new_rank, FORGE_AI_ROUTE_BEHAVIOR(inst->team_designator), x, y, z, inst->yaw);
@@ -237,13 +258,16 @@ void forge_ai_route_begin(int32_t live_idx)
 	struct forge_live_instance const *inst = route_point(live_idx);
 	int32_t second;
 	int number;
+	float x, y, z;
 
 	if (!inst)
 		return;
 	number = FORGE_AI_ROUTE_NUMBER(inst->team_designator);
-	second = route_point_spawn(number, 1, FORGE_AI_ROUTE_BEHAVIOR(inst->team_designator),
-		inst->x + (float)cos((double)inst->yaw) * ROUTE_FIRST_LEG,
-		inst->y + (float)sin((double)inst->yaw) * ROUTE_FIRST_LEG, inst->z, inst->yaw);
+	x = inst->x + (float)cos((double)inst->yaw) * ROUTE_FIRST_LEG;
+	y = inst->y + (float)sin((double)inst->yaw) * ROUTE_FIRST_LEG;
+	z = inst->z;
+	route_ground_place(inst, &x, &y, &z);
+	second = route_point_spawn(number, 1, FORGE_AI_ROUTE_BEHAVIOR(inst->team_designator), x, y, z, inst->yaw);
 	if (second < 0)
 		return;
 	s_follow.first = live_idx;
@@ -363,8 +387,13 @@ void forge_ai_routes_update(void)
 	}
 	if (first->x != s_follow.x || first->y != s_follow.y || first->z != s_follow.z)
 	{
-		forge_3d_move_instance_ext(s_follow.second, second->x + (first->x - s_follow.x),
-			second->y + (first->y - s_follow.y), second->z + (first->z - s_follow.z), first->yaw, 0.0f, 0.0f, 0, 1);
+		/* (its leg ahead of the first, kept to the ground the first sees) */
+		float x = first->x + (float)cos((double)first->yaw) * ROUTE_FIRST_LEG;
+		float y = first->y + (float)sin((double)first->yaw) * ROUTE_FIRST_LEG;
+		float z = first->z;
+
+		route_ground_place(first, &x, &y, &z);
+		forge_3d_move_instance_ext(s_follow.second, x, y, z, first->yaw, 0.0f, 0.0f, 0, 1);
 		s_follow.x = first->x;
 		s_follow.y = first->y;
 		s_follow.z = first->z;
