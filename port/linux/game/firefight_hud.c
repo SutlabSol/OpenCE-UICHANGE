@@ -1315,6 +1315,204 @@ static void format_banner_strings(
 	}
 }
 
+/* ---------- Objectives (firefight_objectives.c): their cards, their notice
+and their markers, as the host's view has them */
+
+static void draw_objective_card(
+	long font_index,
+	short line_height,
+	real vx0,
+	real vy0,
+	real scale,
+	real y,
+	char const *header,
+	char const *title,
+	char const *status,
+	boolean warn)
+{
+	real base_x = 14.0f;
+	real card_w = 176.0f;
+	real card_h = 30.0f;
+	real_argb_color white = { 1.0f, 0.95f, 0.95f, 0.95f };
+	real_argb_color cyan = { 1.0f, 0.42f, 0.78f, 1.0f };
+	real_argb_color gold = { 1.0f, 1.0f, 0.85f, 0.25f };
+
+	ff_draw_box(vx0, vy0, scale, base_x, y, base_x + card_w, y + card_h, 0.0f,
+		warn ? FF_HUD_WARN_FILL : FF_HUD_PANEL_FILL, warn ? FF_HUD_WARN_EDGE : FF_HUD_PANEL_EDGE);
+	ff_draw_text(font_index, line_height, vx0, vy0, scale, header,
+		base_x + 6.0f, base_x + 70.0f, y + 2.0f, 0.42f, _ff_text_left, &cyan);
+	ff_draw_text(font_index, line_height, vx0, vy0, scale, status,
+		base_x + 70.0f, base_x + card_w - 6.0f, y + 2.0f, 0.42f, _ff_text_right, &gold);
+	ff_draw_text(font_index, line_height, vx0, vy0, scale, title,
+		base_x + 6.0f, base_x + card_w - 6.0f, y + 14.0f, 0.5f, _ff_text_left, &white);
+}
+
+/* whether this view's player is the one carrying (an absolute index) */
+static boolean objective_local_carrier(short carrier)
+{
+	long player_index;
+
+	if (carrier == NONE || render.local_player_index == NONE)
+		return FALSE;
+	player_index = local_player_get_player_index(render.local_player_index);
+	return player_index != NONE && DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index) == carrier;
+}
+
+static void draw_objectives(
+	long font_index,
+	short line_height,
+	real vx0,
+	real vy0,
+	real vw,
+	real scale)
+{
+	struct firefight_objectives_view const *view = firefight_objectives_view_get();
+	real_argb_color white = { 1.0f, 0.96f, 0.98f, 1.0f };
+	real_argb_color red = { 1.0f, 1.0f, 0.35f, 0.35f };
+	real_argb_color gold = { 1.0f, 1.0f, 0.85f, 0.25f };
+	char title[96];
+	char status[64];
+	real y = 106.0f + (real)PIN(ff_state.generator_count, 0, FIREFIGHT_MAX_GENERATORS) * 28.0f;
+
+	/* the cards, under the generators' */
+	if (firefight_objectives_round_card(title, sizeof(title), status, sizeof(status)))
+	{
+		draw_objective_card(font_index, line_height, vx0, vy0, scale, y, "ROUND", title, status,
+			view->round_state == _ff_objective_failed);
+		y += 34.0f;
+	}
+	if (firefight_objectives_set_card(title, sizeof(title), status, sizeof(status)))
+	{
+		draw_objective_card(font_index, line_height, vx0, vy0, scale, y, "SET", title, status,
+			view->set_state == _ff_objective_failed || (view->set_flags & FF_OBJECTIVE_CONTESTED));
+		/* (a hold's, a generator's, the marines' life: a bar under it) */
+		if (view->set_state == _ff_objective_running && view->set_goal > 0 &&
+			view->set_kind != _ff_set_objective_flag && view->set_kind != _ff_set_objective_purge &&
+			view->set_kind != _ff_set_objective_target)
+		{
+			real fraction = PIN((real)view->set_progress / (real)view->set_goal, 0.0f, 1.0f);
+
+			ff_draw_quad(vx0, vy0, scale, 20.0f, y + 26.0f, 184.0f, y + 28.0f, FF_HUD_BAR_BG);
+			ff_draw_quad(vx0, vy0, scale, 20.0f, y + 26.0f, 20.0f + 164.0f * fraction, y + 28.0f,
+				view->set_kind == _ff_set_objective_generator ? FF_HUD_WARN_EDGE : FF_HUD_LOCK_BAR);
+		}
+	}
+
+	/* the notice: what started, what was broken and by whom, what was won */
+	if (view->notice_ticks > 0 && view->notice[0])
+	{
+		real bw = 300.0f;
+		real bx = (vw / scale - bw) * 0.5f;
+		real by = 96.0f;
+
+		ff_draw_box(vx0, vy0, scale, bx, by, bx + bw, by + 16.0f, 0.0f, FF_HUD_PANEL_FILL, FF_HUD_LOCK_BAR);
+		ff_draw_text(font_index, line_height, vx0, vy0, scale, view->notice,
+			bx + 6.0f, bx + bw - 6.0f, by + 2.0f, 0.48f, _ff_text_center, &white);
+	}
+
+	/* the markers */
+	if (view->round_state == _ff_objective_running && view->round_target != NONE)
+	{
+		long target = firefight_objectives_object(view->round_target);
+
+		if (target != NONE && object_try_and_get_and_verify_type(target, _object_mask_unit))
+			draw_hostile_navpoint(font_index, line_height, scale, target, hostile_nav_arrow_index(), "FIRST", &red);
+	}
+	if (view->set_state != _ff_objective_running)
+		return;
+	switch (view->set_kind)
+	{
+	case _ff_set_objective_target:
+	{
+		long target = firefight_objectives_object(view->set_target);
+
+		if (target != NONE && object_try_and_get_and_verify_type(target, _object_mask_unit))
+			draw_hostile_navpoint(font_index, line_height, scale, target, hostile_nav_arrow_index(), "VIP", &red);
+		break;
+	}
+	case _ff_set_objective_generator:
+	{
+		real_point3d at = view->set_site;
+
+		at.z += 1.25f;
+		draw_world_navpoint(font_index, line_height, scale, &at, "ENEMY GENERATOR", FF_HUD_WARN_EDGE, &red, FALSE);
+		break;
+	}
+	case _ff_set_objective_purge:
+	{
+		real_point3d at = view->set_site;
+
+		at.z += 1.0f;
+		draw_world_navpoint(font_index, line_height, scale, &at, "ENEMY BASE", FF_HUD_WARN_EDGE, &red, FALSE);
+		break;
+	}
+	case _ff_set_objective_data_link:
+	{
+		real_point3d at = view->set_site;
+
+		at.z += 1.0f;
+		draw_world_navpoint(font_index, line_height, scale, &at, "DATA LINK",
+			(view->set_flags & FF_OBJECTIVE_CONTESTED) ? FF_HUD_WARN_EDGE : FF_HUD_LOCK_BAR,
+			(view->set_flags & FF_OBJECTIVE_CONTESTED) ? &red : &gold, FALSE);
+		break;
+	}
+	case _ff_set_objective_flag:
+	{
+		real_point3d at = view->set_goal_point;
+
+		at.z += 1.0f;
+		if (objective_local_carrier(view->set_carrier))
+			draw_world_navpoint(font_index, line_height, scale, &at, "CAPTURE", FF_HUD_LOCK_BAR, &gold, FALSE);
+		else
+		{
+			long flag = firefight_objectives_object(view->set_target);
+			struct object_datum *object = flag != NONE ? object_try_and_get(flag) : NULL;
+
+			if (object)
+			{
+				real_point3d flag_at;
+
+				object_get_origin(flag, &flag_at);
+				flag_at.z += 0.8f;
+				draw_world_navpoint(font_index, line_height, scale, &flag_at,
+					view->set_carrier != NONE ? "FLAG CARRIER" : "FLAG", FF_HUD_LOCK_BAR, &gold, FALSE);
+			}
+		}
+		break;
+	}
+	case _ff_set_objective_rescue:
+		if (!(view->set_flags & FF_OBJECTIVE_RESCUED))
+		{
+			real_point3d at = view->set_site;
+
+			at.z += 1.0f;
+			draw_world_navpoint(font_index, line_height, scale, &at, "RESCUE", 0xE040E070, &white, FALSE);
+		}
+		break;
+	case _ff_set_objective_oddball:
+	{
+		long target = firefight_objectives_object(view->set_target);
+
+		if (target == NONE || objective_local_carrier(view->set_carrier))
+			break;
+		if (object_try_and_get_and_verify_type(target, _object_mask_unit))
+			draw_hostile_navpoint(font_index, line_height, scale, target, hostile_nav_arrow_index(), "SKULL CARRIER", &red);
+		else if (object_try_and_get(target))
+		{
+			real_point3d at;
+
+			object_get_origin(target, &at);
+			at.z += 0.8f;
+			draw_world_navpoint(font_index, line_height, scale, &at, view->set_carrier != NONE ? "SKULL HOLDER" : "SKULL",
+				FF_HUD_LOCK_BAR, &gold, FALSE);
+		}
+		break;
+	}
+	default:
+		break;
+	}
+}
+
 /* ---------- Main Firefight HUD Draw */
 
 void firefight_hud_draw(void)
@@ -1450,6 +1648,8 @@ void firefight_hud_draw(void)
 
 	/* 4. Generator Defense Status Bars */
 	draw_generator_bars(font_index, line_height, vx0, vy0, scale);
+	/* (and the objectives', under them) */
+	draw_objectives(font_index, line_height, vx0, vy0, vw, scale);
 
 	/* 5. 3D->2D World-to-Screen Navpoints for Stragglers (<= 3 enemies left), Dropships & Resupply Drops */
 	if (ff_state.straggler_navpoints_active && ff_state.enemies_alive > 0 && ff_state.enemies_alive <= FIREFIGHT_STRAGGLER_THRESHOLD)

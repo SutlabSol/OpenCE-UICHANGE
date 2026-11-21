@@ -183,6 +183,8 @@ enum
 	_campaign_score_entry_revert,
 	/* a medal (campaign_medals.c): variant_index its medal */
 	_campaign_score_entry_medal,
+	/* a Firefight objective's points (firefight_objectives.c) */
+	_campaign_score_entry_objective,
 	NUMBER_OF_CAMPAIGN_SCORE_ENTRIES
 };
 
@@ -1109,6 +1111,7 @@ static boolean campaign_score_append(
 		case _campaign_score_entry_betrayal: what = "betrayed"; break;
 		case _campaign_score_entry_death: what = "died"; break;
 		case _campaign_score_entry_revert: what = "reverted"; break;
+		case _campaign_score_entry_objective: what = "completed an objective"; break;
 		default: what = "won"; break;
 		}
 		platform_log("campaign score: player %d, %s %s, %ld (style %d)", (int)player_index, what,
@@ -1318,6 +1321,19 @@ void campaign_score_award_medal(
 		points *= values->difficulty[campaign_score_difficulty()] * campaign_score_skulls_multiplier();
 	campaign_score_note(_campaign_score_entry_medal, medal, player_index, (long)(points + 0.5f), 0);
 	firefight_stats_record_medal(player_index, medal);
+
+	return;
+}
+
+/* (firefight_objectives.c) points a player earned with an objective, as
+they are */
+void campaign_score_award_points(
+	long player_index,
+	long points)
+{
+	if (points <= 0)
+		return;
+	campaign_score_note(_campaign_score_entry_objective, NONE, player_index, points, 0);
 
 	return;
 }

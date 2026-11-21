@@ -1317,4 +1317,195 @@ boolean game_engine_firefight_read_network_state(
 	long size,
 	boolean first);
 
+/* ---------- Public API: firefight_objectives.c
+
+Optional objectives beside a Firefight game's waves (docs/firefight_objectives.md):
+a round objective, a challenge for one round, and a set objective, a set
+piece on the map that lasts until its set ends. The host's settings
+(config.toml's game.firefight_objectives_round, _set and the rest) choose which play;
+the host decides everything, and its clients are told in Firefight's state */
+
+enum firefight_round_objective
+{
+	_ff_round_objective_none = 0,
+	_ff_round_objective_kills,
+	_ff_round_objective_no_deaths,
+	_ff_round_objective_shields,
+	_ff_round_objective_kill_first,
+	_ff_round_objective_dont_use,
+	NUMBER_OF_FF_ROUND_OBJECTIVES
+};
+
+enum firefight_set_objective
+{
+	_ff_set_objective_none = 0,
+	_ff_set_objective_target,
+	_ff_set_objective_generator,
+	_ff_set_objective_purge,
+	_ff_set_objective_data_link,
+	_ff_set_objective_flag,
+	_ff_set_objective_rescue,
+	_ff_set_objective_oddball,
+	NUMBER_OF_FF_SET_OBJECTIVES
+};
+
+enum firefight_objective_state
+{
+	_ff_objective_off = 0,
+	_ff_objective_running,
+	_ff_objective_won,
+	_ff_objective_failed,
+	/* (Kill X first's, its target killed by no player: done, neither) */
+	_ff_objective_tied,
+	NUMBER_OF_FF_OBJECTIVE_STATES
+};
+
+/* a kill count's kind (the round objective's param) */
+enum firefight_objective_kill
+{
+	_ff_objective_kill_headshot = 0,
+	_ff_objective_kill_melee,
+	_ff_objective_kill_grenade,
+	_ff_objective_kill_splatter,
+	/* (then a weapon class's: _ff_objective_kill_weapon + its class) */
+	_ff_objective_kill_weapon,
+	NUMBER_OF_FF_OBJECTIVE_KILLS = _ff_objective_kill_weapon + 5
+};
+
+/* a weapon's class, as Don't use X and the kill counts know it; then each
+grenade type (_ff_objective_use_grenade + its type) */
+enum firefight_objective_weapon_class
+{
+	_ff_objective_weapon_automatic = 0,
+	_ff_objective_weapon_semi_automatic,
+	_ff_objective_weapon_shotgun,
+	_ff_objective_weapon_plasma,
+	_ff_objective_weapon_rocket,
+	NUMBER_OF_FF_OBJECTIVE_WEAPON_CLASSES,
+	_ff_objective_use_grenade = NUMBER_OF_FF_OBJECTIVE_WEAPON_CLASSES
+};
+
+/* an objective enemy's rank (firefight_objective_spawn_enemy) */
+enum
+{
+	_firefight_objective_rank_regular = 0,
+	_firefight_objective_rank_heavy,
+	_firefight_objective_rank_target
+};
+
+/* (set_flags') */
+enum
+{
+	FF_OBJECTIVE_CONTESTED = 1 << 0,
+	FF_OBJECTIVE_ARRIVED = 1 << 1,
+	FF_OBJECTIVE_RESCUED = 1 << 2,
+	FF_OBJECTIVE_HELD = 1 << 3
+};
+
+#define FF_OBJECTIVE_NOTICE_LENGTH 62
+
+/* what every machine shows of the objectives: the host's, sent in
+Firefight's state as it is (its layout is the state's: change it only at its
+end, with the mod version) */
+struct firefight_objectives_view
+{
+	byte round_kind;
+	byte round_state;
+	byte round_param;
+	byte round_pad;
+	short round_count;
+	short round_goal;
+	/* (Kill X first's target: its absolute object index, NONE) */
+	short round_target;
+	short round_result_ticks;
+	byte set_kind;
+	byte set_state;
+	byte set_flags;
+	byte set_pad;
+	/* (the VIP, the generator's target unit, the oddball's boss, the flag or
+	the ball: its absolute object index, NONE) */
+	short set_target;
+	/* (the flag's or the ball's carrier: an absolute player index, NONE) */
+	short set_carrier;
+	/* (the time left, NONE: none; a hold's or a rescue's progress and its
+	goal, in ticks; a generator's health and its most) */
+	long set_ticks_left;
+	long set_progress;
+	long set_goal;
+	/* (Purge's and Rescue's: those left of those there) */
+	short set_count;
+	short set_total;
+	short set_result_ticks;
+	short notice_ticks;
+	real_point3d set_site;
+	real set_radius;
+	real_point3d set_goal_point;
+	char notice[FF_OBJECTIVE_NOTICE_LENGTH + 2];
+};
+
+/* the objectives as this machine shows them, and an object of the view's
+(an absolute index) on this machine, NONE for none */
+struct firefight_objectives_view const *firefight_objectives_view_get(void);
+long firefight_objectives_object(short absolute_index);
+/* (firefight_hud.c) the round objective's card and the set objective's: its
+title and status, FALSE for none shown */
+boolean firefight_objectives_round_card(char *title, size_t title_size, char *status, size_t status_size);
+boolean firefight_objectives_set_card(char *title, size_t title_size, char *status, size_t status_size);
+/* (firefight_network.c) the host's, a client's copy */
+void firefight_objectives_view_set(struct firefight_objectives_view const *view);
+/* (firefight.c) a game's start, each tick (every machine's: the host decides,
+a client shows), a round's start (its objective rolled, the last one's
+ended), a wave's spawn, a set's end, the game's end */
+void firefight_objectives_initialize_for_new_map(void);
+void firefight_objectives_update(void);
+void firefight_objectives_round_starting(short round_num);
+void firefight_objectives_wave_spawned(short wave_num);
+void firefight_objectives_round_ended(void);
+void firefight_objectives_set_ended(void);
+void firefight_objectives_dispose(void);
+/* (firefight.c) an enemy killed, a player killed */
+void firefight_objectives_enemy_killed(long dead_unit_index, long killer_player_index, boolean headshot, boolean melee,
+	boolean grenade, boolean splatter);
+void firefight_objectives_player_died(long dead_player_index);
+/* (weapons.c, units.c) a weapon fired, a grenade thrown, by any unit */
+void firefight_objectives_weapon_fired(long weapon_index, long owner_unit_index);
+void firefight_objectives_grenade_thrown(long unit_index, short grenade_type);
+/* (damage.c) damage to an objective's own (its generator, its marines),
+the host's: TRUE when it was dealt here (and goes no further); and what
+damage to a unit is scaled by (1: as it is) */
+boolean firefight_objectives_apply_damage(long object_index, long attacker_player_index, short attacker_team_index,
+	real damage_amount);
+real firefight_objectives_damage_scale(long object_index);
+/* (firefight_spawner.c) whether a player spawn is in an objective's volume,
+and the unit every enemy goes for (a carrier's), NONE */
+boolean firefight_objectives_spawn_blocked(real_point3d const *point);
+long firefight_objectives_priority_target(void);
+/* (firefight_generators.c) whether an object is the enemy generator's hidden
+target unit */
+boolean firefight_objectives_generator_hidden(long object_index);
+/* (menu_functions.c) a map's objectives, as its last game found them: the
+set objectives it can play (1 << enum firefight_set_objective), FALSE for a
+map never played */
+boolean firefight_objectives_map_known(char const *map_name, unsigned long *set_available);
+/* an objective's name, as the menus and the HUD have it */
+char const *firefight_set_objective_name(short kind);
+
+/* ---------- (firefight_spawner.c) an objective's units: made as a wave's are,
+of its faction, but never tracked, nor sent at the players */
+long firefight_objective_spawn_enemy(real_point3d const *at, real facing, short rank);
+long firefight_objective_spawn_ally(real_point3d const *at, real facing);
+boolean firefight_objective_allies_available(void);
+long firefight_objective_spawn_vehicle(real_point3d const *at, real facing, boolean heavy);
+short firefight_objective_vehicle_spots(real_point3d const *center, real radius, real_point3d *points, real *facings,
+	short maximum);
+long firefight_objective_ground(real_point3d const *point, real_point3d *ground);
+boolean firefight_objective_reachable(real_point3d const *from, real_point3d const *to);
+long firefight_objective_reach_group(real_point3d const *point);
+void firefight_objective_direct_at(long actor_index, long target_unit_index);
+/* an ordnance drop for some players alone (their absolute indices' bits) */
+void firefight_spawn_ordnance_drop_for(unsigned long const *players, short words);
+/* (firefight_generators.c) the generator's looks and its hidden target unit's tag */
+long firefight_generator_scenery_tag(void);
+long firefight_generator_unit_tag(void);
+
 #endif /* __HALO_FIREFIGHT_H */

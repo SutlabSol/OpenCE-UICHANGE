@@ -1203,6 +1203,8 @@ static void firefight_begin_pre_round(
 		round_num == 1 ? _ff_banner_set_start : _ff_banner_round_start,
 		round_num == 1 ? ff_state.current_set : round_num,
 		4 * TICKS_PER_SECOND);
+	/* (the round's objective, and the set's: firefight_objectives.c) */
+	firefight_objectives_round_starting(round_num);
 }
 
 static void firefight_begin_wave(
@@ -1296,6 +1298,7 @@ void firefight_notify_actor_or_unit_killed(
 	}
 
 	firefight_prune_dead_tracked_enemies();
+	firefight_objectives_enemy_killed(dead_unit_index, killer_player_index, headshot, melee, explosion, splatter);
 	ff_state.team_score = campaign_score_team_points();
 	while (ff_state.next_bonus_life_score > 0 && ff_state.team_score >= ff_state.next_bonus_life_score)
 	{
@@ -1601,6 +1604,7 @@ static boolean firefight_initialize_for_new_map(
 			opts->firefight_generator_health : 2000;
 		firefight_generators_initialize(ff->generator_count, max_hp);
 	}
+	firefight_objectives_initialize_for_new_map();
 
 	firefight_begin_pre_round(1);
 	return TRUE;
@@ -1616,6 +1620,7 @@ static void firefight_dispose_from_old_map(
 		firefight_stats_record_match_end(tag_get_name(global_scenario_index));
 		ff_state.session_elapsed_ticks = 0;
 	}
+	firefight_objectives_dispose();
 	firefight_spawner_dispose_map();
 }
 
@@ -1704,6 +1709,7 @@ static void firefight_player_killed_player(
 
 	if (ff_state.shared_lives_remaining > 0)
 		ff_state.shared_lives_remaining--;
+	firefight_objectives_player_died(dead_player_index);
 
 	living_players = firefight_count_living_players(&total_players);
 	if (ff_state.shared_lives_remaining == 0 && living_players == 1 && !ff_state.last_man_standing_announced)
@@ -1869,6 +1875,8 @@ static void firefight_update(
 	firefight_ordnance_pod_update();
 	/* (and the Flood's drop, Keyes' Flood form out of the floor) */
 	firefight_flood_drop_update();
+	/* (the objectives: the host's decided, a client's shown) */
+	firefight_objectives_update();
 
 	if (network_game_distributed_client())
 		return;
@@ -1943,6 +1951,7 @@ static void firefight_update(
 
 			ff_state.enemies_total_in_wave = spawned;
 			ff_state.phase_state = _ff_phase_wave_active;
+			firefight_objectives_wave_spawned(ff_state.current_wave);
 		}
 		break;
 
@@ -1989,6 +1998,9 @@ static void firefight_update(
 	case _ff_phase_wave_clear:
 		if (ff_state.phase_timer_ticks <= 0)
 		{
+			/* (the round's waves cleared: its objective decided) */
+			if (ff_state.current_wave >= FIREFIGHT_WAVES_PER_ROUND)
+				firefight_objectives_round_ended();
 			if (ff_state.current_wave < FIREFIGHT_WAVES_PER_ROUND)
 			{
 				firefight_begin_wave((short)(ff_state.current_wave + 1));
@@ -2019,6 +2031,7 @@ static void firefight_update(
 				ff_state.phase_state = _ff_phase_set_complete;
 				ff_state.phase_timer_ticks = 5 * TICKS_PER_SECOND;
 				firefight_add_shared_lives(ff->bonus_lives_per_set);
+				firefight_objectives_set_ended();
 				skulls_unlock_next_by_milestone("Firefight set completed");
 				firefight_announce_banner(_ff_banner_set_complete, ff_state.current_set, 4 * TICKS_PER_SECOND);
 			}
@@ -2035,6 +2048,7 @@ static void firefight_update(
 			ff_state.phase_state = _ff_phase_set_complete;
 			ff_state.phase_timer_ticks = 5 * TICKS_PER_SECOND;
 			firefight_add_shared_lives(ff->bonus_lives_per_set);
+			firefight_objectives_set_ended();
 			skulls_unlock_next_by_milestone("Firefight set completed");
 			firefight_announce_banner(_ff_banner_set_complete, ff_state.current_set, 4 * TICKS_PER_SECOND);
 		}

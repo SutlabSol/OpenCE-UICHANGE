@@ -1649,7 +1649,8 @@ boolean firefight_select_player_spawn_point(
 
 		for (i = 0; i < marker_count; i++)
 		{
-			if (point_is_in_valid_bsp(&marker_points[i]))
+			/* (none in an objective's volume while it lasts: firefight_objectives.c) */
+			if (point_is_in_valid_bsp(&marker_points[i]) && !firefight_objectives_spawn_blocked(&marker_points[i]))
 				valid[valid_count++] = i;
 		}
 		if (valid_count > 0)
@@ -1672,7 +1673,7 @@ boolean firefight_select_player_spawn_point(
 			continue;
 		if (is_sealed_campaign_intro_spot(&loc->position))
 			continue;
-		if (point_is_in_valid_bsp(&loc->position))
+		if (point_is_in_valid_bsp(&loc->position) && !firefight_objectives_spawn_blocked(&loc->position))
 			valid_player_spawns[valid_player_count++] = i;
 	}
 
@@ -3156,6 +3157,11 @@ void firefight_relocate_idle_enemies(void)
 	}
 }
 
+/* (set while an objective's units are made, firefight_objective_spawn_*: no
+unit made then is a wave's, not even a vehicle's driver, so none is tracked
+nor sent at the players) */
+static boolean g_objective_spawning;
+
 static long spawn_single_actor_at(
 	long variant_tag_index,
 	byte tier,
@@ -3260,7 +3266,7 @@ static long spawn_single_actor_at(
 	object_set_automatic_deactivation(unit_index, FALSE);
 	actor_verify_activation(actor_index);
 
-	if (is_wave_enemy)
+	if (is_wave_enemy && !g_objective_spawning)
 	{
 		long player_units[16];
 		short player_count = get_living_player_positions(NULL, player_units, 16);
@@ -5865,6 +5871,11 @@ static void ordnance_roll_add(struct ff_ordnance_roll *roll, short kind, byte ow
 	roll->owners[roll->count++] = owner;
 }
 
+/* (firefight_spawn_ordnance_drop_for: the players, by their absolute index, a
+drop is for, when it is for some alone) */
+static unsigned long g_ordnance_players[(HALO_PORT_MAXIMUM_NETWORK_PLAYERS + 31) / 32];
+static boolean g_ordnance_players_only;
+
 void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 {
 	real_point3d player_positions[16];
@@ -5996,6 +6007,13 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 				continue;
 			owner = (byte)MIN(order, FIREFIGHT_ORDNANCE_POD_ANYONE - 1);
 			order++;
+			/* (a drop for some players alone: an objective's reward) */
+			if (g_ordnance_players_only && (iterator.absolute_index < 0 ||
+				iterator.absolute_index >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS ||
+				!(g_ordnance_players[iterator.absolute_index >> 5] & (1UL << (iterator.absolute_index & 31)))))
+			{
+				continue;
+			}
 			unit = player->unit_index != NONE ?
 				(struct unit_datum *)object_try_and_get_and_verify_type(player->unit_index, _object_mask_unit) : NULL;
 			if (unit && !TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
@@ -6092,10 +6110,28 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 		0,
 		3 * TICKS_PER_SECOND);
 
+	/* (none with an objective's drop, firefight_spawn_ordnance_drop_for) */
+	if (g_ordnance_players_only)
+		return;
 	/* (VEHICLES' ORDNANCE REWARDS: a vehicle with each drop past the game's
 	first, after its banner) */
 	if (ff_state.ordnance_drops_made > 1)
 		firefight_reward_player_vehicle();
+}
+
+/* (firefight_objectives.c) a drop as firefight_spawn_ordnance_drop's, its pods
+for the players whose absolute indices `players` has alone: an objective's
+reward to those who did most */
+void firefight_spawn_ordnance_drop_for(unsigned long const *players, short words)
+{
+	short word;
+
+	csmemset(g_ordnance_players, 0, sizeof(g_ordnance_players));
+	for (word = 0; word < words && word < (short)NUMBEROF(g_ordnance_players); word++)
+		g_ordnance_players[word] = players[word];
+	g_ordnance_players_only = TRUE;
+	firefight_spawn_ordnance_drop(ff_state.current_round >= 4);
+	g_ordnance_players_only = FALSE;
 }
 
 /* ---------- The Ordnance Pods
@@ -9809,6 +9845,14 @@ void firefight_update_dropships_and_vehicles(void)
 
 						if (chosen_target == NONE)
 							chosen_target = player_units[best_p];
+						/* (an objective's carrier, the oddball's or the
+						flag's, is every enemy's: firefight_objectives.c) */
+						{
+							long carrier = firefight_objectives_priority_target();
+
+							if (carrier != NONE)
+								chosen_target = carrier;
+						}
 
 						direct_actor_toward_unit(u->unit.actor_index, chosen_target);
 					}
@@ -9816,4 +9860,200 @@ void firefight_update_dropships_and_vehicles(void)
 			}
 		}
 	}
+}
+
+/* ---------- An objective's units (firefight_objectives.c)
+
+Made as a wave's are, of the waves' faction and with their weapons, but no
+wave's: not tracked (a wave's clear does not wait for them), not sent at the
+players (firefight_objectives.c keeps them where it wants them), and their
+team the waves' */
+
+/* the waves' team, as firefight_spawn_wave has it: its faction's when the
+enemies are allied, else none (each unit its tag's) */
+static short objective_enemy_team(byte wave_faction)
+{
+	struct game_variant_options const *opts = game_variant_options_get();
+
+	if (!opts || opts->firefight_faction_diplomacy == _firefight_diplomacy_allied_against_players)
+		return wave_faction == _firefight_faction_unsc_humans ? _game_team_human : _game_team_covenant;
+	return NONE;
+}
+
+/* whether a faction has the Covenant's ranks (an Elite Zealot, a Major) */
+static boolean objective_faction_covenant(byte wave_faction)
+{
+	switch (wave_faction)
+	{
+	case _firefight_faction_covenant:
+	case _firefight_faction_elites_heavies:
+	case _firefight_faction_mixed:
+	case _firefight_faction_covenant_flood:
+	case _firefight_faction_covenant_sentinels:
+		return TRUE;
+	default:
+		return FALSE;
+	}
+}
+
+long firefight_objective_spawn_enemy(real_point3d const *at, real facing, short rank)
+{
+	byte faction = global_variant.game_engine_variant.firefight.wave_faction;
+	short team = objective_enemy_team(faction);
+	long unit_index = NONE;
+
+	if (!at || !ai_globals || !ai_globals->ai_initialized_for_map)
+		return NONE;
+	g_objective_spawning = TRUE;
+	/* (a target's: the highest rank its faction has) */
+	if (rank >= _firefight_objective_rank_target && objective_faction_covenant(faction))
+	{
+		static byte const target_subtypes[] = { _ff_sub_elite_zealot, _ff_sub_elite_major };
+		short i;
+
+		for (i = 0; i < (short)NUMBEROF(target_subtypes) && unit_index == NONE; i++)
+			unit_index = spawn_subtype_actor_at(target_subtypes[i], faction, at, facing, team, FALSE);
+	}
+	if (unit_index == NONE)
+	{
+		byte tier = _ff_tier_infantry;
+		long variant = pick_wave_enemy_variant(faction, FALSE, rank >= _firefight_objective_rank_heavy, &tier);
+
+		unit_index = variant != NONE ? spawn_single_actor_at(variant, tier, at, facing, team, FALSE) : NONE;
+		if (unit_index != NONE)
+		{
+			if (firefight_enemy_weapons_borrowed())
+				firefight_arm_wave_enemy(unit_index);
+			else
+				firefight_arm_wave_enemy_map(unit_index);
+		}
+	}
+	g_objective_spawning = FALSE;
+	return unit_index;
+}
+
+long firefight_objective_spawn_ally(real_point3d const *at, real facing)
+{
+	long candidates[MAX_ROSTER_VARIANTS];
+	short count = 0;
+	short i;
+
+	if (!at || !ai_globals || !ai_globals->ai_initialized_for_map)
+		return NONE;
+	for (i = 0; i < g_roster_count; i++)
+	{
+		if (ff_state.elite_player_mode ?
+			(!g_roster[i].is_human_ally_or_enemy && g_roster[i].faction == _firefight_faction_covenant) :
+			g_roster[i].is_human_ally_or_enemy)
+		{
+			candidates[count++] = g_roster[i].variant_tag_index;
+		}
+	}
+	if (!count)
+		return NONE;
+	return spawn_single_actor_at(candidates[spawner_rand() % (unsigned long)count], _ff_tier_infantry, at, facing,
+		ff_state.elite_player_mode ? _game_team_covenant : _game_team_human, FALSE);
+}
+
+boolean firefight_objective_allies_available(void)
+{
+	short i;
+
+	for (i = 0; i < g_roster_count; i++)
+	{
+		if (ff_state.elite_player_mode ?
+			(!g_roster[i].is_human_ally_or_enemy && g_roster[i].faction == _firefight_faction_covenant) :
+			g_roster[i].is_human_ally_or_enemy)
+		{
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+long firefight_objective_spawn_vehicle(real_point3d const *at, real facing, boolean heavy)
+{
+	byte faction = global_variant.game_engine_variant.firefight.wave_faction;
+	short team = objective_enemy_team(faction);
+	long vehicle_index;
+
+	if (!at || !ai_globals || !ai_globals->ai_initialized_for_map || faction == _firefight_faction_flood)
+		return NONE;
+	g_objective_spawning = TRUE;
+	vehicle_index = spawn_specific_enemy_vehicle_at(heavy, at, facing, team != NONE ? team : _game_team_covenant, TRUE);
+	g_objective_spawning = FALSE;
+	return vehicle_index;
+}
+
+/* the map's vehicle placements within `radius` of `center`, at most
+`maximum`: where, and which way */
+short firefight_objective_vehicle_spots(real_point3d const *center, real radius, real_point3d *points, real *facings,
+	short maximum)
+{
+	struct scenario *scen = global_scenario_try_and_get();
+	short count = 0;
+	short i;
+
+	if (!scen || !center)
+		return 0;
+	for (i = 0; i < scen->vehicles.count && count < maximum; i++)
+	{
+		struct ff_scenario_vehicle *placement = TAG_BLOCK_GET_ELEMENT(&scen->vehicles, i, struct ff_scenario_vehicle);
+		short palette_index = placement->object.palette_entry_index;
+		struct scenario_object_palette_entry *palette;
+		real_point3d spot = placement->object.position;
+		short tries;
+
+		if (!VALID_INDEX(palette_index, scen->vehicle_palette.count))
+			continue;
+		palette = TAG_BLOCK_GET_ELEMENT(&scen->vehicle_palette, palette_index, struct scenario_object_palette_entry);
+		if (palette->reference.index == NONE || !map_vehicle_tag_drivable(tag_get_name(palette->reference.index)) ||
+			!point_is_in_valid_bsp(&spot) || distance3d(&spot, center) > radius)
+		{
+			continue;
+		}
+		/* (a players' vehicle there: beside it) */
+		for (tries = 0; tries < 4 && !map_vehicle_spot_clear(&spot); tries++)
+		{
+			real angle = placement->object.rotation.yaw + (real)tries * (_pi * 0.5f);
+
+			spot = placement->object.position;
+			spot.x += cosine(angle) * 5.0f;
+			spot.y += sine(angle) * 5.0f;
+		}
+		if (!map_vehicle_spot_clear(&spot) || !spot_reachable_from(&placement->object.position, &spot))
+			continue;
+		points[count] = spot;
+		facings[count] = placement->object.rotation.yaw;
+		count++;
+	}
+	return count;
+}
+
+/* the ground under a point: its surface (an actor's path's), NONE for none
+there; whether a spot is this side of the structure from another, with
+ground; and the walkable group of the ground under a point (NONE: none), the
+same for two points a unit walks between */
+long firefight_objective_ground(real_point3d const *point, real_point3d *ground)
+{
+	return reach_ground(point, ground);
+}
+
+boolean firefight_objective_reachable(real_point3d const *from, real_point3d const *to)
+{
+	return spot_reachable_from(from, to);
+}
+
+long firefight_objective_reach_group(real_point3d const *point)
+{
+	if (!g_reach.parent)
+		reach_build();
+	return reach_group_at(point);
+}
+
+/* an objective's unit sent at another (a player, a carrier), as a wave's
+enemy is */
+void firefight_objective_direct_at(long actor_index, long target_unit_index)
+{
+	direct_actor_toward_unit(actor_index, target_unit_index);
 }

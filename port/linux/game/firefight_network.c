@@ -4,7 +4,7 @@ FIREFIGHT_NETWORK.C
 Host -> Client Firefight state synchronization:
 - Synchronizes Set, Round, Wave, Phase, Session Elapsed Time, Next Wave Timer,
   Shared Lives Pool, Active Skulls, Team Score, Enemies Alive, Generator Health/Shield/Lockdown,
-  and Per-Player Scores/Kills/Assists.
+  Per-Player Scores/Kills/Assists, and the objectives (firefight_objectives.c).
 */
 
 #include <string.h>
@@ -75,6 +75,9 @@ struct firefight_net_packet
 	long flood_drop_time;
 	real_point3d flood_drop_position;
 	real flood_drop_facing;
+	/* (mod version 111) the objectives as the host has them
+	(firefight_objectives.c), which each machine shows */
+	struct firefight_objectives_view objectives;
 };
 
 /* (a host's or a replay's state from before the pods: all but them; and
@@ -82,6 +85,7 @@ from before a weapon a pod: four at most) */
 #define FIREFIGHT_NET_PACKET_BEFORE_POD offsetof(struct firefight_net_packet, ordnance_positions)
 #define FIREFIGHT_NET_PACKET_BEFORE_104 offsetof(struct firefight_net_packet, more_ordnance_positions)
 #define FIREFIGHT_NET_PACKET_BEFORE_106 offsetof(struct firefight_net_packet, flood_drop_time)
+#define FIREFIGHT_NET_PACKET_BEFORE_111 offsetof(struct firefight_net_packet, objectives)
 
 /* ---------- public code */
 
@@ -160,6 +164,7 @@ long firefight_write_network_state(
 	pkt.flood_drop_time = ff_state.flood_drop_time;
 	pkt.flood_drop_position = ff_state.flood_drop_position;
 	pkt.flood_drop_facing = ff_state.flood_drop_facing;
+	pkt.objectives = *firefight_objectives_view_get();
 
 	csmemcpy(buffer, &pkt, sizeof(pkt));
 	return (long)sizeof(pkt);
@@ -274,6 +279,9 @@ boolean firefight_read_network_state(
 	ff_state.flood_drop_time = pkt.flood_drop_time;
 	ff_state.flood_drop_position = pkt.flood_drop_position;
 	ff_state.flood_drop_facing = pkt.flood_drop_facing;
+	/* (a host from before them: none) */
+	if (size >= (long)sizeof(pkt))
+		firefight_objectives_view_set(&pkt.objectives);
 
 	return TRUE;
 }

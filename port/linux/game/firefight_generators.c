@@ -294,6 +294,17 @@ static void select_generator_locations(short count, real_point3d *out_points)
 
 /* ---------- public code */
 
+/* (firefight_objectives.c's enemy generator: the same looks and target) */
+long firefight_generator_scenery_tag(void)
+{
+	return find_generator_scenery_tag();
+}
+
+long firefight_generator_unit_tag(void)
+{
+	return find_generator_unit_tag();
+}
+
 void firefight_generators_initialize(
 	short count,
 	short max_health)
@@ -364,7 +375,12 @@ boolean firefight_is_generator_hidden_biped(
 {
 	short i;
 
-	if (object_index == NONE || !firefight_active() || ff_state.generator_count <= 0)
+	if (object_index == NONE || !firefight_active())
+		return FALSE;
+	/* (and the enemy's, a set objective's: firefight_objectives.c) */
+	if (firefight_objectives_generator_hidden(object_index))
+		return TRUE;
+	if (ff_state.generator_count <= 0)
 		return FALSE;
 
 	for (i = 0; i < ff_state.generator_count; i++)

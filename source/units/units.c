@@ -988,6 +988,8 @@ static void unit_drop_item(long unit_index, long item_index);
 boolean network_objects_creating_host_object(void);
 /* port/linux/game/network_damage.c's */
 void network_damage_note_grenade(long unit_index, short grenade_type);
+/* port/linux/game/firefight_objectives.c's (a round objective's Don't use X) */
+void firefight_objectives_grenade_thrown(long unit_index, short grenade_type);
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);
 static void unit_drop_grenades(
@@ -12159,6 +12161,7 @@ static void unit_throw_grenade_release(
 		{
 			long grenade_index = unit->unit.grenade_object_index;
 			
+			firefight_objectives_grenade_thrown(unit_index, unit->unit.current_grenade_index); /* port */
 			object_detach(grenade_index);
 			
 			// Get new grenade origin from the actor

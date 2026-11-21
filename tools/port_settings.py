@@ -4033,6 +4033,11 @@ def _server_settings() -> list:
     # (co-op's options' screens, map sharing's and the bots')
     for key, title, _, screen_rows in [*COOP_SETUP_SCREENS, MAP_SHARE_SETUP, BOTS_SETUP]:
         lines += _setup_option_screen(f"{base}/{key}", key, screen_rows, fit=True)
+    # (Firefight's objectives': the set screen's helps end with the rows'
+    # NOT ON THIS MAP, FF_OBJECTIVES_UNAVAILABLE)
+    for key, title, _, screen_rows in FF_OBJECTIVES_SETUP_SCREENS:
+        lines += _setup_option_screen(f"{base}/{key}", key, screen_rows, fit=True,
+                                      extra_helps=FF_OBJECTIVES_UNAVAILABLE if key == "ff_set_objectives" else ())
     # (no Defaults: the bar is START and CANCEL; B cancels the name's edit
     # first)
     lines = [line.replace(f'<child widget="{base}/button_defaults" y="1"/>', "") for line in lines]
@@ -4174,6 +4179,96 @@ BOTS_SETUP = ("bots_options", "BOTS",
         "The bots stay as many as COUNT, as far as the\\ngame has room.",
     ]),
 ])
+# Firefight's objectives (port/linux/game/firefight_objectives.c), Server
+# Setup's ROUND OBJECTIVES and SET OBJECTIVES (FIREFIGHT_SETUP_ROWS'): screens
+# of config.toml's settings laid out as BOTS' are (_setup_option_screen), the
+# same for every map. Their key, title, row help and rows (each spinner's key,
+# label, words and the help of each); the set screen's help strings end with
+# FF_OBJECTIVES_UNAVAILABLE's, one for each set objective, shown for a row the
+# map Server Setup plays cannot play (menu_functions.c's
+# ff_objectives_unavailable_help)
+OBJECTIVE_SWITCH = ["ON", "OFF"]
+FF_ROUND_CHANCES = [10, 25, 50, 75, 100]
+FF_SET_CHANCES = [25, 50, 80, 100]
+FF_OBJECTIVES_SETUP_SCREENS = [
+    ("ff_round_objectives", "ROUND OBJECTIVES",
+     "Optional challenges for a round, beside the waves.\\nKept for every map.", [
+        ("ffo_round_enabled", "ROUND OBJECTIVES:", OBJECTIVE_SWITCH, [
+            "A round can have an objective of those on below,\\ndone before its waves are cleared.",
+            "No round objectives: Firefight as it is.",
+        ]),
+        ("ffo_round_chance", "CHANCE:", [f"{chance}%" for chance in FF_ROUND_CHANCES],
+         ["How likely each round is to have an objective."] * len(FF_ROUND_CHANCES)),
+        ("ffo_kills", "KILLS:", OBJECTIVE_SWITCH, [
+            "So many kills of a kind: headshots, melee,\\ngrenades, splatters or a weapon class.",
+            "Never this objective.",
+        ]),
+        ("ffo_no_deaths", "NO DEATHS:", OBJECTIVE_SWITCH, [
+            "The round finished with no player dying. Anyone's\\ndeath fails it for everyone.",
+            "Never this objective.",
+        ]),
+        ("ffo_shields", "SHIELDS INTACT:", OBJECTIVE_SWITCH, [
+            "No more than half the players' shields broken: a\\nfall, your own blast, friendly fire count.",
+            "Never this objective.",
+        ]),
+        ("ffo_kill_first", "KILL MARKED FIRST:", OBJECTIVE_SWITCH, [
+            "An enemy of the first wave is marked: kill it\\nbefore any other.",
+            "Never this objective.",
+        ]),
+        ("ffo_dont_use", "DON'T USE:", OBJECTIVE_SWITCH, [
+            "A weapon class or grenade most of you carry: one\\nshot or throw fails it for everyone.",
+            "Never this objective.",
+        ]),
+    ]),
+    ("ff_set_objectives", "SET OBJECTIVES",
+     "Optional set pieces on the map for a set: a camp,\\na hill, a flag. Kept for every map.", [
+        ("ffo_set_enabled", "SET OBJECTIVES:", OBJECTIVE_SWITCH, [
+            "A set can have an objective of those on below,\\nfrom its 2nd or 3rd round to its end.",
+            "No set objectives: Firefight as it is.",
+        ]),
+        ("ffo_set_chance", "CHANCE:", [f"{chance}%" for chance in FF_SET_CHANCES],
+         ["How likely each set is to have an objective."] * len(FF_SET_CHANCES)),
+        ("ffo_target", "HIGH VALUE TARGET:", OBJECTIVE_SWITCH, [
+            "An enemy camp round a map objective: kill its VIP\\nbefore they teleport out.",
+            "Never this objective.",
+        ]),
+        ("ffo_generator", "ENEMY GENERATOR:", OBJECTIVE_SWITCH, [
+            "An enemy camp round a map objective: destroy its\\ngenerator before time runs out.",
+            "Never this objective.",
+        ]),
+        ("ffo_purge", "PURGE THE BASE:", OBJECTIVE_SWITCH, [
+            "An enemy camp round a map objective: kill every\\none of them before the set ends.",
+            "Never this objective.",
+        ]),
+        ("ffo_data_link", "DATA LINK:", OBJECTIVE_SWITCH, [
+            "A hill turns on: hold it with no enemy in it.\\nNeeds King of the Hill hills.",
+            "Never this objective.",
+        ]),
+        ("ffo_flag", "FLAG:", OBJECTIVE_SWITCH, [
+            "A flag turns on: carry it to the other base. Every\\nenemy hunts its carrier. Needs 2 flags.",
+            "Never this objective.",
+        ]),
+        ("ffo_rescue", "RESCUE:", OBJECTIVE_SWITCH, [
+            "Marines under attack: reach them in time, clear\\nthe attackers, and they follow you.",
+            "Never this objective.",
+        ]),
+        ("ffo_oddball", "ODDBALL:", OBJECTIVE_SWITCH, [
+            "A boss drops a skull: hold it while every enemy\\nhunts you. Needs an oddball spawn.",
+            "Never this objective.",
+        ]),
+    ]),
+]
+# (the set screen's extra helps: a row's objective the map cannot play, in
+# enum firefight_set_objective's order, HIGH VALUE TARGET first)
+FF_OBJECTIVES_UNAVAILABLE = [
+    "NOT ON THIS MAP: it has no flag, hill or oddball\\nspawn for a camp. Kept on for other maps.",
+    "NOT ON THIS MAP: it has no flag, hill or oddball\\nspawn for a camp. Kept on for other maps.",
+    "NOT ON THIS MAP: it has no flag, hill or oddball\\nspawn for a camp. Kept on for other maps.",
+    "NOT ON THIS MAP: it has no King of the Hill hills.\\nKept on for other maps.",
+    "NOT ON THIS MAP: it has fewer than 2 flags. Kept\\non for other maps.",
+    "NOT ON THIS MAP: no marines or no spot for them.\\nKept on for other maps.",
+    "NOT ON THIS MAP: it has no oddball spawn. Kept on\\nfor other maps.",
+]
 # Server Setup's sections (_server_settings): the hub's rows, each opening a
 # screen of the rows named (row keys, op_<key>); BOTS is a row of the hub's
 # too, after LOBBY SETTINGS (its own screen: BOTS_SETUP). Their key, title,
@@ -4184,7 +4279,8 @@ SERVER_SETUP_SECTIONS = [
      ["max_players", "invite", "listing", "password", "map_share_options"]),
     ("game_settings", "GAME SETTINGS", "The gametype and its rules for this game (co-op's\\noptions, for a co-op game).",
      ["game_type", "player_options", "item_options", "vehicle_options", "indicator_options", "team_options",
-      "coop_options", "voice_options", "ff_player_scale", "ff_start_skulls", "ff_vehicles", "scoring"]),
+      "coop_options", "voice_options", "ff_player_scale", "ff_start_skulls", "ff_vehicles", "scoring",
+      "ff_round_objectives", "ff_set_objectives"]),
     # (a Firefight game's on a Custom Edition map with enemies, weapons or
     # vehicles of its own: menu_functions.c's server_settings_map_content_update)
     ("map_content", "MAP CONTENT", "Play the map's own enemies, weapons and vehicles\\nin this game, beside the game's or alone.",
@@ -4252,6 +4348,13 @@ FIREFIGHT_SETUP_ROWS = [
     # its spinner wide (FIREFIGHT_WIDE_SPINNERS)
     ("ff_vehicles", "VEHICLES", ["ALL AT SPAWN", "ORDNANCE REWARDS", "NONE"],
      "The map's vehicles for the players: all from the\\nstart, one with each ordnance drop, or none."),
+    # (no choices: the objectives' screens, FF_OBJECTIVES_SETUP_SCREENS; their
+    # value what each chose: menu_functions.c's FF_ROUND_OBJECTIVES_HELP and
+    # after it, server_settings_objectives_update)
+    ("ff_round_objectives", "ROUND OBJECTIVES", None,
+     "Optional challenges for a round, beside the waves.\\nKept for every map."),
+    ("ff_set_objectives", "SET OBJECTIVES", None,
+     "Optional set pieces on the map for a set: a camp,\\na hill, a flag. Kept for every map."),
 ]
 # (the rows whose spinners are wider, for their words: nearer their labels)
 FIREFIGHT_WIDE_SPINNERS = {"ff_vehicles"}
@@ -4261,6 +4364,8 @@ FIREFIGHT_SETUP_RUNS = {
     **{f"ff_mc_{kind}_list": (f"ss map content {kind}", f"{MT}/server_settings/map_content/map_content_tags_screen")
        for kind in ("enemies", "weapons", "vehicles")},
     "ff_mc_loadout": ("ss map content loadout", f"{MT}/server_settings/map_content/map_content_tags_screen"),
+    **{key: ("ss firefight objectives", f"{MT}/server_settings/{key}/{key}_screen")
+       for key in ("ff_round_objectives", "ff_set_objectives")},
 }
 # Server Setup's TAG PROFILE (port/linux/game/tag_multiplayer.c, the setting
 # game.multiplayer_tag_profile), a multiplayer game's on one of the game's own
@@ -4277,7 +4382,8 @@ TAG_PROFILE_ROWS = 9
 SETUP_OPTIONS_PLACE = 6
 # (their screens' titles)
 TITLES.update({f"{MT}/server_settings/{key}/header_{key}": title
-               for key, title, _, _ in [*COOP_SETUP_SCREENS, MAP_SHARE_SETUP, BOTS_SETUP, *SERVER_SETUP_SECTIONS]})
+               for key, title, _, _ in [*COOP_SETUP_SCREENS, MAP_SHARE_SETUP, BOTS_SETUP, *SERVER_SETUP_SECTIONS,
+                                        *FF_OBJECTIVES_SETUP_SCREENS]})
 # (the rows of a co-op options screen in one place, the one shown: PER
 # PLAYER's and MULTIPLIER's, by EXTRA ENEMIES')
 SETUP_OPTION_SAME_PLACE = set()
@@ -4396,7 +4502,7 @@ def _map_content_tags_screen() -> list:
     return lines
 
 
-def _setup_option_screen(base: str, key: str, rows: list, fit: bool = False) -> list:
+def _setup_option_screen(base: str, key: str, rows: list, fit: bool = False, extra_helps=()) -> list:
     """a screen of options laid out as the gametype's are (Teamplay
     Options'), its spinners setting config.toml's settings (menu_functions.c's
     "port setup options init" and "port setup options save", OK), each
@@ -4456,7 +4562,7 @@ def _setup_option_screen(base: str, key: str, rows: list, fit: bool = False) -> 
                          ['<on event="left_mouse" run="mouse spinner 1wide click"/>'])
         lines += _strings(f"{base}/var_{row_key}", strings)
     lines += _strings(f"{base}/{key}_labels", [label for _, label, *_ in rows])
-    lines += _strings(f"{base}/cap_{key}", [text for *_, helps in rows for text in helps])
+    lines += _strings(f"{base}/cap_{key}", [text for *_, helps in rows for text in helps] + list(extra_helps))
     return lines
 # Server Setup's rows of the gametype's options: the gametype editor's
 # screens

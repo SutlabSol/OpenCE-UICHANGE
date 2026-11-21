@@ -1718,6 +1718,17 @@ void object_cause_damage(
 		{
 			return;
 		}
+		/* port: a set objective's own: the enemy generator, the marines to
+		rescue (firefight_objectives.c) */
+		if (firefight_active())
+		{
+			if (firefight_objectives_apply_damage(object_index, damage->owner_player_index, damage->owner_team_index,
+				total_damage))
+			{
+				return;
+			}
+			total_damage *= firefight_objectives_damage_scale(object_index);
+		}
 		total_damage *= game_engine_get_damage_multiplier(
 			get_player_index_from_object_or_parents(damage->owner_object_index),
 			get_player_index_from_object_or_parents(object_index));

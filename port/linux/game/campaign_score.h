@@ -65,6 +65,12 @@ void campaign_score_award_medal(
 	long player_index,
 	short medal);
 
+/* (firefight_objectives.c) points a player (its datum index) earned with a
+Firefight objective, logged as they are */
+void campaign_score_award_points(
+	long player_index,
+	long points);
+
 /* (ui_widget_event_handler_functions.c's pause_game_restart_at_checkpoint)
 Revert to Checkpoint was chosen: its penalty, for this machine's players */
 void campaign_score_checkpoint_reverted(void);

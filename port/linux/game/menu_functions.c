@@ -15675,8 +15675,14 @@ ENEMY AI, MAP WEAPONS and MAP VEHICLES) */
 #define SERVER_SCORING_HELP 27
 #define FF_START_SKULLS_HELP 28
 #define FF_MAP_CONTENT_HELP 29
-/* (GAME SETTINGS' VEHICLES, FIREFIGHT_SETUP_ROWS' last: its help) */
+/* (GAME SETTINGS' VEHICLES: its help) */
 #define FF_VEHICLES_HELP 40
+/* (GAME SETTINGS' ROUND OBJECTIVES and SET OBJECTIVES, FIREFIGHT_SETUP_ROWS'
+last: their helps; server_settings_objectives_update) */
+#define FF_ROUND_OBJECTIVES_HELP 41
+#define FF_SET_OBJECTIVES_HELP 42
+static void server_settings_objectives_update(struct widget_instance *list);
+static char const *server_settings_map_name(void);
 static void firefight_skulls_summary(char *text, unsigned int size);
 static boolean gametype_setup_floodfection(void);
 /* (MAP CONTENT's section: after the gametype's copy, gametype_edit) */
@@ -16168,6 +16174,10 @@ static void server_settings_update(struct widget_instance *list)
 			visible_set(named(list, "op_bots_options", 0), bots);
 			visible_set(named(list, "op_scoring", 0), firefight);
 			visible_set(named(list, "op_ff_start_skulls", 0), firefight);
+			visible_set(named(list, "op_ff_round_objectives", 0), firefight);
+			visible_set(named(list, "op_ff_set_objectives", 0), firefight);
+			if (firefight)
+				server_settings_objectives_update(list);
 			if (firefight && named(list, "ff_start_skulls_value", 0))
 			{
 				char skulls[64];
@@ -22744,6 +22754,26 @@ static struct gametype_option const gametype_options[] =
 	{ "bots_skill_spinner", _option_setting, 0, 0, 7, { 0 }, "bots.skill",
 		{ "distributed", "recruit", "easy", "normal", "heroic", "veteran", "legendary" } },
 	{ "bots_teams_spinner", _option_setting, 0, 0, 2, { 0 }, "bots.teams", { "even", "against" } },
+	/* Firefight's objectives' (Server Setup's ROUND OBJECTIVES and SET
+	OBJECTIVES: tools/port_settings.py's FF_OBJECTIVES_SETUP_SCREENS;
+	firefight_objectives.c) */
+	{ "ffo_round_enabled_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objectives_round", { "true", "false" } },
+	{ "ffo_round_chance_spinner", _option_setting, 0, 0, 5, { 0 }, "game.firefight_objectives_round_chance",
+		{ "10", "25", "50", "75", "100" } },
+	{ "ffo_kills_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_kills", { "true", "false" } },
+	{ "ffo_no_deaths_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_no_deaths", { "true", "false" } },
+	{ "ffo_shields_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_shields", { "true", "false" } },
+	{ "ffo_kill_first_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_kill_first", { "true", "false" } },
+	{ "ffo_dont_use_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_dont_use", { "true", "false" } },
+	{ "ffo_set_enabled_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objectives_set", { "true", "false" } },
+	{ "ffo_set_chance_spinner", _option_setting, 0, 0, 4, { 0 }, "game.firefight_objectives_set_chance", { "25", "50", "80", "100" } },
+	{ "ffo_target_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_target", { "true", "false" } },
+	{ "ffo_generator_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_generator", { "true", "false" } },
+	{ "ffo_purge_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_purge", { "true", "false" } },
+	{ "ffo_data_link_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_data_link", { "true", "false" } },
+	{ "ffo_flag_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_flag", { "true", "false" } },
+	{ "ffo_rescue_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_rescue", { "true", "false" } },
+	{ "ffo_oddball_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_oddball", { "true", "false" } },
 	/* the vehicle options' VEHICLE RIDING, the gametype's (vehicle_riding.c) */
 	{ "vehicle_riding_spinner", _option_flag, 0, FLAG(_game_variant_vehicle_riding_bit), 2, { 1, 0 } },
 	/* vehicle options (the side's set and counts: vehicles_update) */
@@ -24436,6 +24466,108 @@ static void ff_unit_rows_update(struct widget_instance *list)
 		list->focused_child = named(list, "op_ff2_enemy_loadout", 0);
 }
 
+/* ---- Firefight's objectives (firefight_objectives.c): Server Setup's ROUND
+OBJECTIVES and SET OBJECTIVES, their screens of the host's settings
+(tools/port_settings.py's FF_OBJECTIVES_SETUP_SCREENS) */
+
+static char const *const ff_round_objective_settings[] = {
+	"game.firefight_objective_kills", "game.firefight_objective_no_deaths", "game.firefight_objective_shields",
+	"game.firefight_objective_kill_first", "game.firefight_objective_dont_use"
+};
+/* (in enum firefight_set_objective's order, from HIGH VALUE TARGET) */
+static char const *const ff_set_objective_settings[NUMBER_OF_FF_SET_OBJECTIVES - 1] = {
+	"game.firefight_objective_target", "game.firefight_objective_generator", "game.firefight_objective_purge",
+	"game.firefight_objective_data_link", "game.firefight_objective_flag", "game.firefight_objective_rescue",
+	"game.firefight_objective_oddball"
+};
+static char const *const ff_set_objective_rows[NUMBER_OF_FF_SET_OBJECTIVES - 1] = {
+	"op_ffo_target", "op_ffo_generator", "op_ffo_purge", "op_ffo_data_link", "op_ffo_flag", "op_ffo_rescue",
+	"op_ffo_oddball"
+};
+
+/* the rows' values on Server Setup ("50%, 4 OF 5 ON"; the set's those the map
+cannot play, as its last game found them), and their helps */
+static void server_settings_objectives_update(struct widget_instance *list)
+{
+	struct widget_instance *help = list->parameters.list.extended_description;
+	unsigned long available = 0;
+	boolean known = firefight_objectives_map_known(server_settings_map_name(), &available);
+	char value[64];
+	short on = 0;
+	short missing = 0;
+	short index;
+
+	for (index = 0; index < (short)NUMBEROF(ff_round_objective_settings); index++)
+	{
+		if (config_boolean(ff_round_objective_settings[index]))
+			on++;
+	}
+	if (!config_boolean("game.firefight_objectives_round") || !on)
+		snprintf(value, sizeof(value), "OFF");
+	else
+	{
+		snprintf(value, sizeof(value), "%ld%%, %d OF %d ON", (long)config_integer("game.firefight_objectives_round_chance"),
+			(int)on, (int)NUMBEROF(ff_round_objective_settings));
+	}
+	text_field_show(named(list, "ff_round_objectives_value", 0), value, FALSE);
+	on = 0;
+	for (index = 0; index < (short)NUMBEROF(ff_set_objective_settings); index++)
+	{
+		if (!config_boolean(ff_set_objective_settings[index]))
+			continue;
+		on++;
+		if (known && !(available & (1UL << (index + 1))))
+			missing++;
+	}
+	if (!config_boolean("game.firefight_objectives_set") || !on)
+		snprintf(value, sizeof(value), "OFF");
+	else if (missing)
+	{
+		snprintf(value, sizeof(value), "%ld%%, %d ON, %d NOT ON THIS MAP", (long)config_integer("game.firefight_objectives_set_chance"),
+			(int)on, (int)missing);
+	}
+	else
+		snprintf(value, sizeof(value), "%ld%%, %d OF %d ON", (long)config_integer("game.firefight_objectives_set_chance"), (int)on,
+			(int)NUMBEROF(ff_set_objective_settings));
+	text_field_show(named(list, "ff_set_objectives_value", 0), value, FALSE);
+	if (help && list->focused_child == named(list, "op_ff_round_objectives", 0))
+		help->parameters.text_box.string_list_index = FF_ROUND_OBJECTIVES_HELP;
+	else if (help && list->focused_child == named(list, "op_ff_set_objectives", 0))
+		help->parameters.text_box.string_list_index = FF_SET_OBJECTIVES_HELP;
+}
+
+/* SET OBJECTIVES' screen: the focused row's objective, if the map Server
+Setup plays cannot play it (as its last game found), its NOT ON THIS MAP
+(the screen's helps' last, after its rows': FF_OBJECTIVES_UNAVAILABLE) */
+static boolean ff_objectives_unavailable_help(struct widget_instance *list, struct widget_instance *description)
+{
+	unsigned long available = 0;
+	struct widget_instance *row;
+	short helps = 0;
+	short kind;
+
+	if (!firefight_objectives_map_known(server_settings_map_name(), &available))
+		return FALSE;
+	for (kind = 0; kind < (short)NUMBEROF(ff_set_objective_rows); kind++)
+	{
+		if (list->focused_child == named(list, ff_set_objective_rows[kind], 0))
+			break;
+	}
+	if (kind == (short)NUMBEROF(ff_set_objective_rows) || (available & (1UL << (kind + 1))))
+		return FALSE;
+	for (row = list->child; row; row = row->next)
+	{
+		struct widget_instance *spinner;
+
+		for (spinner = row->child; spinner && spinner->type != 2 /* spinner */; spinner = spinner->next)
+			;
+		if (spinner)
+			helps += spinner->parameters.list.number_of_items;
+	}
+	description->parameters.text_box.string_list_index = (short)(helps + kind);
+	return TRUE;
+}
+
 /* "game settings lists text update": the help of the option with the
 focus, for its value (the description's strings are each option's values'
 helps in turn), as the Xbox's, which stops the game on the buttons' row */
@@ -24667,6 +24799,13 @@ static void gametype_option_help(struct widget_instance *list)
 				y += 30;
 			}
 		}
+	}
+	/* (SET OBJECTIVES': a row whose objective the map cannot play, its NOT
+	ON THIS MAP) */
+	if (description && list->focused_child && named(list, "ffo_set_enabled_spinner", 0) &&
+		ff_objectives_unavailable_help(list, description))
+	{
+		return;
 	}
 	/* (the server browser's filters, hidden: their helps are fewer than
 	their values, filters_help) */
@@ -27587,6 +27726,12 @@ boolean pc_menu_event_function_invoke(
 		else if (!strcmp(name, "ss firefight skulls"))
 		{
 			return firefight_skulls_setup_open(widget, widget_deleted);
+		}
+		/* (ROUND OBJECTIVES' and SET OBJECTIVES' A: their screens, of the
+		host's settings, open) */
+		else if (!strcmp(name, "ss firefight objectives"))
+		{
+			return TRUE;
 		}
 		else if (!strcmp(name, "ss map content enemies"))
 		{

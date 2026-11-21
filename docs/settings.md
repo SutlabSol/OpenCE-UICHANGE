@@ -126,6 +126,29 @@ The **Platforms** column says which platforms' `config.toml` has the setting.
 | `game.custom_maps.path` | `""` | All | The folder Custom Edition maps are read from (and map sharing's downloads go to); empty for the custom_maps folder in the data folder. A relative path is under the data folder. Read once, at the start. |
 | `game.mods.path` | `""` | All | The folder the mods are read from (and Android's IMPORT puts them in); empty for the mods folder in the data folder. A relative path is under the data folder. |
 
+## Firefight objectives
+
+Optional objectives beside a Firefight game's waves, which the host's settings choose: Server Setup &gt; GAME SETTINGS &gt; ROUND OBJECTIVES and SET OBJECTIVES, the same on every map ([firefight_objectives.md](firefight_objectives.md)). Each objective's own setting is `true` (it can be rolled) or `false`.
+
+| Setting | Default | Platforms | What it does |
+| --- | --- | --- | --- |
+| `game.firefight_objectives_round` | `false` | All | A round can have a round objective, rolled as it starts, of those whose settings below are true. |
+| `game.firefight_objectives_round_chance` | `50` | All | The chance, in percent, that a round has one. |
+| `game.firefight_objective_kills` | `true` | All | KILLS: so many kills of a kind (headshots, melee, grenades, splatters, or a weapon class the players carry). |
+| `game.firefight_objective_no_deaths` | `true` | All | NO DEATHS: the round finished with no player dying. |
+| `game.firefight_objective_shields` | `true` | All | SHIELDS INTACT: no more than half the players' shields broken (falls, their own blasts and friendly fire count). |
+| `game.firefight_objective_kill_first` | `true` | All | KILL THE MARKED ENEMY FIRST: one of the first wave's, marked, killed before any other. |
+| `game.firefight_objective_dont_use` | `true` | All | DON'T USE: a weapon class (or a grenade) most players carry, never fired (or thrown). |
+| `game.firefight_objectives_set` | `false` | All | A set can have a set objective, from its second or third round to its end, of those whose settings below are true and whose points the map has. |
+| `game.firefight_objectives_set_chance` | `80` | All | The chance, in percent, that a set has one. |
+| `game.firefight_objective_target` | `true` | All | HIGH VALUE TARGET: an enemy camp round a map objective; its VIP killed before they teleport out. |
+| `game.firefight_objective_generator` | `true` | All | ENEMY GENERATOR: an enemy camp round a map objective; its generator destroyed before time runs out. |
+| `game.firefight_objective_purge` | `true` | All | PURGE THE BASE: an enemy camp round a map objective; every one of them killed before the set ends. |
+| `game.firefight_objective_data_link` | `true` | All | DATA LINK: a King of the Hill hill held, uncontested, for a quarter of the set's time. |
+| `game.firefight_objective_flag` | `true` | All | FLAG: a flag carried to the other base; every enemy goes for its carrier. |
+| `game.firefight_objective_rescue` | `true` | All | RESCUE: marines reached in time and their attackers cleared; they follow the players. |
+| `game.firefight_objective_oddball` | `true` | All | ODDBALL: a boss's skull held for a quarter of the set's time; every enemy goes for its holder. |
+
 ## Bots
 
 | Setting | Default | Platforms | What it does |

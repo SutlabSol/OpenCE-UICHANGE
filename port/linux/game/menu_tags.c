@@ -405,6 +405,8 @@ static char const *const port_function_names[] =
 	/* (Firefight & Forge gamemode and rules handlers) */
 	"mp profile init firefight rules", "mp profile set firefight rules",
 	"mp edit game options", "firefight skulls open", "ss firefight skulls", "firefight tag profile open",
+	/* (Server Setup's ROUND OBJECTIVES and SET OBJECTIVES: firefight_objectives.c) */
+	"ss firefight objectives",
 	/* (Server Setup's MAP CONTENT: CUSTOM's lists) */
 	"ss map content enemies", "ss map content weapons", "ss map content vehicles", "ss map content loadout",
 	"map content tags init",
