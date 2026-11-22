@@ -95,6 +95,8 @@ symbols in this file:
 #include "text/unicode.h"
 #include "mcc_main.h" /* port: port/linux/game/mcc_main.c */
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
+#include "interface/ui_widget.h" /* port: display_error_text_when_main_menu_loaded */
+#include "tag_files/tag_files.h" /* port: tag_name_strip_path */
 
 #include <xtl.h>
 
@@ -846,6 +848,31 @@ boolean network_game_create_game_objects(
 		/* port: MCC refusals unwind through the network session lifecycle. */
 		if (mcc_main_network_load_failed(options.map_name))
 		{
+			game->local_data.game_objects_loaded = FALSE;
+			return FALSE;
+		}
+		/* port: a Custom Edition map whose tags were refused (debug.txt says
+		why) ends the session and goes back to the menu, as an MCC map does,
+		rather than going on with no tags loaded */
+		if (custom_edition_level_name(options.map_name))
+		{
+			wchar_t text[256];
+			char const *name = tag_name_strip_path(options.map_name);
+			short index = 0;
+			char const *prefix = "The map ";
+			char const *suffix = " could not be loaded. It may use something this version of the game does not support.";
+			char const *part;
+
+			for (part = prefix; *part && index < NUMBEROF(text) - 1; part++) text[index++] = (wchar_t)(unsigned char)*part;
+			for (part = name; *part && index < NUMBEROF(text) - 1; part++) text[index++] = (wchar_t)(unsigned char)*part;
+			for (part = suffix; *part && index < NUMBEROF(text) - 1; part++) text[index++] = (wchar_t)(unsigned char)*part;
+			text[index] = 0;
+			error(_error_silent, "custom edition: '%s' could not be loaded; ending the network session", options.map_name);
+			display_error_text_when_main_menu_loaded(text);
+			errors_clear();
+			/* inside a network receive callback: queue both (mcc_main.c) */
+			network_game_abort();
+			main_goto_main_menu();
 			game->local_data.game_objects_loaded = FALSE;
 			return FALSE;
 		}

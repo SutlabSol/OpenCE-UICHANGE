@@ -1630,6 +1630,10 @@ static void main_new_map(
 		main_globals.save_core = FALSE;
 		main_globals.load_core = FALSE;
 		main_globals.load_core_at_startup = FALSE;
+		/* the refusal is not an error to stop on: left pending, the menu
+		map's errors_handle below took it and stopped the game ("main_new_map()
+		failed", floodgulch_forge_square) */
+		errors_clear();
 		main_return_to_menu_saying(text);
 		return;
 	}
