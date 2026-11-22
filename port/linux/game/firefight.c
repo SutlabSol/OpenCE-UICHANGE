@@ -1697,6 +1697,8 @@ static void firefight_pregame_post_rasterize(
 static void firefight_post_rasterize_objects(
 	void)
 {
+	/* (Data Link's hill: firefight_objectives.c) */
+	firefight_objectives_render();
 	firefight_hud_post_rasterize();
 }
 
@@ -1824,7 +1826,7 @@ static void firefight_apply_tick_player_traits(
 		if (unit->object.owner_team_index != _game_team_player)
 			unit->object.owner_team_index = _game_team_player;
 		if (firefight_health_rule(_firefight_health_rule_health_regen) == _firefight_health_rule_on)
-			firefight_health_regen_update(iter.absolute_index, unit);
+			firefight_health_regen_update((short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iter.datum_index), unit);
 
 		if (ammo_mode != _firefight_ammo_normal && (game_time_get() % 15) == 0)
 		{

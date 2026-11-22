@@ -1481,6 +1481,8 @@ objective started at its wave), a wave's spawn, a wave's end, a round's end,
 the game's end */
 void firefight_objectives_initialize_for_new_map(void);
 void firefight_objectives_update(void);
+/* (firefight.c's post_rasterize_objects) Data Link's hill outline */
+void firefight_objectives_render(void);
 void firefight_objectives_round_starting(short round_num);
 void firefight_objectives_wave_starting(short wave_num);
 void firefight_objectives_wave_spawned(short wave_num);

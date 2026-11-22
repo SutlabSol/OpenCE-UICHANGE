@@ -464,6 +464,45 @@ struct actor_variant_definition *actor_combat_get_firing_variant_definition(
 	return firing_variant_definition;
 }
 
+/* port: the rate an actor pulls its trigger at. Its variant's, for the
+weapon the variant was made for; a weapon it holds that is another's (a
+Firefight loadout's, the Tag Injector's, one picked up) with no firing
+parameters of its own fires as that weapon allows: an automatic one held
+through the bursts (0), as a variant's for its own is; a semi-automatic or
+charged one pulled at half its own rate, between 0.5 and 2 a second. The
+variant's rate for a weapon of another kind held the trigger down without
+end (a fuel rod's 0 on a plasma pistol: overcharge after overcharge), or
+pulled it 6 times a second (an assault rifle's on a rocket launcher) */
+#define ACTOR_FOREIGN_WEAPON_AUTOMATIC_RATE 8.0f
+static real actor_combat_rate_of_fire(
+	long actor_index,
+	struct actor_variant_definition const *firing_variant_definition)
+{
+	real rate_of_fire = firing_variant_definition->ranged_combat.rate_of_fire;
+	long weapon_index = actor_get_weapon(actor_index);
+	long weapon_definition_index;
+	struct weapon_definition *weapon_definition;
+	struct weapon_trigger_definition *trigger;
+	real weapon_rate;
+
+	if (weapon_index == NONE)
+		return rate_of_fire;
+	weapon_definition_index = weapon_get(weapon_index)->definition_index;
+	weapon_definition = weapon_definition_get(weapon_definition_index);
+	if (!weapon_definition || weapon_definition->weapon.ai_firing_parameters.index != NONE ||
+		firing_variant_definition->ranged_combat.reference.index == NONE ||
+		firing_variant_definition->ranged_combat.reference.index == weapon_definition_index ||
+		weapon_definition->weapon.triggers.count < 1)
+	{
+		return rate_of_fire;
+	}
+	trigger = TAG_BLOCK_GET_ELEMENT(&weapon_definition->weapon.triggers, 0, struct weapon_trigger_definition);
+	weapon_rate = MAX(trigger->initial_rate_of_fire, trigger->final_rate_of_fire);
+	if (trigger->charging_time <= 0.0f && weapon_rate >= ACTOR_FOREIGN_WEAPON_AUTOMATIC_RATE)
+		return 0.0f;
+	return PIN(weapon_rate * 0.5f, 0.5f, 2.0f);
+}
+
 static void actor_combat_get_firing_parameters(
 	long actor_index,
 	struct actor_variant_definition *firing_variant_definition,
@@ -2372,7 +2411,8 @@ void actor_combat_update(
 
 			if (fire_primary)
 			{
-				real rate_of_fire = firing_variant_definition->ranged_combat.rate_of_fire;
+				/* port: the weapon held's (actor_combat_rate_of_fire) */
+				real rate_of_fire = actor_combat_rate_of_fire(actor_index, firing_variant_definition);
 
 				if (actor->control.overcharging_weapon)
 				{

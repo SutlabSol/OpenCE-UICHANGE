@@ -161,6 +161,9 @@ char const *material_get_name(
 	return "NONE";
 }
 
+/* port: port/linux/game/firefight.c */
+boolean firefight_active(void);
+
 /* ---------- private code */
 
 static real game_difficulty_get_value_by_difficulty(
@@ -207,7 +210,9 @@ real game_difficulty_get_team_value(
 	short difficulty = game_difficulty_level_get();
 	short friend_value_type;
 
-	if (game_engine_running())
+	/* port: but Firefight, whose variant's AI DIFFICULTY is the game's
+	(firefight.c): its enemies' health, damage and aim by it */
+	if (game_engine_running() && !firefight_active())
 		difficulty = _game_difficulty_level_normal;
 	else if (!game_team_is_enemy(_game_team_player, team_index))
 	{

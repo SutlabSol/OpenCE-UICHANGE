@@ -6011,9 +6011,9 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 			owner = (byte)MIN(order, FIREFIGHT_ORDNANCE_POD_ANYONE - 1);
 			order++;
 			/* (a drop for some players alone: an objective's reward) */
-			if (g_ordnance_players_only && (iterator.absolute_index < 0 ||
-				iterator.absolute_index >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS ||
-				!(g_ordnance_players[iterator.absolute_index >> 5] & (1UL << (iterator.absolute_index & 31)))))
+			if (g_ordnance_players_only && ((short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index) < 0 ||
+				(short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index) >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS ||
+				!(g_ordnance_players[(short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index) >> 5] & (1UL << ((short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index) & 31)))))
 			{
 				continue;
 			}

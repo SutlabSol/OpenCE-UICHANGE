@@ -46,6 +46,8 @@ and the marines' patience (Rescue) are a quarter of it.
 #include "game/game.h"
 #include "game/game_engine.h"
 #include "game/game_globals.h"
+#include "game/game_engine_king.h"
+#include "rasterizer/rasterizer_model_types.h"
 #include "game/players.h"
 #include "items/weapon_definitions.h"
 #include "items/weapons.h"
@@ -80,6 +82,8 @@ enum
 	/* the points a round objective and a set objective give, shared out by
 	what each player did; and the set objective's best player's more */
 	FFO_ROUND_POINTS = 1000,
+	/* (the enemy generator's health, of the variant's GENERATOR HEALTH) */
+	FFO_GENERATOR_HEALTH_PERCENT = 35,
 	/* (Use X only's pods' time to land and be picked up: its rule holds after) */
 	FFO_USE_ONLY_GRACE_TICKS = 12 * TICKS_PER_SECOND,
 	FFO_SET_POINTS = 3000,
@@ -163,6 +167,8 @@ struct ffo_site
 struct ffo_hill
 {
 	real_point2d points[FFO_HILL_POINTS];
+	/* (each marker's height, for its outline: firefight_objectives_render) */
+	real point_z[FFO_HILL_POINTS];
 	short point_count;
 	real_point3d center;
 	real radius;
@@ -598,6 +604,7 @@ static void ffo_map_scan(void)
 			{
 				g.hills[hill].points[g.hills[hill].point_count].x = flag->position.x;
 				g.hills[hill].points[g.hills[hill].point_count].y = flag->position.y;
+				g.hills[hill].point_z[g.hills[hill].point_count] = flag->position.z;
 				g.hills[hill].center.x += flag->position.x;
 				g.hills[hill].center.y += flag->position.y;
 				g.hills[hill].center.z += flag->position.z;
@@ -628,12 +635,16 @@ static void ffo_map_scan(void)
 				real angle_b = (real)atan2(hill->points[b].y - hill->center.y, hill->points[b].x - hill->center.x);
 				real angle_p = (real)atan2(hill->points[b - 1].y - hill->center.y, hill->points[b - 1].x - hill->center.x);
 				real_point2d swap;
+				real swap_z;
 
 				if (angle_p <= angle_b)
 					break;
 				swap = hill->points[b];
 				hill->points[b] = hill->points[b - 1];
 				hill->points[b - 1] = swap;
+				swap_z = hill->point_z[b];
+				hill->point_z[b] = hill->point_z[b - 1];
+				hill->point_z[b - 1] = swap_z;
 			}
 		}
 	}
@@ -934,10 +945,10 @@ static void ffo_award(long const *contribution, long points, boolean pods, boole
 	data_iterator_new(&iterator, player_data);
 	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
 	{
-		if (!player->quit_out_of_game && iterator.absolute_index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
+		if (!player->quit_out_of_game && (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index) < HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
 		{
-			total += MAX(0L, contribution[iterator.absolute_index]);
-			if (ffo_bit(g.counted, iterator.absolute_index))
+			total += MAX(0L, contribution[(short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index)]);
+			if (ffo_bit(g.counted, (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index)))
 				sharing++;
 		}
 	}
@@ -947,16 +958,16 @@ static void ffo_award(long const *contribution, long points, boolean pods, boole
 		long done;
 		long share;
 
-		if (player->quit_out_of_game || iterator.absolute_index >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
+		if (player->quit_out_of_game || (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index) >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
 			continue;
-		done = MAX(0L, contribution[iterator.absolute_index]);
+		done = MAX(0L, contribution[(short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index)]);
 		if (total > 0 && !equal_counted)
 			share = (long)((double)points * (double)done / (double)total + 0.5);
 		else
-			share = ffo_bit(g.counted, iterator.absolute_index) && sharing > 0 ? points / sharing : 0;
+			share = ffo_bit(g.counted, (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index)) && sharing > 0 ? points / sharing : 0;
 		if (share > 0)
 			campaign_score_award_points(iterator.datum_index, share);
-		if (done > 0 || (total == 0 && ffo_bit(g.counted, iterator.absolute_index)))
+		if (done > 0 || (total == 0 && ffo_bit(g.counted, (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index))))
 		{
 			short place;
 
@@ -965,7 +976,7 @@ static void ffo_award(long const *contribution, long points, boolean pods, boole
 				order[place] = order[place - 1];
 				amounts[place] = amounts[place - 1];
 			}
-			order[place] = iterator.absolute_index;
+			order[place] = (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index);
 			amounts[place] = done;
 			ranked++;
 			if (done > best || best_player == NONE)
@@ -1059,7 +1070,7 @@ static void ffo_count_players(void)
 	{
 		if (player->quit_out_of_game)
 			continue;
-		ffo_bit_set(g.counted, iterator.absolute_index);
+		ffo_bit_set(g.counted, (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index));
 		g.counted_count++;
 	}
 }
@@ -1082,7 +1093,7 @@ static void ffo_carried(short classes[NUMBER_OF_FF_OBJECTIVE_WEAPON_CLASSES], sh
 		boolean seen[NUMBER_OF_FF_OBJECTIVE_WEAPON_CLASSES];
 		short slot;
 
-		if (!unit || !ffo_bit(g.counted, iterator.absolute_index))
+		if (!unit || !ffo_bit(g.counted, (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index)))
 			continue;
 		csmemset(seen, 0, sizeof(seen));
 		for (slot = 0; slot < MAXIMUM_WEAPONS_PER_UNIT; slot++)
@@ -1355,7 +1366,7 @@ static void ffo_round_shields_update(void)
 	data_iterator_new(&iterator, player_data);
 	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
 	{
-		long absolute = iterator.absolute_index;
+		long absolute = (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index);
 		struct unit_datum *unit = ffo_living_unit(player->unit_index);
 
 		if (absolute >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
@@ -1583,7 +1594,10 @@ static void ffo_generator_spawn(real_point3d const *at, boolean fresh)
 	}
 	if (fresh)
 	{
-		g_view.set_goal = opts && opts->firefight_generator_health >= 500 ? opts->firefight_generator_health : 2000;
+		/* (a third of the variant's GENERATOR HEALTH, about: a round's work,
+		not more) */
+		g_view.set_goal = ((long)(opts && opts->firefight_generator_health >= 500 ?
+			opts->firefight_generator_health : 2000) * FFO_GENERATOR_HEALTH_PERCENT / 100);
 		g_view.set_progress = g_view.set_goal;
 	}
 }
@@ -1787,8 +1801,9 @@ static boolean ffo_camp_start(short kind)
 	g_view.set_total = ffo_units_alive(0, TRUE);
 	g_view.set_count = g_view.set_total;
 	g_view.set_target = ffo_absolute_of_object(g.target_unit);
+	/* (the round's time: it ends with the round anyway) */
 	if (kind != _ff_set_objective_purge)
-		g.set_deadline = game_time_get() + ffo_set_ticks() / 2;
+		g.set_deadline = game_time_get() + ffo_set_ticks();
 	return g_view.set_total > 0 || g.target_unit != NONE;
 }
 
@@ -1837,7 +1852,7 @@ static boolean ffo_data_link_start(void)
 	g_view.set_radius = g.hills[g.hill_index].radius;
 	g_view.set_goal = ffo_set_ticks() / 4;
 	g_view.set_progress = 0;
-	g.set_deadline = game_time_get() + ffo_set_ticks() / 2;
+	g.set_deadline = game_time_get() + ffo_set_ticks();
 	ffo_raid(&g_view.set_site, 3, _ffo_role_attacker);
 	return TRUE;
 }
@@ -2840,6 +2855,98 @@ static void ffo_bomb_update(void)
 
 /* ---------- public code */
 
+/* (firefight.c's post_rasterize_objects, every machine's) Data Link's hill
+drawn as King of the Hill draws its own: a band round its markers, the map's
+hill shader; a hill of fewer than 3 markers a ring of its size */
+void firefight_objectives_render(void)
+{
+	struct game_globals *globals = scenario_get_game_globals();
+	struct game_globals_multiplayer_information *information;
+	struct ffo_hill const *hill = NULL;
+	real_point3d points[FFO_HILL_POINTS];
+	real best = 4.0f * 4.0f;
+	short count;
+	short index;
+
+	if (!firefight_active() || g_view.set_kind != _ff_set_objective_data_link ||
+		g_view.set_state != _ff_objective_running || !globals || globals->multiplayer_information.count < 1)
+	{
+		return;
+	}
+	information = TAG_BLOCK_GET_ELEMENT(&globals->multiplayer_information, 0,
+		struct game_globals_multiplayer_information);
+	if (information->hill_shader.index == NONE)
+		return;
+	/* (the hill the view's middle is: the host picked it) */
+	for (index = 0; index < g.hill_count; index++)
+	{
+		real dx = g.hills[index].center.x - g_view.set_site.x;
+		real dy = g.hills[index].center.y - g_view.set_site.y;
+
+		if (dx * dx + dy * dy < best)
+		{
+			best = dx * dx + dy * dy;
+			hill = &g.hills[index];
+		}
+	}
+	if (hill && hill->point_count >= 3)
+	{
+		count = hill->point_count;
+		for (index = 0; index < count; index++)
+		{
+			points[index].x = hill->points[index].x;
+			points[index].y = hill->points[index].y;
+			points[index].z = hill->point_z[index];
+		}
+	}
+	else
+	{
+		count = FFO_HILL_POINTS;
+		for (index = 0; index < count; index++)
+		{
+			real angle = 2.0f * _pi * (real)index / (real)count;
+
+			points[index].x = g_view.set_site.x + cosine(angle) * g_view.set_radius;
+			points[index].y = g_view.set_site.y + sine(angle) * g_view.set_radius;
+			points[index].z = g_view.set_site.z;
+		}
+	}
+	render_dynamic_quad_initialize();
+	for (index = 0; index < count; index++)
+	{
+		struct model_vertex_uncompressed vertices[4];
+		real_point3d const *a = &points[index];
+		real_point3d const *b = &points[index + 1 == count ? 0 : index + 1];
+		real_vector3d sides[2];
+		real_vector3d normal;
+		real length = distance3d(a, b);
+
+		if (length < 0.01f)
+			continue;
+		csmemset(vertices, 0, sizeof(vertices));
+		vertices[0].position = *a;
+		vertices[1].position = *a;
+		vertices[1].position.z += 0.8f;
+		vertices[2].position = *b;
+		vertices[2].position.z += 0.8f;
+		vertices[3].position = *b;
+		vector_from_points3d(&vertices[0].position, &vertices[1].position, &sides[0]);
+		vector_from_points3d(&vertices[1].position, &vertices[2].position, &sides[1]);
+		cross_product3d(&sides[0], &sides[1], &normal);
+		normalize3d(&normal);
+		vertices[0].normal = vertices[1].normal = vertices[2].normal = vertices[3].normal = normal;
+		vertices[0].texcoord.x = 0.0f;
+		vertices[0].texcoord.y = 1.0f;
+		vertices[1].texcoord.x = 0.0f;
+		vertices[1].texcoord.y = 0.2f;
+		vertices[2].texcoord.x = 1.0f;
+		vertices[2].texcoord.y = 0.2f;
+		vertices[3].texcoord.x = 1.0f;
+		vertices[3].texcoord.y = 1.0f;
+		render_dynamic_quad(vertices, information->hill_shader.index, NULL, NULL, MAX(1.0f, length), 1.0f);
+	}
+}
+
 struct firefight_objectives_view const *firefight_objectives_view_get(void)
 {
 	return &g_view;
@@ -2876,9 +2983,10 @@ void firefight_objectives_initialize_for_new_map(void)
 {
 	ffo_reset();
 	g.rng = 0x2545F491UL ^ (unsigned long)system_milliseconds();
+	/* (every machine's: its hills' outlines, firefight_objectives_render) */
+	ffo_map_scan();
 	if (network_game_distributed_client())
 		return;
-	ffo_map_scan();
 	if (global_scenario_index != NONE)
 		ffo_map_file_write(tag_get_name(global_scenario_index), g.set_available);
 	/* (the game says which of those on cannot play here) */
@@ -3377,7 +3485,7 @@ long firefight_objectives_priority_target(void)
 		data_iterator_new(&iterator, player_data);
 		while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
 		{
-			if (iterator.absolute_index == g_view.set_carrier)
+			if ((short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index) == g_view.set_carrier)
 				return ffo_living_unit(player->unit_index) ? player->unit_index : NONE;
 		}
 	}
