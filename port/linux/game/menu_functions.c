@@ -22828,6 +22828,11 @@ static struct gametype_option const gametype_options[] =
 		  _firefight_wave_size_250, _firefight_wave_size_300 } },
 	{ "ff_boss_freq_spinner", _option_option_byte, OPTIONS_FIELD(firefight_boss_wave_mode), 0, 3,
 		{ 0, 1, 2 } },
+	/* (PLASMA FLINCH: OFF, 25% to 100%, each with the bit that says it was set
+	here: game_engine.h) */
+	{ "ff_plasma_flinch_spinner", _option_option_byte, OPTIONS_FIELD(firefight_plasma_flinch), 0, 5,
+		{ FIREFIGHT_PLASMA_FLINCH_SET | 0, FIREFIGHT_PLASMA_FLINCH_SET | 1, FIREFIGHT_PLASMA_FLINCH_SET | 2,
+		  FIREFIGHT_PLASMA_FLINCH_SET | 3, FIREFIGHT_PLASMA_FLINCH_SET | 4 } },
 	/* firefight options: Page 2 (Enemy Units) */
 	{ "ff_enemy_loadout_spinner", _option_option_byte, OPTIONS_FIELD(firefight_enemy_loadout), 0, 4,
 		{ _firefight_enemy_loadout_default, _firefight_enemy_loadout_human, _firefight_enemy_loadout_covenant,

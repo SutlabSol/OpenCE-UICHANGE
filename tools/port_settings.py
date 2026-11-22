@@ -4180,7 +4180,7 @@ BOTS_SETUP = ("bots_options", "BOTS",
     ]),
 ])
 # Firefight's objectives (port/linux/game/firefight_objectives.c), Server
-# Setup's ROUND OBJECTIVES and SET OBJECTIVES (FIREFIGHT_SETUP_ROWS'): screens
+# Setup's WAVE OBJECTIVES and ROUND OBJECTIVES (FIREFIGHT_SETUP_ROWS'): screens
 # of config.toml's settings laid out as BOTS' are (_setup_option_screen), the
 # same for every map. Their key, title, row help and rows (each spinner's key,
 # label, words and the help of each); the set screen's help strings end with
@@ -4191,20 +4191,20 @@ OBJECTIVE_SWITCH = ["ON", "OFF"]
 FF_ROUND_CHANCES = [10, 25, 50, 75, 100]
 FF_SET_CHANCES = [25, 50, 80, 100]
 FF_OBJECTIVES_SETUP_SCREENS = [
-    ("ff_round_objectives", "ROUND OBJECTIVES",
-     "Optional challenges for a round, beside the waves.\\nKept for every map.", [
-        ("ffo_round_enabled", "ROUND OBJECTIVES:", OBJECTIVE_SWITCH, [
-            "A round can have an objective of those on below,\\ndone before its waves are cleared.",
-            "No round objectives: Firefight as it is.",
+    ("ff_round_objectives", "WAVE OBJECTIVES",
+     "Optional challenges for a wave, beside the fight.\\nKept for every map.", [
+        ("ffo_round_enabled", "WAVE OBJECTIVES:", OBJECTIVE_SWITCH, [
+            "A wave can have an objective of those on below,\\ndone before it is cleared.",
+            "No wave objectives: Firefight as it is.",
         ]),
         ("ffo_round_chance", "CHANCE:", [f"{chance}%" for chance in FF_ROUND_CHANCES],
-         ["How likely each round is to have an objective."] * len(FF_ROUND_CHANCES)),
+         ["How likely each wave is to have an objective."] * len(FF_ROUND_CHANCES)),
         ("ffo_kills", "KILLS:", OBJECTIVE_SWITCH, [
             "So many kills of a kind: headshots, melee,\\ngrenades, splatters or a weapon class.",
             "Never this objective.",
         ]),
         ("ffo_no_deaths", "NO DEATHS:", OBJECTIVE_SWITCH, [
-            "The round finished with no player dying. Anyone's\\ndeath fails it for everyone.",
+            "The wave finished with no player dying. Anyone's\\ndeath fails it for everyone.",
             "Never this objective.",
         ]),
         ("ffo_shields", "SHIELDS INTACT:", OBJECTIVE_SWITCH, [
@@ -4212,7 +4212,7 @@ FF_OBJECTIVES_SETUP_SCREENS = [
             "Never this objective.",
         ]),
         ("ffo_kill_first", "KILL MARKED FIRST:", OBJECTIVE_SWITCH, [
-            "An enemy of the first wave is marked: kill it\\nbefore any other.",
+            "An enemy of the wave is marked: kill it before\\nany other.",
             "Never this objective.",
         ]),
         ("ffo_dont_use", "DON'T USE:", OBJECTIVE_SWITCH, [
@@ -4224,22 +4224,22 @@ FF_OBJECTIVES_SETUP_SCREENS = [
             "Never this objective.",
         ]),
         ("ffo_travel", "TRAVEL:", OBJECTIVE_SWITCH, [
-            "Reach a marked point of the map, far from you,\\nbefore the waves are cleared.",
+            "Reach a marked point of the map, far from you,\\nbefore the wave is cleared.",
             "Never this objective.",
         ]),
         ("ffo_weapon_only", "USE ONLY:", OBJECTIVE_SWITCH, [
-            "A weapon is dropped to each of you: from the first\\nwave, firing any other fails it.",
+            "A weapon is dropped to each of you: once it lands,\\nfiring any other fails it.",
             "Never this objective.",
         ]),
     ]),
-    ("ff_set_objectives", "SET OBJECTIVES",
-     "Optional set pieces on the map for a set: a camp,\\na hill, a flag. Kept for every map.", [
-        ("ffo_set_enabled", "SET OBJECTIVES:", OBJECTIVE_SWITCH, [
-            "A set can have an objective of those on below,\\nfrom its 2nd or 3rd round to its end.",
-            "No set objectives: Firefight as it is.",
+    ("ff_set_objectives", "ROUND OBJECTIVES",
+     "Optional set pieces on the map for a round: a\\ncamp, a hill, a flag. Kept for every map.", [
+        ("ffo_set_enabled", "ROUND OBJECTIVES:", OBJECTIVE_SWITCH, [
+            "A round can have an objective of those on below,\\nfrom its 1st or 2nd wave to its end.",
+            "No round objectives: Firefight as it is.",
         ]),
         ("ffo_set_chance", "CHANCE:", [f"{chance}%" for chance in FF_SET_CHANCES],
-         ["How likely each set is to have an objective."] * len(FF_SET_CHANCES)),
+         ["How likely each round is to have an objective."] * len(FF_SET_CHANCES)),
         ("ffo_target", "HIGH VALUE TARGET:", OBJECTIVE_SWITCH, [
             "An enemy camp round a map objective: kill its VIP\\nbefore they teleport out.",
             "Never this objective.",
@@ -4249,7 +4249,7 @@ FF_OBJECTIVES_SETUP_SCREENS = [
             "Never this objective.",
         ]),
         ("ffo_purge", "PURGE THE BASE:", OBJECTIVE_SWITCH, [
-            "An enemy camp round a map objective: kill every\\none of them before the set ends.",
+            "An enemy camp round a map objective: kill every\\none of them before the round ends.",
             "Never this objective.",
         ]),
         ("ffo_data_link", "DATA LINK:", OBJECTIVE_SWITCH, [
@@ -4373,10 +4373,10 @@ FIREFIGHT_SETUP_ROWS = [
     # (no choices: the objectives' screens, FF_OBJECTIVES_SETUP_SCREENS; their
     # value what each chose: menu_functions.c's FF_ROUND_OBJECTIVES_HELP and
     # after it, server_settings_objectives_update)
-    ("ff_round_objectives", "ROUND OBJECTIVES", None,
-     "Optional challenges for a round, beside the waves.\\nKept for every map."),
-    ("ff_set_objectives", "SET OBJECTIVES", None,
-     "Optional set pieces on the map for a set: a camp,\\na hill, a flag. Kept for every map."),
+    ("ff_round_objectives", "WAVE OBJECTIVES", None,
+     "Optional challenges for a wave, beside the fight.\\nKept for every map."),
+    ("ff_set_objectives", "ROUND OBJECTIVES", None,
+     "Optional set pieces on the map for a round: a\\ncamp, a hill, a flag. Kept for every map."),
 ]
 # (the rows whose spinners are wider, for their words: nearer their labels)
 FIREFIGHT_WIDE_SPINNERS = {"ff_vehicles"}

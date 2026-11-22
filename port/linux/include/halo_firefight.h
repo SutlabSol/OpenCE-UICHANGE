@@ -836,6 +836,7 @@ struct game_variant;
 struct game_variant_options;
 extern struct game_variant global_variant;
 boolean firefight_active(void);
+real firefight_player_stun_scale(void);
 /* how far an actor walks a straight line on the level towards a point (at
 most most units, no drop over 1.2 units, no kill volume), where it stops into
 end; stopped at an edge with ground to land on beyond it, TRUE into edge and
@@ -1474,14 +1475,17 @@ boolean firefight_objectives_pickup_blocked(long weapon_index);
 /* (firefight_network.c) the host's, a client's copy */
 void firefight_objectives_view_set(struct firefight_objectives_view const *view);
 /* (firefight.c) a game's start, each tick (every machine's: the host decides,
-a client shows), a round's start (its objective rolled, the last one's
-ended), a wave's spawn, a set's end, the game's end */
+a client shows), a round's start (when its round objective starts rolled,
+the last one's ended), a wave's start (its wave objective rolled, the round
+objective started at its wave), a wave's spawn, a wave's end, a round's end,
+the game's end */
 void firefight_objectives_initialize_for_new_map(void);
 void firefight_objectives_update(void);
 void firefight_objectives_round_starting(short round_num);
+void firefight_objectives_wave_starting(short wave_num);
 void firefight_objectives_wave_spawned(short wave_num);
+void firefight_objectives_wave_ended(void);
 void firefight_objectives_round_ended(void);
-void firefight_objectives_set_ended(void);
 void firefight_objectives_dispose(void);
 /* (firefight.c) an enemy killed, a player killed */
 void firefight_objectives_enemy_killed(long dead_unit_index, long killer_player_index, boolean headshot, boolean melee,

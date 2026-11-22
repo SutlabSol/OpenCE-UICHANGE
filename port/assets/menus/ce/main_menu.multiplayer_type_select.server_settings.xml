@@ -433,8 +433,8 @@
 		<string text="SHIELD REGEN:"/>
 		<string text="HEALTH REGEN:"/>
 		<string text="VEHICLES:"/>
+		<string text="WAVE OBJECTIVES:"/>
 		<string text="ROUND OBJECTIVES:"/>
-		<string text="SET OBJECTIVES:"/>
 	</strings>
 	<strings name="main_menu/multiplayer_type_select/server_settings/help_strings">
 		<string text=""/>
@@ -478,8 +478,8 @@
 		<string text="ON: shields come back as in Halo. OFF: never (only\nthe map's pickups). Kept for this map."/>
 		<string text="ON: health comes back after 5 seconds unhurt, as a\nshield does. Kept for this map."/>
 		<string text="The map's vehicles for the players: all from the\nstart, one with each ordnance drop, or none."/>
-		<string text="Optional challenges for a round, beside the waves.\nKept for every map."/>
-		<string text="Optional set pieces on the map for a set: a camp,\na hill, a flag. Kept for every map."/>
+		<string text="Optional challenges for a wave, beside the fight.\nKept for every map."/>
+		<string text="Optional set pieces on the map for a round: a\ncamp, a hill, a flag. Kept for every map."/>
 	</strings>
 	<widget name="main_menu/multiplayer_type_select/server_settings/op_lobby_settings" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<on event="a" open="main_menu/multiplayer_type_select/server_settings/lobby_settings/lobby_settings_screen"/>
@@ -1557,7 +1557,7 @@
 		<string text="OFF"/>
 	</strings>
 	<strings name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/ff_round_objectives_labels">
-		<string text="ROUND OBJECTIVES:"/>
+		<string text="WAVE OBJECTIVES:"/>
 		<string text="CHANCE:"/>
 		<string text="KILLS:"/>
 		<string text="NO DEATHS:"/>
@@ -1569,28 +1569,28 @@
 		<string text="USE ONLY:"/>
 	</strings>
 	<strings name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/cap_ff_round_objectives">
-		<string text="A round can have an objective of those on below,\ndone before its waves are cleared."/>
-		<string text="No round objectives: Firefight as it is."/>
-		<string text="How likely each round is to have an objective."/>
-		<string text="How likely each round is to have an objective."/>
-		<string text="How likely each round is to have an objective."/>
-		<string text="How likely each round is to have an objective."/>
-		<string text="How likely each round is to have an objective."/>
+		<string text="A wave can have an objective of those on below,\ndone before it is cleared."/>
+		<string text="No wave objectives: Firefight as it is."/>
+		<string text="How likely each wave is to have an objective."/>
+		<string text="How likely each wave is to have an objective."/>
+		<string text="How likely each wave is to have an objective."/>
+		<string text="How likely each wave is to have an objective."/>
+		<string text="How likely each wave is to have an objective."/>
 		<string text="So many kills of a kind: headshots, melee,\ngrenades, splatters or a weapon class."/>
 		<string text="Never this objective."/>
-		<string text="The round finished with no player dying. Anyone's\ndeath fails it for everyone."/>
+		<string text="The wave finished with no player dying. Anyone's\ndeath fails it for everyone."/>
 		<string text="Never this objective."/>
 		<string text="No more than half the players' shields broken: a\nfall, your own blast, friendly fire count."/>
 		<string text="Never this objective."/>
-		<string text="An enemy of the first wave is marked: kill it\nbefore any other."/>
+		<string text="An enemy of the wave is marked: kill it before\nany other."/>
 		<string text="Never this objective."/>
 		<string text="A weapon class or grenade most of you carry: one\nshot or throw fails it for everyone."/>
 		<string text="Never this objective."/>
 		<string text="So many kills from a vehicle of a kind, one given\nyou if the map has none of it there."/>
 		<string text="Never this objective."/>
-		<string text="Reach a marked point of the map, far from you,\nbefore the waves are cleared."/>
+		<string text="Reach a marked point of the map, far from you,\nbefore the wave is cleared."/>
 		<string text="Never this objective."/>
-		<string text="A weapon is dropped to each of you: from the first\nwave, firing any other fails it."/>
+		<string text="A weapon is dropped to each of you: once it lands,\nfiring any other fails it."/>
 		<string text="Never this objective."/>
 	</strings>
 	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ff_set_objectives_screen" width="640" height="480" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/gradient">
@@ -1773,7 +1773,7 @@
 		<string text="OFF"/>
 	</strings>
 	<strings name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/ff_set_objectives_labels">
-		<string text="SET OBJECTIVES:"/>
+		<string text="ROUND OBJECTIVES:"/>
 		<string text="CHANCE:"/>
 		<string text="HIGH VALUE TARGET:"/>
 		<string text="ENEMY GENERATOR:"/>
@@ -1786,17 +1786,17 @@
 		<string text="BOMB:"/>
 	</strings>
 	<strings name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/cap_ff_set_objectives">
-		<string text="A set can have an objective of those on below,\nfrom its 2nd or 3rd round to its end."/>
-		<string text="No set objectives: Firefight as it is."/>
-		<string text="How likely each set is to have an objective."/>
-		<string text="How likely each set is to have an objective."/>
-		<string text="How likely each set is to have an objective."/>
-		<string text="How likely each set is to have an objective."/>
+		<string text="A round can have an objective of those on below,\nfrom its 1st or 2nd wave to its end."/>
+		<string text="No round objectives: Firefight as it is."/>
+		<string text="How likely each round is to have an objective."/>
+		<string text="How likely each round is to have an objective."/>
+		<string text="How likely each round is to have an objective."/>
+		<string text="How likely each round is to have an objective."/>
 		<string text="An enemy camp round a map objective: kill its VIP\nbefore they teleport out."/>
 		<string text="Never this objective."/>
 		<string text="An enemy camp round a map objective: destroy its\ngenerator before time runs out."/>
 		<string text="Never this objective."/>
-		<string text="An enemy camp round a map objective: kill every\none of them before the set ends."/>
+		<string text="An enemy camp round a map objective: kill every\none of them before the round ends."/>
 		<string text="Never this objective."/>
 		<string text="A hill turns on: hold it with no enemy in it.\nNeeds King of the Hill hills."/>
 		<string text="Never this objective."/>
@@ -1887,8 +1887,8 @@
 		<string text="ON: shields come back as in Halo. OFF: never (only\nthe map's pickups). Kept for this map."/>
 		<string text="ON: health comes back after 5 seconds unhurt, as a\nshield does. Kept for this map."/>
 		<string text="The map's vehicles for the players: all from the\nstart, one with each ordnance drop, or none."/>
-		<string text="Optional challenges for a round, beside the waves.\nKept for every map."/>
-		<string text="Optional set pieces on the map for a set: a camp,\na hill, a flag. Kept for every map."/>
+		<string text="Optional challenges for a wave, beside the fight.\nKept for every map."/>
+		<string text="Optional set pieces on the map for a round: a\ncamp, a hill, a flag. Kept for every map."/>
 	</strings>
 	<widget name="main_menu/multiplayer_type_select/server_settings/lobby_settings/button_defaults" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" string_list="strings/common_button_captions" string_index="3" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
 		<on event="left_mouse" run="mouse emit accept event"/>
@@ -1974,8 +1974,8 @@
 		<string text="ON: shields come back as in Halo. OFF: never (only\nthe map's pickups). Kept for this map."/>
 		<string text="ON: health comes back after 5 seconds unhurt, as a\nshield does. Kept for this map."/>
 		<string text="The map's vehicles for the players: all from the\nstart, one with each ordnance drop, or none."/>
-		<string text="Optional challenges for a round, beside the waves.\nKept for every map."/>
-		<string text="Optional set pieces on the map for a set: a camp,\na hill, a flag. Kept for every map."/>
+		<string text="Optional challenges for a wave, beside the fight.\nKept for every map."/>
+		<string text="Optional set pieces on the map for a round: a\ncamp, a hill, a flag. Kept for every map."/>
 	</strings>
 	<widget name="main_menu/multiplayer_type_select/server_settings/game_settings/button_defaults" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" string_list="strings/common_button_captions" string_index="3" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
 		<on event="left_mouse" run="mouse emit accept event"/>
@@ -2058,8 +2058,8 @@
 		<string text="ON: shields come back as in Halo. OFF: never (only\nthe map's pickups). Kept for this map."/>
 		<string text="ON: health comes back after 5 seconds unhurt, as a\nshield does. Kept for this map."/>
 		<string text="The map's vehicles for the players: all from the\nstart, one with each ordnance drop, or none."/>
-		<string text="Optional challenges for a round, beside the waves.\nKept for every map."/>
-		<string text="Optional set pieces on the map for a set: a camp,\na hill, a flag. Kept for every map."/>
+		<string text="Optional challenges for a wave, beside the fight.\nKept for every map."/>
+		<string text="Optional set pieces on the map for a round: a\ncamp, a hill, a flag. Kept for every map."/>
 	</strings>
 	<widget name="main_menu/multiplayer_type_select/server_settings/map_content/button_defaults" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" string_list="strings/common_button_captions" string_index="3" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
 		<on event="left_mouse" run="mouse emit accept event"/>
@@ -2135,8 +2135,8 @@
 		<string text="ON: shields come back as in Halo. OFF: never (only\nthe map's pickups). Kept for this map."/>
 		<string text="ON: health comes back after 5 seconds unhurt, as a\nshield does. Kept for this map."/>
 		<string text="The map's vehicles for the players: all from the\nstart, one with each ordnance drop, or none."/>
-		<string text="Optional challenges for a round, beside the waves.\nKept for every map."/>
-		<string text="Optional set pieces on the map for a set: a camp,\na hill, a flag. Kept for every map."/>
+		<string text="Optional challenges for a wave, beside the fight.\nKept for every map."/>
+		<string text="Optional set pieces on the map for a round: a\ncamp, a hill, a flag. Kept for every map."/>
 	</strings>
 	<widget name="main_menu/multiplayer_type_select/server_settings/fork_settings/button_defaults" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" string_list="strings/common_button_captions" string_index="3" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
 		<on event="left_mouse" run="mouse emit accept event"/>

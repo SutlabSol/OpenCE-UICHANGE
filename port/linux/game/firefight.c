@@ -245,6 +245,23 @@ int firefight_map_reach_skull_to_40_skull(
 	}
 }
 
+/* PLASMA FLINCH's share of a plasma hit's stun a player takes in Firefight
+(units.c's unit_damage_aftermath; 1 out of Firefight: the game's own) */
+real firefight_player_stun_scale(
+	void)
+{
+	struct game_variant_options const *opts;
+	byte flinch;
+
+	if (!firefight_active())
+		return 1.0f;
+	opts = game_variant_options_get();
+	flinch = opts ? opts->firefight_plasma_flinch : 0;
+	if (!(flinch & FIREFIGHT_PLASMA_FLINCH_SET))
+		return 0.0f;
+	return 0.25f * (real)PIN(flinch & ~FIREFIGHT_PLASMA_FLINCH_SET, 0, 4);
+}
+
 boolean firefight_active(
 	void)
 {
@@ -1203,7 +1220,7 @@ static void firefight_begin_pre_round(
 		round_num == 1 ? _ff_banner_set_start : _ff_banner_round_start,
 		round_num == 1 ? ff_state.current_set : round_num,
 		4 * TICKS_PER_SECOND);
-	/* (the round's objective, and the set's: firefight_objectives.c) */
+	/* (the round's objective: firefight_objectives.c) */
 	firefight_objectives_round_starting(round_num);
 }
 
@@ -1231,6 +1248,8 @@ static void firefight_begin_wave(
 		wave_num == FIREFIGHT_WAVES_PER_ROUND ? _ff_banner_boss_wave : _ff_banner_wave_start,
 		wave_num,
 		3 * TICKS_PER_SECOND);
+	/* (the wave's objective, and the round's at its wave: firefight_objectives.c) */
+	firefight_objectives_wave_starting(wave_num);
 }
 
 /* ---------- kill & melee notifications */
@@ -1492,8 +1511,8 @@ void firefight_variant_options_default(
 	options->firefight_next_wave_mode = _firefight_next_wave_timer_60s;
 	options->firefight_player_faction_mode = _firefight_player_faction_spartan;
 	options->firefight_vehicle_spawns = _firefight_vehicle_spawns_all;
-	options->firefight_unused_vehicles[0] = 0;
-	options->firefight_unused_vehicles[1] = 0;
+	options->firefight_plasma_flinch = FIREFIGHT_PLASMA_FLINCH_SET | 0;
+	options->firefight_unused_vehicle = 0;
 	options->firefight_prep_countdown = _firefight_prep_30s;
 	options->firefight_skull_progression_mode = _firefight_skull_prog_standard;
 	options->firefight_player_shields = _firefight_shields_normal;
@@ -1998,7 +2017,9 @@ static void firefight_update(
 	case _ff_phase_wave_clear:
 		if (ff_state.phase_timer_ticks <= 0)
 		{
-			/* (the round's waves cleared: its objective decided) */
+			/* (the wave cleared: its objective decided; the round's
+			waves: the round's ended) */
+			firefight_objectives_wave_ended();
 			if (ff_state.current_wave >= FIREFIGHT_WAVES_PER_ROUND)
 				firefight_objectives_round_ended();
 			if (ff_state.current_wave < FIREFIGHT_WAVES_PER_ROUND)
@@ -2031,7 +2052,7 @@ static void firefight_update(
 				ff_state.phase_state = _ff_phase_set_complete;
 				ff_state.phase_timer_ticks = 5 * TICKS_PER_SECOND;
 				firefight_add_shared_lives(ff->bonus_lives_per_set);
-				firefight_objectives_set_ended();
+				firefight_objectives_round_ended();
 				skulls_unlock_next_by_milestone("Firefight set completed");
 				firefight_announce_banner(_ff_banner_set_complete, ff_state.current_set, 4 * TICKS_PER_SECOND);
 			}
@@ -2048,7 +2069,7 @@ static void firefight_update(
 			ff_state.phase_state = _ff_phase_set_complete;
 			ff_state.phase_timer_ticks = 5 * TICKS_PER_SECOND;
 			firefight_add_shared_lives(ff->bonus_lives_per_set);
-			firefight_objectives_set_ended();
+			firefight_objectives_round_ended();
 			skulls_unlock_next_by_milestone("Firefight set completed");
 			firefight_announce_banner(_ff_banner_set_complete, ff_state.current_set, 4 * TICKS_PER_SECOND);
 		}

@@ -701,6 +701,10 @@ symbols in this file:
 #include "biped_ragdoll.h" /* port: port/linux/game/biped_ragdoll.c */
 #include "mcc_grenades.h" /* port: port/linux/game/mcc_grenades.h */
 
+/* port: Firefight's PLASMA FLINCH, a player's share of a hit's stun
+(port/linux/game/firefight.c) */
+real firefight_player_stun_scale(void);
+
 /* port: the control and animation impulses the host's actors give their
 units go to the clients' copies (port/linux/game/network_actors.c) */
 void network_actors_note_control(long unit_index, struct unit_control_data const *control_data);
@@ -7474,17 +7478,20 @@ void unit_damage_aftermath(
 
 	if (unit->unit.player_index != NONE &&
 		damage_definition->stun > 0.f &&
-		(game_engine_running() || stun_enable))
+		(game_engine_running() || stun_enable) &&
+		/* port: Firefight's PLASMA FLINCH, OFF: none (firefight.c) */
+		firefight_player_stun_scale() > 0.f)
 	{
 		struct game_globals_player_information *player_information =
 			TAG_BLOCK_GET_ELEMENT(
 				&scenario_get_game_globals()->player_information,
 				0,
 				struct game_globals_player_information);
+		/* port: Firefight's PLASMA FLINCH, its share (firefight.c) */
 		real stun_increment =
-			damage_definition->stun * damage_data->scale;
+			damage_definition->stun * damage_data->scale * firefight_player_stun_scale();
 		real maximum_stun =
-			damage_definition->maximum_stun * damage_data->scale;
+			damage_definition->maximum_stun * damage_data->scale * firefight_player_stun_scale();
 		short stun_ticks;
 		short minimum_stun_ticks;
 		short maximum_stun_ticks;
@@ -9208,19 +9215,26 @@ void unit_cause_melee_damage(
 			damage_data.origin = melee_position;
 			damage_data.epicenter = unit->object.bounding_sphere_center;
 
-			if (target_object_index==NONE)
+			/* port: a melee blow whatever its damage's category
+			(damage_melee_blow_begin) */
 			{
-				area_of_effect_cause_damage(&damage_data, NONE);
-			}
-			else
-			{
-				object_cause_damage(
-					&damage_data,
-					target_object_index,
-					node_index,
-					region_index,
-					material_index,
-					object_normal);
+				long previous_blow = damage_melee_blow_begin(damage_effect_index);
+
+				if (target_object_index==NONE)
+				{
+					area_of_effect_cause_damage(&damage_data, NONE);
+				}
+				else
+				{
+					object_cause_damage(
+						&damage_data,
+						target_object_index,
+						node_index,
+						region_index,
+						material_index,
+						object_normal);
+				}
+				damage_melee_blow_end(previous_blow);
 			}
 
 			if (!melee_hit && damage_data.material_type!=NONE)
@@ -9552,6 +9566,10 @@ void unit_cause_player_melee_damage(
 
 				if (object_get(best_object_index)->object.type==_object_type_biped)
 				{
+					/* port: a melee blow whatever its damage's category
+					(damage_melee_blow_begin) */
+					long previous_blow = damage_melee_blow_begin(melee_damage_effect_index);
+
 					object_cause_damage(
 						&damage_data,
 						best_object_index,
@@ -9559,6 +9577,7 @@ void unit_cause_player_melee_damage(
 						NONE,
 						NONE,
 						NULL);
+					damage_melee_blow_end(previous_blow);
 				}
 			}
 		}

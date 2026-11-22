@@ -1375,7 +1375,8 @@ static void draw_objectives(
 	real vx0,
 	real vy0,
 	real vw,
-	real scale)
+	real scale,
+	real notice_top)
 {
 	struct firefight_objectives_view const *view = firefight_objectives_view_get();
 	real_argb_color white = { 1.0f, 0.96f, 0.98f, 1.0f };
@@ -1388,13 +1389,13 @@ static void draw_objectives(
 	/* the cards, under the generators' */
 	if (firefight_objectives_round_card(title, sizeof(title), status, sizeof(status)))
 	{
-		draw_objective_card(font_index, line_height, vx0, vy0, scale, y, "ROUND", title, status,
+		draw_objective_card(font_index, line_height, vx0, vy0, scale, y, "WAVE", title, status,
 			view->round_state == _ff_objective_failed);
 		y += 34.0f;
 	}
 	if (firefight_objectives_set_card(title, sizeof(title), status, sizeof(status), objective_local_absolute()))
 	{
-		draw_objective_card(font_index, line_height, vx0, vy0, scale, y, "SET", title, status,
+		draw_objective_card(font_index, line_height, vx0, vy0, scale, y, "ROUND", title, status,
 			view->set_state == _ff_objective_failed || (view->set_flags & FF_OBJECTIVE_CONTESTED));
 		/* (a hold's, a generator's, the marines' life: a bar under it) */
 		if (view->set_state == _ff_objective_running && view->set_goal > 0 &&
@@ -1415,7 +1416,8 @@ static void draw_objectives(
 	{
 		real bw = 300.0f;
 		real bx = (vw / scale - bw) * 0.5f;
-		real by = 96.0f;
+		/* (under the banners shown: a round's countdown and its skulls') */
+		real by = MAX(96.0f, notice_top);
 
 		ff_draw_box(vx0, vy0, scale, bx, by, bx + bw, by + 16.0f, 0.0f, FF_HUD_PANEL_FILL, FF_HUD_LOCK_BAR);
 		ff_draw_text(font_index, line_height, vx0, vy0, scale, view->notice,
@@ -1605,6 +1607,8 @@ void firefight_hud_draw(void)
 	real_argb_color red = { 1.0f, 1.0f, 0.35f, 0.35f };
 	real_argb_color green = { 1.0f, 0.35f, 1.0f, 0.45f };
 	boolean prep_phase;
+	/* (the banners' bottom: the objectives' notice goes under it) */
+	real banners_bottom = 0.0f;
 
 	if (!firefight_active())
 		return;
@@ -1664,6 +1668,7 @@ void firefight_hud_draw(void)
 
 			ff_draw_box_with_wells(vx0, vy0, scale, bx, sby, bx + bw, sby + 34.0f, 17.0f, inset, FF_HUD_WARN_FILL,
 				s_ff_skull_hud_defs[round_bits[0]].badge_color);
+			banners_bottom = sby + 34.0f + 4.0f;
 			ff_draw_banner_skulls(vx0, vy0, scale, bx, bx + bw, sby + 8.0f, 18.0f, round_bits, round_count);
 			snprintf(sk_title, sizeof(sk_title), "%s: ", round_count == 1 ? "SKULL ACTIVE" : "SKULLS ACTIVE");
 			for (name = 0; name < round_count; name++)
@@ -1727,7 +1732,7 @@ void firefight_hud_draw(void)
 	/* 4. Generator Defense Status Bars */
 	draw_generator_bars(font_index, line_height, vx0, vy0, scale);
 	/* (and the objectives', under them) */
-	draw_objectives(font_index, line_height, vx0, vy0, vw, scale);
+	draw_objectives(font_index, line_height, vx0, vy0, vw, scale, banners_bottom);
 
 	/* 5. 3D->2D World-to-Screen Navpoints for Stragglers (<= 3 enemies left), Dropships & Resupply Drops */
 	if (ff_state.straggler_navpoints_active && ff_state.enemies_alive > 0 && ff_state.enemies_alive <= FIREFIGHT_STRAGGLER_THRESHOLD)

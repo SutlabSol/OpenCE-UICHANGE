@@ -1144,8 +1144,11 @@ static boolean playlist_profile_options_from_block(
 	/* (VEHICLES is a game's, Server Setup's, never a variant's: and the
 	bytes were ROUND 1, 2 and 3 VEHICLE, saved) */
 	options->firefight_vehicle_spawns = _firefight_vehicle_spawns_all;
-	options->firefight_unused_vehicles[0] = 0;
-	options->firefight_unused_vehicles[1] = 0;
+	/* (PLASMA FLINCH, the second: OFF without its bit, the old vehicle's) */
+	options->firefight_plasma_flinch = (options->firefight_plasma_flinch & FIREFIGHT_PLASMA_FLINCH_SET) ?
+		(byte)(FIREFIGHT_PLASMA_FLINCH_SET | PIN(options->firefight_plasma_flinch & ~FIREFIGHT_PLASMA_FLINCH_SET, 0, 4)) :
+		(byte)(FIREFIGHT_PLASMA_FLINCH_SET | 0);
+	options->firefight_unused_vehicle = 0;
 	options->firefight_prep_countdown = (byte)PIN(options->firefight_prep_countdown, 0, NUMBER_OF_FIREFIGHT_PREP_MODES - 1);
 	options->firefight_skull_progression_mode = (byte)PIN(options->firefight_skull_progression_mode, 0, NUMBER_OF_FIREFIGHT_SKULL_PROG_MODES - 1);
 	options->firefight_player_shields = (byte)PIN(options->firefight_player_shields, 0, NUMBER_OF_FIREFIGHT_SHIELD_MODES - 1);

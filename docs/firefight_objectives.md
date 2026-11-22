@@ -4,6 +4,18 @@
 agreed in discussion; items marked **(proposed)** are suggestions not yet
 confirmed, and **Open** lists what is still to decide.
 
+## Renamed 2026-11-21: waves and rounds, not rounds and sets
+
+What this plan calls a **round objective** is a **wave objective**: rolled as
+each wave starts, decided when that wave is cleared. What it calls a **set
+objective** is a **round objective**: rolled once a round, starting at its 1st
+or 2nd wave, lasting until the round ends. Its time is the round's waves (3) ×
+the NEXT WAVE timer, so holds and the Rescue drain are 3 × 60 s / 4 = 45 s.
+The code and config.toml keys keep the old names (`round_*` for the wave
+objective, `set_*` for the round objective); only what players see changed.
+Kill goals are about half the old per-round ones; USE ONLY's rule holds 12 s
+after its pods drop.
+
 ## Decided 2026-11-21
 
 - **Set time** = rounds in a set (5) × the round time limit, the NEXT WAVE

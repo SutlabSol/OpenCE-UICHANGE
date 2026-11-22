@@ -4,13 +4,13 @@ FIREFIGHT_OBJECTIVES.C
 port: Firefight's optional objectives (docs/firefight_objectives.md), beside
 the waves, never in their way: a wave's clear waits for none of their units.
 
-- A ROUND OBJECTIVE, rolled as each round starts (game.firefight_objectives_round_chance):
+- A WAVE OBJECTIVE, rolled as each wave starts (game.firefight_objectives_round_chance):
   so many kills of a kind, no deaths, shields kept, the marked enemy killed
   first, or a weapon class (or a grenade) never fired. The whole team's: every
   player counted from its start (one joining later is not, till the next
-  round), and a rule broken is told to all, with who broke it.
-- A SET OBJECTIVE, rolled once a set (game.firefight_objectives_set_chance), starting at
-  its second or third round and lasting until the set ends: an enemy camp
+  wave), and a rule broken is told to all, with who broke it.
+- A ROUND OBJECTIVE, rolled once a round (game.firefight_objectives_set_chance), starting at
+  its first or second wave and lasting until the round ends: an enemy camp
   round a map objective point (its VIP to kill, its generator to destroy, or
   every one of them to kill), a KOTH hill to hold (Data Link), a flag to
   carry to the other base, marines to rescue, or a boss's skull to hold.
@@ -21,12 +21,15 @@ map; one whose map data the map has not got (a hill, two flags, an oddball
 spawn) is left out there, and the game says so as it starts. What a map has
 is kept (d:\firefight_objective_maps.txt) for Server Setup to show.
 
-Points go to the players by how much each did; a set objective won drops a
+(In the code and the settings a wave objective is a `round` one and a round
+objective a `set` one: they were first a round's and a set's.)
+
+Points go to the players by how much each did; a round objective won drops a
 pod to the better half of them, as an ordnance drop does, and gives the best
 of them more. The host decides it all; its clients are told the view
 (firefight_objectives_view) in Firefight's state, and each shows it.
 
-The set time is a set's rounds times the round's time limit (the NEXT WAVE
+The round time is a round's waves times the wave's time limit (the NEXT WAVE
 timer, 60 seconds when the waves are not timed): a hold (Data Link, Oddball)
 and the marines' patience (Rescue) are a quarter of it.
 */
@@ -77,6 +80,8 @@ enum
 	/* the points a round objective and a set objective give, shared out by
 	what each player did; and the set objective's best player's more */
 	FFO_ROUND_POINTS = 1000,
+	/* (Use X only's pods' time to land and be picked up: its rule holds after) */
+	FFO_USE_ONLY_GRACE_TICKS = 12 * TICKS_PER_SECOND,
 	FFO_SET_POINTS = 3000,
 	FFO_TOP_PLAYER_POINTS = 1000,
 	/* (Rescue's, each marine alive at the set's end) */
@@ -194,11 +199,14 @@ static struct
 	long round_vehicle_tag;
 	long round_weapon_tag;
 	boolean round_armed;
+	/* (Use X only's rule from then: its pods down) */
+	long round_arm_time;
 	/* (each player's unit and its shield, last tick) */
 	long shield_unit[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
 	real shield_last[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
 
 	/* the set objective's: the round it starts in (0: none this set) */
+	/* (the wave of the round its round objective starts at, 0 for none) */
 	short set_start_round;
 	long set_contribution[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
 	long set_deadline;
@@ -390,8 +398,8 @@ static void ffo_notice_update(void)
 	}
 }
 
-/* the set's time: its rounds times the round's limit, the NEXT WAVE timer's
-(60 seconds when the waves are not timed) */
+/* the round objective's time: the round's waves times the wave's limit, the
+NEXT WAVE timer's (60 seconds when the waves are not timed) */
 static long ffo_set_ticks(void)
 {
 	struct game_variant_options const *opts = game_variant_options_get();
@@ -408,7 +416,7 @@ static long ffo_set_ticks(void)
 		default: break;
 		}
 	}
-	return FIREFIGHT_ROUNDS_PER_SET * wave;
+	return FIREFIGHT_WAVES_PER_ROUND * wave;
 }
 
 /* the object of an absolute index on this machine (a client's are the
@@ -1006,13 +1014,13 @@ static void ffo_round_end(byte state)
 		ffo_award(g.round_contribution, FFO_ROUND_POINTS, FALSE,
 			g_view.round_kind == _ff_round_objective_no_deaths || g_view.round_kind == _ff_round_objective_shields ||
 			g_view.round_kind == _ff_round_objective_dont_use || g_view.round_kind == _ff_round_objective_weapon_only);
-		snprintf(text, sizeof(text), "ROUND OBJECTIVE COMPLETE: +%d", (int)FFO_ROUND_POINTS);
+		snprintf(text, sizeof(text), "WAVE OBJECTIVE COMPLETE: +%d", (int)FFO_ROUND_POINTS);
 		break;
 	case _ff_objective_tied:
-		snprintf(text, sizeof(text), "ROUND OBJECTIVE: TIE");
+		snprintf(text, sizeof(text), "WAVE OBJECTIVE: TIE");
 		break;
 	default:
-		snprintf(text, sizeof(text), "ROUND OBJECTIVE FAILED");
+		snprintf(text, sizeof(text), "WAVE OBJECTIVE FAILED");
 		break;
 	}
 	ffo_notice(text, FFO_NOTICE_TICKS);
@@ -1119,7 +1127,7 @@ static boolean ffo_round_setup(short kind)
 	{
 	case _ff_round_objective_kills:
 	{
-		static short const goals[NUMBER_OF_FF_OBJECTIVE_KILLS] = { 6, 3, 3, 2, 12, 10, 6, 10, 4 };
+		static short const goals[NUMBER_OF_FF_OBJECTIVE_KILLS] = { 3, 2, 2, 1, 6, 5, 3, 5, 2 };
 		short candidates[NUMBER_OF_FF_OBJECTIVE_KILLS];
 		short classes[NUMBER_OF_FF_OBJECTIVE_WEAPON_CLASSES];
 		short grenades[NUMBER_OF_UNIT_GRENADE_TYPES];
@@ -1212,7 +1220,7 @@ static boolean ffo_round_setup(short kind)
 			return FALSE;
 		ffo_tag_label(g.round_vehicle_tag, g_view.round_label, sizeof(g_view.round_label));
 		g_view.round_target = ffo_absolute_of_object(vehicle);
-		g_view.round_goal = (short)PIN((long)(5.0f * MIN(players_scale, 3.0f) + 0.5f), 1, 99);
+		g_view.round_goal = (short)PIN((long)(3.0f * MIN(players_scale, 3.0f) + 0.5f), 1, 99);
 		return TRUE;
 	}
 	case _ff_round_objective_travel:
@@ -1255,6 +1263,7 @@ static boolean ffo_round_setup(short kind)
 		if (g.round_weapon_tag == NONE)
 			return FALSE;
 		g.round_armed = FALSE;
+		g.round_arm_time = game_time_get() + FFO_USE_ONLY_GRACE_TICKS;
 		ffo_tag_label(g.round_weapon_tag, g_view.round_label, sizeof(g_view.round_label));
 		/* (a pod of it for each of them, as an ordnance drop's) */
 		firefight_spawn_ordnance_weapon_for_all(g.round_weapon_tag);
@@ -1325,7 +1334,7 @@ static void ffo_round_roll(void)
 		if (ffo_round_setup(candidates[pick]))
 		{
 			ffo_round_text(text, sizeof(text));
-			snprintf(line, sizeof(line), "ROUND OBJECTIVE: %s", text);
+			snprintf(line, sizeof(line), "WAVE OBJECTIVE: %s", text);
 			ffo_notice(line, FFO_NOTICE_TICKS + 2 * TICKS_PER_SECOND);
 			return;
 		}
@@ -2007,18 +2016,18 @@ static void ffo_set_start(short kind)
 		g_view.set_state = _ff_objective_off;
 		return;
 	}
-	snprintf(text, sizeof(text), "SET OBJECTIVE: %s", ffo_set_names[kind]);
+	snprintf(text, sizeof(text), "ROUND OBJECTIVE: %s", ffo_set_names[kind]);
 	ffo_notice(text, FFO_NOTICE_TICKS + 2 * TICKS_PER_SECOND);
 }
 
-static void ffo_set_roll_for_set(void)
+static void ffo_set_roll_for_round(void)
 {
 	long chance = PIN(config_integer("game.firefight_objectives_set_chance"), 0, 100);
 
 	g.set_start_round = 0;
 	if (!config_boolean("game.firefight_objectives_set") || (long)(ffo_rand() % 100UL) >= chance)
 		return;
-	g.set_start_round = (short)(2 + ffo_rand() % 2UL);
+	g.set_start_round = (short)(1 + ffo_rand() % 2UL);
 }
 
 static void ffo_set_roll_start(void)
@@ -2905,17 +2914,22 @@ void firefight_objectives_dispose(void)
 
 void firefight_objectives_round_starting(short round_num)
 {
+	(void)round_num;
 	if (!ffo_host())
 		return;
+	firefight_objectives_wave_ended();
 	firefight_objectives_round_ended();
-	if (round_num == 1)
-	{
-		firefight_objectives_set_ended();
-		ffo_set_roll_for_set();
-	}
+	ffo_set_roll_for_round();
+}
+
+void firefight_objectives_wave_starting(short wave_num)
+{
+	if (!ffo_host())
+		return;
+	firefight_objectives_wave_ended();
 	ffo_count_players();
 	ffo_round_roll();
-	if (round_num == g.set_start_round && g_view.set_state != _ff_objective_running)
+	if (wave_num == g.set_start_round && g_view.set_state != _ff_objective_running)
 		ffo_set_roll_start();
 }
 
@@ -2925,13 +2939,8 @@ void firefight_objectives_wave_spawned(short wave_num)
 	short best = NONE;
 	short index;
 
-	/* (Use X only's rule holds from the first wave: the pods are down) */
-	if (ffo_host() && wave_num == 1 && g_view.round_kind == _ff_round_objective_weapon_only &&
-		g_view.round_state == _ff_objective_running)
-	{
-		g.round_armed = TRUE;
-	}
-	if (!ffo_host() || wave_num != 1 || g_view.round_kind != _ff_round_objective_kill_first ||
+	(void)wave_num;
+	if (!ffo_host() || g_view.round_kind != _ff_round_objective_kill_first ||
 		g_view.round_state != _ff_objective_running || g.round_target_unit != NONE)
 	{
 		return;
@@ -2955,7 +2964,7 @@ void firefight_objectives_wave_spawned(short wave_num)
 	g_view.round_target = ffo_absolute_of_object(g.round_target_unit);
 }
 
-void firefight_objectives_round_ended(void)
+void firefight_objectives_wave_ended(void)
 {
 	if (!ffo_host() || g_view.round_state != _ff_objective_running)
 		return;
@@ -2977,7 +2986,7 @@ void firefight_objectives_round_ended(void)
 	}
 }
 
-void firefight_objectives_set_ended(void)
+void firefight_objectives_round_ended(void)
 {
 	if (!ffo_host())
 		return;
@@ -3048,6 +3057,16 @@ void firefight_objectives_update(void)
 		return;
 	}
 	ffo_round_shields_update();
+	/* (Use X only's rule, once its pods are down) */
+	if (g_view.round_kind == _ff_round_objective_weapon_only && g_view.round_state == _ff_objective_running &&
+		!g.round_armed && game_time_get() >= g.round_arm_time)
+	{
+		char text[96];
+
+		g.round_armed = TRUE;
+		snprintf(text, sizeof(text), "USE ONLY THE %s FROM NOW", g_view.round_label);
+		ffo_notice(text, FFO_NOTICE_TICKS);
+	}
 	if (g_view.round_kind == _ff_round_objective_travel && g_view.round_state == _ff_objective_running)
 		ffo_round_travel_update();
 	/* (Kill X first's target gone without a kill: a wipe, a fall) */
@@ -3418,7 +3437,7 @@ boolean firefight_objectives_round_card(char *title, size_t title_size, char *st
 		snprintf(status, status_size, "GO");
 		break;
 	default:
-		snprintf(status, status_size, "THIS ROUND");
+		snprintf(status, status_size, "THIS WAVE");
 		break;
 	}
 	return TRUE;

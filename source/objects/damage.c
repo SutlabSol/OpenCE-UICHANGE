@@ -398,7 +398,25 @@ boolean debug_damage;
    January's order; no other name was tested. */
 static long global_debug_damage_object_index;
 
+/* port: the melee blow being dealt, NONE outside one (damage_melee_blow_begin) */
+static long damage_melee_blow_definition_index = NONE;
+
 /* ---------- public code */
+
+long damage_melee_blow_begin(
+	long definition_index)
+{
+	long previous = damage_melee_blow_definition_index;
+
+	damage_melee_blow_definition_index = definition_index;
+	return previous;
+}
+
+void damage_melee_blow_end(
+	long previous_definition_index)
+{
+	damage_melee_blow_definition_index = previous_definition_index;
+}
 
 void damage_initialize(void)
 {
@@ -1118,6 +1136,10 @@ static void object_damage_aftermath(
 		object_definition_get(object->definition_index);
 	struct damage_effect_definition *damage_effect =
 		damage_effect_definition_get(damage->definition_index);
+	/* port: a melee blow's, by its damage's category or the blow being dealt
+	(a map's melee damage can be of no category: damage_melee_blow_begin) */
+	boolean melee_blow = damage_effect->damage.category == _damage_category_melee ||
+		(damage_melee_blow_definition_index != NONE && damage->definition_index == damage_melee_blow_definition_index);
 
 	/* port: (a client's replay of the host's nonlethal damage too) */
 	damage_data_validate_owner(damage);
@@ -1201,7 +1223,7 @@ static void object_damage_aftermath(
 
 	/* port: skull: a punch's Pinata grenades and Black Eye shield, where
 	the host decides damage (port/linux/game/skulls.c) */
-	if (!network_game_distributed_client() && damage_effect->damage.category == _damage_category_melee)
+	if (!network_game_distributed_client() && melee_blow)
 		skulls_melee_damage(object_index, damage->owner_object_index, damage->owner_player_index);
 	/* port: skull: Give & Take, a player's hit on an enemy heals them */
 	if (!network_game_distributed_client())
@@ -1216,7 +1238,7 @@ static void object_damage_aftermath(
 		campaign_score_killing_blow(
 			object_index,
 			body_part,
-			damage_effect->damage.category == _damage_category_melee,
+			melee_blow,
 			&damage->direction,
 			damage->definition_index);
 	}
@@ -1235,7 +1257,7 @@ static void object_damage_aftermath(
 				_object_being_damaged_body_depleted_bit))
 		{
 			/* port: whether it is a melee's (Gun Game's demotion: game_modes.c) */
-			game_modes_kill_by_melee(damage_effect->damage.category == _damage_category_melee);
+			game_modes_kill_by_melee(melee_blow);
 			game_statistics_record_kill(
 				object_index,
 				damage->owner_player_index,
@@ -1280,7 +1302,7 @@ static void object_damage_aftermath(
 			object_index,
 			damage->owner_player_index,
 			body_part,
-			damage_effect->damage.category == _damage_category_melee,
+			melee_blow,
 			&damage->direction,
 			TEST_FLAG(being_damaged_flags, _object_being_damaged_body_depleted_bit),
 			TEST_FLAG(damage->flags, _damage_no_statistics_bit),
@@ -1296,7 +1318,7 @@ static void object_damage_aftermath(
 				object_index,
 				damage->owner_player_index,
 				(body_part == 2) || TEST_FLAG(being_damaged_flags, _object_being_damaged_killed_instantly_bit),
-				damage_effect->damage.category == _damage_category_melee,
+				melee_blow,
 				damage_effect->damage.category == _damage_category_grenade && damage->scale >= 0.90f,
 				damage_effect->damage.category == _damage_category_vehicle);
 		}
@@ -1311,7 +1333,7 @@ static void object_damage_aftermath(
 			damage->definition_index,
 			damage->owner_object_index,
 			&damage->direction,
-			damage_effect->damage.category == _damage_category_melee,
+			melee_blow,
 			damage_effect->damage.category == _damage_category_vehicle,
 			TEST_FLAG(being_damaged_flags, _object_being_damaged_body_depleted_bit));
 		unit_damage_aftermath(

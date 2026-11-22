@@ -264,6 +264,10 @@ enum
 
 /* (the starting equipment, generic or the map's, is the variant's own:
 _game_variant_generic_starting_equipment_bit) */
+/* port: game_variant_options' firefight_plasma_flinch: its value set by this
+build, 0 (OFF) to 4 (100%) under it */
+#define FIREFIGHT_PLASMA_FLINCH_SET 0x80
+
 struct game_variant_options
 {
 	/* minutes; 0: none */
@@ -343,7 +347,11 @@ struct game_variant_options
 	halo_firefight.h's _firefight_vehicle_spawns_*). Were ROUND 1, 2 and 3
 	VEHICLE, which variants saved: the other two unused */
 	byte firefight_vehicle_spawns;
-	byte firefight_unused_vehicles[2];
+	/* PLASMA FLINCH (was ROUND 2 VEHICLE): how much of a plasma hit's stun a
+	player takes, FIREFIGHT_PLASMA_FLINCH_SET | 0 (OFF) to 4 (100%); without
+	the bit (a variant saved before, its old vehicle's) OFF */
+	byte firefight_plasma_flinch;
+	byte firefight_unused_vehicle;
 	byte firefight_prep_countdown;
 	byte firefight_skull_progression_mode;
 	byte firefight_player_shields;

@@ -192,6 +192,15 @@
 		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_boss_freq_label"/>
 		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_boss_freq_spinner" x="286" y="1"/>
 	</widget>
+	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_plasma_flinch_label" type="text" controller="1" width="280" height="22" string_list="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/firefight_labels" string_index="52" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_plasma_flinch_spinner" type="spinner" left="2" top="2" width="206" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" string_list="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/var_ff_plasma_flinch" font="ui\large_ui" color="#FF2896FF" align="center" text_y="4" list_flags="items_from_strings" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -13 19 -7" footer_bounds="7 208 19 214">
+		<on event="left_mouse" run="mouse spinner 1wide click"/>
+	</widget>
+	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff1_plasma_flinch" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_plasma_flinch_label"/>
+		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/ff_plasma_flinch_spinner" x="286" y="1"/>
+	</widget>
 	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/firefight_page_1_help" type="text" controller="1" left="68" top="348" width="482" height="62" string_list="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/cap_firefight_1" font="ui\large_ui" color="#FFFFFFFF">
 	</widget>
 	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/firefight_page_1_menu" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_children" description="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/firefight_page_1_help">
@@ -205,6 +214,7 @@
 		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff1_enemy_shd" x="54" y="208"/>
 		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff1_wave_size" x="54" y="235"/>
 		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff1_boss_freq" x="54" y="262"/>
+		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/op_ff1_plasma_flinch" x="54" y="289"/>
 		<child widget="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/firefight_button_bar" y="414"/>
 	</widget>
 	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/header_firefight_page_1" type="text" controller="1" left="35" top="11" width="605" height="59" text="FACTIONS &amp; AI" font="ui\large_ui" color="#FFFFFFFF">
@@ -626,6 +636,7 @@
 		<string text="GENERATOR ATTACKERS:"/>
 		<string text="PRIMARY WEAPON:"/>
 		<string text="SECONDARY WEAPON:"/>
+		<string text="PLASMA FLINCH:"/>
 	</strings>
 	<strings name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/var_ff_loadout_weapon">
 		<string text="NONE"/>
@@ -754,6 +765,13 @@
 		<string text="WAVE 5 ONLY"/>
 		<string text="EVERY 3RD WAVE"/>
 		<string text="BOSS RUSH"/>
+	</strings>
+	<strings name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/var_ff_plasma_flinch">
+		<string text="OFF"/>
+		<string text="25%"/>
+		<string text="50%"/>
+		<string text="75%"/>
+		<string text="100%"/>
 	</strings>
 	<strings name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/var_ff_enemy_loadout">
 		<string text="DEFAULT"/>
@@ -962,6 +980,11 @@
 		<string text="Boss squads spawn on Wave 5 of each Round\n(Reach standard)."/>
 		<string text="Boss squads spawn on Waves 3 and 5 of each Round."/>
 		<string text="Boss Rush: Every wave spawns heavy commanders,\nHunters, and vehicles!"/>
+		<string text="Plasma hits never slow or stun you, as in the\ncampaign."/>
+		<string text="Plasma hits stun you a quarter as much as in\nmultiplayer."/>
+		<string text="Plasma hits stun you half as much as in\nmultiplayer."/>
+		<string text="Plasma hits stun you three quarters as much as\nin multiplayer."/>
+		<string text="Plasma hits slow and stun you as in multiplayer."/>
 	</strings>
 	<strings name="main_menu/settings_select/multiplayer_setup/playlist_edit/firefight_edit/cap_firefight_2">
 		<string text="Enemies wield their standard faction weapons."/>

@@ -726,78 +726,78 @@ static const struct config_setting config_settings[] =
 		_platform_all,
 		"How far back the third-person view is: \"near\", \"normal\" or \"far\"." },
 	{ "game.firefight_objectives_round", _config_boolean, "false", NULL, _environment_value, _platform_all,
-		"Firefight's ROUND OBJECTIVES (Server Setup > GAME SETTINGS): a challenge\n"
-		"for a round, rolled as each round starts (game.firefight_objectives_round_chance), of\n"
-		"those turned on below; done before the round's waves are cleared, it\n"
+		"Firefight's WAVE OBJECTIVES (Server Setup > GAME SETTINGS): a challenge\n"
+		"for a wave, rolled as each wave starts (game.firefight_objectives_round_chance), of\n"
+		"those turned on below; done before the wave is cleared, it\n"
 		"gives the team points (port/linux/game/firefight_objectives.c). The\n"
 		"host's, the same on every map." },
 	{ "game.firefight_objectives_round_chance", _config_integer, "50", NULL, _environment_value, _platform_all,
-		"The chance, in percent (0 to 100), that a Firefight round has a round\n"
+		"The chance, in percent (0 to 100), that a Firefight wave has a wave\n"
 		"objective." },
 	{ "game.firefight_objective_kills", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Round objective KILLS: so many kills of a kind (headshots, melee,\n"
+		"Wave objective KILLS: so many kills of a kind (headshots, melee,\n"
 		"grenades, splatters, or a weapon class the players carry)." },
 	{ "game.firefight_objective_no_deaths", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Round objective NO DEATHS: the round finished with no player dying." },
+		"Wave objective NO DEATHS: the wave finished with no player dying." },
 	{ "game.firefight_objective_shields", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Round objective SHIELDS INTACT: the round finished with no more than half\n"
+		"Wave objective SHIELDS INTACT: the wave finished with no more than half\n"
 		"the players' shields broken (falls, their own blasts and friendly fire\n"
 		"count)." },
 	{ "game.firefight_objective_kill_first", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Round objective KILL THE MARKED ENEMY FIRST: one of the first wave's,\n"
+		"Wave objective KILL THE MARKED ENEMY FIRST: one of the wave's,\n"
 		"marked, killed before any other." },
 	{ "game.firefight_objective_dont_use", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Round objective DON'T USE: a weapon class (or a grenade) most players\n"
-		"carry, never fired (or thrown) all round." },
+		"Wave objective DON'T USE: a weapon class (or a grenade) most players\n"
+		"carry, never fired (or thrown) all wave." },
 	{ "game.firefight_objective_vehicle_kills", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Round objective VEHICLE KILLS: so many kills from a vehicle of a kind,\n"
+		"Wave objective VEHICLE KILLS: so many kills from a vehicle of a kind,\n"
 		"one given the players if the map has none of it there." },
 	{ "game.firefight_objective_travel", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Round objective TRAVEL: a player reaches a marked point of the map, far\n"
-		"from them, before the round's waves are cleared." },
+		"Wave objective TRAVEL: a player reaches a marked point of the map, far\n"
+		"from them, before the wave is cleared." },
 	{ "game.firefight_objective_weapon_only", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Round objective USE ONLY: a weapon dropped to every player in an\n"
-		"ordnance pod; from the first wave, firing any other fails it (grenades\n"
+		"Wave objective USE ONLY: a weapon dropped to every player in an\n"
+		"ordnance pod; once it lands, firing any other fails it (grenades\n"
 		"and melee are fine)." },
 	{ "game.firefight_objectives_set", _config_boolean, "false", NULL, _environment_value, _platform_all,
-		"Firefight's SET OBJECTIVES (Server Setup > GAME SETTINGS): a set piece on\n"
-		"the map, rolled once a set (game.firefight_objectives_set_chance) and starting at\n"
-		"its second or third round, lasting until the set ends: those turned on\n"
+		"Firefight's ROUND OBJECTIVES (Server Setup > GAME SETTINGS): a set piece on\n"
+		"the map, rolled once a round (game.firefight_objectives_set_chance) and starting at\n"
+		"its first or second wave, lasting until the round ends: those turned on\n"
 		"below that the map has the points for. Won, the team's points, an\n"
 		"ordnance pod for the better half of the players and more for the best." },
 	{ "game.firefight_objectives_set_chance", _config_integer, "80", NULL, _environment_value, _platform_all,
-		"The chance, in percent (0 to 100), that a Firefight set has a set\n"
+		"The chance, in percent (0 to 100), that a Firefight round has a round\n"
 		"objective." },
 	{ "game.firefight_objective_target", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Set objective HIGH VALUE TARGET: an enemy camp round a map objective,\n"
+		"Round objective HIGH VALUE TARGET: an enemy camp round a map objective,\n"
 		"its VIP at the middle; killed before the camp teleports out." },
 	{ "game.firefight_objective_generator", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Set objective ENEMY GENERATOR: an enemy camp round a map objective, its\n"
+		"Round objective ENEMY GENERATOR: an enemy camp round a map objective, its\n"
 		"generator at the middle, destroyed before time runs out." },
 	{ "game.firefight_objective_purge", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Set objective PURGE THE BASE: an enemy camp round a map objective, every\n"
-		"one of them killed before the set ends." },
+		"Round objective PURGE THE BASE: an enemy camp round a map objective, every\n"
+		"one of them killed before the round ends." },
 	{ "game.firefight_objective_data_link", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Set objective DATA LINK: a King of the Hill hill turns on; held, with no\n"
-		"enemy in it, for a quarter of the set's time, before half of it has\n"
+		"Round objective DATA LINK: a King of the Hill hill turns on; held, with no\n"
+		"enemy in it, for a quarter of the round's time, before half of it has\n"
 		"passed. A map with hills." },
 	{ "game.firefight_objective_flag", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Set objective FLAG: a flag turns on, carried to the other base before the\n"
-		"set ends; every enemy goes for its carrier. A map with two flags." },
+		"Round objective FLAG: a flag turns on, carried to the other base before the\n"
+		"round ends; every enemy goes for its carrier. A map with two flags." },
 	{ "game.firefight_objective_rescue", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Set objective RESCUE: marines under attack somewhere on the map, lost if\n"
-		"no one comes in a quarter of the set's time; saved, they follow the\n"
-		"players, each alive at the set's end worth more points." },
+		"Round objective RESCUE: marines under attack somewhere on the map, lost if\n"
+		"no one comes in a quarter of the round's time; saved, they follow the\n"
+		"players, each alive at the round's end worth more points." },
 	{ "game.firefight_objective_oddball", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Set objective ODDBALL: a boss carries a skull; killed, the skull is held\n"
-		"for a quarter of the set's time, every enemy going for its holder. A map\n"
+		"Round objective ODDBALL: a boss carries a skull; killed, the skull is held\n"
+		"for a quarter of the round's time, every enemy going for its holder. A map\n"
 		"with an oddball spawn." },
 	{ "game.firefight_objective_collect", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Set objective COLLECT: enemies the players kill drop skulls, taken by\n"
+		"Round objective COLLECT: enemies the players kill drop skulls, taken by\n"
 		"walking into them and banked at a hill or a flag's base; a carrier who\n"
 		"dies drops all of theirs for anyone. A map with a hill or a flag." },
 	{ "game.firefight_objective_bomb", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Set objective BOMB: a bomb (the oddball) carried to a far target and\n"
+		"Round objective BOMB: a bomb (the oddball) carried to a far target and\n"
 		"planted; defended until it goes off, enemies at it unopposed disarm it\n"
 		"and it goes back. A map with two objective points." },
 	{ "game.campaign_score", _config_boolean, "false", "HALO_CAMPAIGN_SCORE", _environment_value, _platform_all,

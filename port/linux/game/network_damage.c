@@ -419,6 +419,8 @@ static struct distributed_damage_event damage_events[MAXIMUM_DAMAGE_EVENTS_PER_T
 static short damage_event_count;
 /* ... dealing a client's report */
 static boolean damage_dealing_report;
+/* (the report distributed_report_valid passed last: a melee blow's) */
+static boolean damage_report_melee;
 /* ... each player's weapons of late, and hits left */
 struct damage_stuck_projectile
 {
@@ -2489,6 +2491,7 @@ static boolean distributed_report_valid(
 	unit_index = distributed_living_unit(player);
 	if (!distributed_object_is_players(player_index, unit_index, damage->owner_object_index))
 		damage->owner_object_index = unit_index;
+	damage_report_melee = melee;
 	return TRUE;
 }
 
@@ -2530,8 +2533,15 @@ void network_damage_handle_reports(
 		}
 		damage_dealt_reports++;
 		damage_dealing_report = TRUE;
-		object_cause_damage(&damage, report->object_index, report->node_index, report->region_index,
-			report->material_index, report->has_normal ? &report->object_normal : NULL);
+		{
+			/* (a client's melee blow, one whatever its damage's category) */
+			long previous_blow = damage_report_melee ? damage_melee_blow_begin(damage.definition_index) : NONE;
+
+			object_cause_damage(&damage, report->object_index, report->node_index, report->region_index,
+				report->material_index, report->has_normal ? &report->object_normal : NULL);
+			if (damage_report_melee)
+				damage_melee_blow_end(previous_blow);
+		}
 		damage_dealing_report = FALSE;
 	}
 }
