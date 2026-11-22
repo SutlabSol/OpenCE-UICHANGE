@@ -42,6 +42,8 @@ and the marines' patience (Rescue) are a quarter of it.
 #include "cseries/cseries.h"
 #include "cseries/errors.h"
 #include "ai/actors.h"
+#include "ai/actor_definitions.h"
+#include "ai/actor_types.h"
 #include "ai/ai.h"
 #include "game/game.h"
 #include "game/game_engine.h"
@@ -132,6 +134,10 @@ enum
 /* a camp's size (world units), how near a player must come to the marines,
 and a flag's capture */
 #define FFO_CAMP_RADIUS 18.0f
+/* (Purge's base: bigger, with more of them and the map's vehicle spots in it) */
+#define FFO_PURGE_RADIUS 30.0f
+/* (Collect's deposit's skull, so many times its size) */
+#define FFO_DEPOSIT_SCALE 5.0f
 #define FFO_RESCUE_ARRIVE 14.0f
 #define FFO_CAPTURE_RADIUS 3.0f
 #define FFO_HILL_HEIGHT 3.5f
@@ -145,6 +151,9 @@ blast) */
 /* (two objectives' points no nearer than this: Travel's and a round
 objective's, so their markers never sit on each other) */
 #define FFO_POINT_APART 8.0f
+/* (a camp's units take no notice of a player farther than this past its
+radius, nor while none of them was hurt lately: they roam it) */
+#define FFO_CAMP_NOTICE_MARGIN 8.0f
 
 /* a unit of an objective's: what it does */
 enum ffo_role
@@ -233,6 +242,9 @@ static struct
 	long unit_next_order[FFO_MAX_UNITS];
 	short unit_count;
 	long vehicles[FFO_MAX_VEHICLES];
+	/* (each one's players' vehicle slot whose spot it took, NONE: given back
+	once it is gone, firefight_objective_release_vehicle_slot) */
+	short vehicle_slots[FFO_MAX_VEHICLES];
 	short vehicle_count;
 	/* (the VIP, the boss, the generator's target unit) */
 	long target_unit;
@@ -263,6 +275,10 @@ static struct
 	short attackers_spawned;
 	/* (the camp leaving: its units cloaked till then, then gone) */
 	long teleport_until;
+	/* (the camp's units noticing the players: one near, or one of them hurt
+	lately, till then) */
+	boolean camp_aware;
+	long camp_alarm_until;
 
 	unsigned long rng;
 } g;
@@ -1505,14 +1521,19 @@ static short ffo_unit_add(long unit_index, byte role)
 	return g.unit_count++;
 }
 
-/* (a vehicle and its crew, theirs: the crew are those in it now) */
-static void ffo_vehicle_add(long vehicle_index, byte role)
+/* (a vehicle and its crew, theirs: the crew are those in it now; `slot` the
+players' vehicle slot whose spot it took, NONE for none) */
+static void ffo_vehicle_add(long vehicle_index, byte role, short slot)
 {
 	struct object_iterator iterator;
 	struct object_datum *object;
 
 	if (vehicle_index == NONE || g.vehicle_count >= FFO_MAX_VEHICLES)
+	{
+		firefight_objective_release_vehicle_slot(slot);
 		return;
+	}
+	g.vehicle_slots[g.vehicle_count] = slot;
 	g.vehicles[g.vehicle_count++] = vehicle_index;
 	object_iterator_new(&iterator, _object_mask_unit, 0);
 	while ((object = (struct object_datum *)object_iterator_next(&iterator)) != NULL)
@@ -1553,6 +1574,27 @@ static boolean ffo_vehicle_has_player(long vehicle_index)
 		}
 	}
 	return FALSE;
+}
+
+/* (the players' vehicle spots taken: each given back once its enemy vehicle
+is destroyed, or `all` of them, the set over) */
+static void ffo_vehicle_slots_update(boolean all)
+{
+	short index;
+
+	for (index = 0; index < g.vehicle_count; index++)
+	{
+		struct object_datum *vehicle = g.vehicles[index] != NONE ?
+			object_try_and_get_and_verify_type(g.vehicles[index], _object_mask_vehicle) : NULL;
+
+		if (g.vehicle_slots[index] == NONE)
+			continue;
+		if (all || !vehicle || TEST_FLAG(vehicle->object.damage_flags, _object_dead_bit))
+		{
+			firefight_objective_release_vehicle_slot(g.vehicle_slots[index]);
+			g.vehicle_slots[index] = NONE;
+		}
+	}
 }
 
 /* the camp's units leaving: cloaked now, gone a moment later
@@ -1601,6 +1643,7 @@ static void ffo_teleport_update(void)
 		}
 		g.vehicles[index] = NONE;
 	}
+	ffo_vehicle_slots_update(TRUE);
 	for (index = 0; index < g.unit_count; index++)
 	{
 		if (g.unit_roles[index] != _ffo_role_marine)
@@ -1669,6 +1712,33 @@ static void ffo_generator_spawn(real_point3d const *at, boolean fresh)
 	}
 }
 
+/* the generator going up: a plasma blast, harmless, at it and round it
+(each machine's own) */
+static void ffo_generator_blast(real_point3d const *at)
+{
+	static char const *const effects[] =
+	{
+		"weapons\\plasma grenade\\effects\\explosion",
+		"weapons\\plasma_cannon\\effects\\plasma_cannon explosion",
+		"effects\\explosions\\medium explosion"
+	};
+	short index;
+
+	for (index = 0; index < 5; index++)
+	{
+		real angle = (real)index * 0.4f * _pi;
+		real_point3d point = *at;
+
+		if (index)
+		{
+			point.x += cosine(angle) * 1.5f;
+			point.y += sine(angle) * 1.5f;
+		}
+		point.z += 0.5f + 0.4f * (real)(index & 1);
+		firefight_objective_effect(effects, (short)NUMBEROF(effects), &point);
+	}
+}
+
 static void ffo_generator_remove(void)
 {
 	if (g.target_unit != NONE && object_try_and_get(g.target_unit))
@@ -1731,6 +1801,7 @@ static void ffo_bomb_update(void);
 
 static void ffo_set_clear_units(void)
 {
+	ffo_vehicle_slots_update(TRUE);
 	g.unit_count = 0;
 	g.vehicle_count = 0;
 	g.marine_count = 0;
@@ -1738,6 +1809,8 @@ static void ffo_set_clear_units(void)
 	g.target_unit = NONE;
 	g.item_object = NONE;
 	g.teleport_until = NONE;
+	g.camp_aware = FALSE;
+	g.camp_alarm_until = 0;
 	g.token_count = 0;
 	g.deposit_skull = NONE;
 	g_view.deposit_object = NONE;
@@ -1751,14 +1824,21 @@ static void ffo_item_remove(void)
 
 	if (item)
 	{
-		long holder = item->object.parent_object_index;
-		struct unit_datum *unit = holder != NONE ? unit_try_and_get(holder) : NULL;
+		/* (out of whoever's inventory it is in first: a rider's, put away) */
+		struct data_iterator iterator;
+		struct player_datum *player;
 
-		if (unit && unit->unit.current_weapon_index >= 0 && unit->unit.current_weapon_index < MAXIMUM_WEAPONS_PER_UNIT &&
-			unit->unit.weapon_object_indices[unit->unit.current_weapon_index] == g.item_object)
+		data_iterator_new(&iterator, player_data);
+		while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
 		{
-			unit_drop_current_weapon(holder, TRUE);
+			if (player->unit_index != NONE && unit_try_and_get(player->unit_index) &&
+				unit_has_weapon(player->unit_index, g.item_object))
+			{
+				unit_drop_weapon_object(player->unit_index, g.item_object);
+			}
 		}
+		if (item->object.parent_object_index != NONE && unit_try_and_get(item->object.parent_object_index))
+			unit_drop_weapon_object(item->object.parent_object_index, g.item_object);
 		if (object_try_and_get(g.item_object))
 			object_delete(g.item_object);
 	}
@@ -1822,13 +1902,18 @@ static boolean ffo_camp_start(short kind)
 {
 	/* (the VIP's and Purge's at a base, a flag's spot; the generator's
 	anywhere) */
-	short site = kind == _ff_set_objective_generator ? ffo_pick_site(FFO_ANY_SITE, FFO_CAMP_RADIUS * 1.3f) :
-		ffo_pick_base_site(FFO_CAMP_RADIUS * 1.3f);
+	boolean purge = kind == _ff_set_objective_purge;
+	real radius = purge ? FFO_PURGE_RADIUS : FFO_CAMP_RADIUS;
+	short site = kind == _ff_set_objective_generator ? ffo_pick_site(FFO_ANY_SITE, radius * 1.3f) :
+		ffo_pick_base_site(radius * 1.3f);
 	real_point3d center;
 	real_point3d spots[FFO_MAX_VEHICLES];
 	real facings[FFO_MAX_VEHICLES];
+	short slots[FFO_MAX_VEHICLES];
 	short vehicles;
-	short defenders = (short)MIN(9, 5 + 2 * MAX(0, g.counted_count - 1));
+	/* (Purge's: more of them, its vehicles at the map's vehicle spots) */
+	short defenders = purge ? (short)MIN(16, 10 + 3 * MAX(0, g.counted_count - 1)) :
+		(short)MIN(9, 5 + 2 * MAX(0, g.counted_count - 1));
 	short index;
 
 	if (site == NONE)
@@ -1836,7 +1921,7 @@ static boolean ffo_camp_start(short kind)
 	center = g.sites[site].point;
 	firefight_objective_ground(&center, &center);
 	g_view.set_site = center;
-	g_view.set_radius = FFO_CAMP_RADIUS;
+	g_view.set_radius = radius;
 	if (kind == _ff_set_objective_target)
 	{
 		long vip = firefight_objective_spawn_enemy(&center, ffo_rand_range(0.0f, 2.0f * _pi), _firefight_objective_rank_target);
@@ -1862,13 +1947,38 @@ static boolean ffo_camp_start(short kind)
 		short rank = kind == _ff_set_objective_target || (index & 1) ? _firefight_objective_rank_heavy :
 			_firefight_objective_rank_regular;
 
-		ffo_spot_near(&center, 3.0f, FFO_CAMP_RADIUS * 0.75f, &spot);
+		ffo_spot_near(&center, 3.0f, radius * 0.75f, &spot);
 		ffo_unit_add(firefight_objective_spawn_enemy(&spot, ffo_rand_range(0.0f, 2.0f * _pi), rank), _ffo_role_defender);
 	}
-	vehicles = firefight_objective_vehicle_spots(&center, FFO_CAMP_RADIUS, spots, facings, 2);
+	/* (Purge's take the players' vehicles' spots in it too, those given
+	back once its vehicle there is destroyed; then the map's free spots) */
+	vehicles = purge ? firefight_objective_take_vehicle_spots(&center, radius, spots, facings, slots, FFO_MAX_VEHICLES) : 0;
+	{
+		real_point3d free_spots[FFO_MAX_VEHICLES];
+		real free_facings[FFO_MAX_VEHICLES];
+		short free_count = firefight_objective_vehicle_spots(&center, radius, free_spots, free_facings,
+			purge ? FFO_MAX_VEHICLES : 2);
+		short free_index;
+
+		for (free_index = 0; free_index < free_count && vehicles < (purge ? FFO_MAX_VEHICLES : 2); free_index++)
+		{
+			short other;
+
+			for (other = 0; other < vehicles && distance3d(&spots[other], &free_spots[free_index]) > 4.0f; other++)
+				;
+			if (other < vehicles)
+				continue;
+			spots[vehicles] = free_spots[free_index];
+			facings[vehicles] = free_facings[free_index];
+			slots[vehicles] = NONE;
+			vehicles++;
+		}
+	}
 	for (index = 0; index < vehicles; index++)
-		ffo_vehicle_add(firefight_objective_spawn_vehicle(&spots[index], facings[index], index == 0 && kind != _ff_set_objective_purge),
-			_ffo_role_defender);
+	{
+		ffo_vehicle_add(firefight_objective_spawn_vehicle(&spots[index], facings[index], index == 0),
+			_ffo_role_defender, slots[index]);
+	}
 	g_view.set_total = ffo_units_alive(0, TRUE);
 	g_view.set_count = g_view.set_total;
 	g_view.set_target = ffo_absolute_of_object(g.target_unit);
@@ -1929,7 +2039,7 @@ static boolean ffo_data_link_start(void)
 	g_view.set_goal = ffo_set_ticks() / 4;
 	g_view.set_progress = 0;
 	g.set_deadline = game_time_get() + ffo_set_ticks();
-	ffo_raid(&g_view.set_site, 3, _ffo_role_attacker);
+	/* (no squad of its own: the waves' enemies contest it) */
 	return TRUE;
 }
 
@@ -2015,7 +2125,8 @@ static boolean ffo_rescue_start(void)
 		return FALSE;
 	g_view.set_site = center;
 	g_view.set_radius = FFO_RESCUE_ARRIVE;
-	g_view.set_goal = ffo_set_ticks() / 4;
+	/* (their life drains at 40% of a hold's pace: 2.5 times as long) */
+	g_view.set_goal = ffo_set_ticks() / 4 * 5 / 2;
 	g_view.set_progress = g_view.set_goal;
 	g_view.set_total = g.marine_count;
 	g_view.set_count = g.marine_count;
@@ -2182,7 +2293,7 @@ static void ffo_units_update(void)
 				if (unit->unit.actor_index != NONE)
 					firefight_objective_hold_ground(unit->unit.actor_index, TRUE);
 				if (from_site > g_view.set_radius * 0.8f ||
-					(!ffo_actor_fighting(unit_index) && (ffo_rand() % 5UL) == 0))
+					(!ffo_actor_fighting(unit_index) && (ffo_rand() % (g.camp_aware ? 5UL : 3UL)) == 0))
 				{
 					real_point3d spot;
 
@@ -2215,19 +2326,10 @@ static void ffo_units_update(void)
 				ffo_order_move(unit_index, &g_view.set_site);
 			break;
 		case _ffo_role_marine:
-			if (g_view.set_flags & FF_OBJECTIVE_RESCUED)
-			{
-				long nearest;
-				real distance = ffo_nearest_player_distance(&at, &nearest);
-
-				if (nearest != NONE && distance > 6.0f)
-				{
-					real_point3d spot;
-
-					object_get_origin(nearest, &spot);
-					ffo_order_move(unit_index, &spot);
-				}
-			}
+			/* (a player come for them: with the nearest player from then, as
+			Forge's FOLLOW; before, at their spot) */
+			if (g_view.set_flags & (FF_OBJECTIVE_ARRIVED | FF_OBJECTIVE_RESCUED))
+				firefight_objective_follow(unit_index);
 			else if (from_site > 5.0f)
 				ffo_order_move(unit_index, &g_view.set_site);
 			break;
@@ -2290,24 +2392,30 @@ static void ffo_data_link_update(void)
 				g.set_contribution[absolute]++;
 		}
 	}
-	/* (halfway, more of them) */
-	if (g_view.set_progress == g_view.set_goal / 2)
-		ffo_raid(&g_view.set_site, 3, _ffo_role_attacker);
 	if (g_view.set_progress >= g_view.set_goal)
 		ffo_set_end(_ff_objective_won);
 }
 
 /* (the flag's or the ball's: who has it, and back home when it lies too long
 or is gone) */
+/* (the player whose unit has it, in hand or put away: riding in a vehicle,
+a carried flag is out of the hands and off the map, its place where it was,
+as CTF's ctf_find_flag_carrier knows) */
 static long ffo_item_carrier(void)
 {
 	struct object_datum *item = g.item_object != NONE ? object_try_and_get(g.item_object) : NULL;
-	struct unit_datum *holder;
+	struct data_iterator iterator;
+	struct player_datum *player;
 
-	if (!item || item->object.parent_object_index == NONE)
+	if (!item || !player_data)
 		return NONE;
-	holder = ffo_living_unit(item->object.parent_object_index);
-	return holder && holder->unit.player_index != NONE ? holder->unit.player_index : NONE;
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		if (ffo_living_unit(player->unit_index) && unit_has_weapon(player->unit_index, g.item_object))
+			return iterator.datum_index;
+	}
+	return NONE;
 }
 
 static void ffo_item_update(long definition, long return_ticks)
@@ -2320,7 +2428,7 @@ static void ffo_item_update(long definition, long return_ticks)
 		ffo_item_spawn(definition, &g.item_home);
 		return;
 	}
-	if (item->object.parent_object_index != NONE)
+	if (item->object.parent_object_index != NONE || ffo_item_carrier() != NONE)
 	{
 		g.item_still_since = now;
 		return;
@@ -2405,10 +2513,29 @@ static void ffo_rescue_update(void)
 	}
 	if (!(g_view.set_flags & FF_OBJECTIVE_RESCUED) && ffo_units_alive(_ffo_role_attacker, FALSE) == 0)
 	{
+		/* (done: each marine alive paid for now, and with the players from
+		now, as the friendly reinforcements are) */
+		short alive = 0;
+
 		g_view.set_flags |= FF_OBJECTIVE_RESCUED;
+		for (index = 0; index < g.marine_count; index++)
+		{
+			if (ffo_living_unit(g.marines[index]))
+			{
+				alive++;
+				firefight_adopt_friendly(g.marines[index]);
+			}
+		}
 		ffo_set_end(_ff_objective_won);
-		/* (they follow the players till they die, the set's end paying for those alive) */
-		g_view.set_state = _ff_objective_won;
+		if (alive)
+		{
+			char text[96];
+
+			ffo_award(g.set_contribution, (long)alive * FFO_MARINE_POINTS, FALSE, FALSE);
+			snprintf(text, sizeof(text), "%d MARINES RESCUED: +%d", (int)alive, (int)(alive * FFO_MARINE_POINTS));
+			ffo_notice(text, FFO_NOTICE_TICKS);
+		}
+		g.marine_count = 0;
 	}
 }
 
@@ -2459,8 +2586,25 @@ static void ffo_oddball_update(void)
 static void ffo_camp_update(void)
 {
 	short alive = ffo_units_alive(0, TRUE);
+	long now = game_time_get();
+	short index;
 
 	g_view.set_count = alive;
+	ffo_vehicle_slots_update(FALSE);
+	/* (noticing the players: one near the camp, or any of them hurt lately,
+	which keeps them on it a while) */
+	for (index = 0; index < g.unit_count; index++)
+	{
+		struct unit_datum *unit = ffo_living_unit(g.units[index]);
+
+		if (unit && g.unit_roles[index] != _ffo_role_marine &&
+			(unit->object.recent_body_damage > 0.0f || unit->object.recent_shield_damage > 0.0f))
+		{
+			g.camp_alarm_until = now + 10 * TICKS_PER_SECOND;
+		}
+	}
+	g.camp_aware = now < g.camp_alarm_until ||
+		ffo_nearest_player_distance(&g_view.set_site, NULL) <= g_view.set_radius + FFO_CAMP_NOTICE_MARGIN;
 	if (g_view.set_kind == _ff_set_objective_generator)
 	{
 		struct object_datum *object = g.target_unit != NONE ? object_try_and_get(g.target_unit) : NULL;
@@ -2495,12 +2639,6 @@ static void ffo_set_update(void)
 	long now = game_time_get();
 
 	ffo_teleport_update();
-	if (g_view.set_state == _ff_objective_won && g_view.set_kind == _ff_set_objective_rescue)
-	{
-		/* (the rescued marines, following) */
-		ffo_units_update();
-		return;
-	}
 	if (g_view.set_state != _ff_objective_running)
 		return;
 	g_view.set_ticks_left = g.set_deadline != NONE ? MAX(0L, g.set_deadline - now) : NONE;
@@ -2691,6 +2829,66 @@ static void ffo_deposit_update(void)
 	g_view.deposit_object = ffo_absolute_of_object(g.deposit_skull);
 }
 
+/* (Collect's) how many skulls an enemy drops: by its kind (grunts, jackals,
+sentinels, carrier forms 1; elites, marines, combat forms 2; hunters 3;
+infection forms none) and one more for each rank past minor (major 1,
+ultra / spec ops / stealth 2, commander / zealot 3), from its actor's kind and
+its variant's name, else its unit's name */
+static short ffo_skull_value(long actor_index, long unit_index)
+{
+	struct actor_datum *actor = actor_index != NONE ? actor_try_and_get(actor_index) : NULL;
+	struct object_datum *unit = unit_index != NONE ? object_try_and_get(unit_index) : NULL;
+	char name[256];
+	short type = NONE;
+	short value = 1;
+	short index;
+
+	name[0] = 0;
+	if (actor)
+	{
+		struct actor_definition *definition = actor->meta.definition_index != NONE ?
+			actor_definition_get(actor->meta.definition_index) : NULL;
+
+		type = definition ? definition->type : NONE;
+		if (actor->meta.variant_definition_index != NONE)
+			snprintf(name, sizeof(name), "%s", tag_get_name(actor->meta.variant_definition_index));
+	}
+	if (!name[0] && unit)
+		snprintf(name, sizeof(name), "%s", tag_get_name(unit->definition_index));
+	for (index = 0; name[index]; index++)
+		name[index] = (char)tolower((unsigned char)name[index]);
+	if (type == NONE)
+	{
+		type = strstr(name, "infection") ? _actor_infection_form : strstr(name, "hunter") ? _actor_hunter :
+			strstr(name, "carrier") ? _actor_carrier_form : strstr(name, "flood") ? _actor_combat_form :
+			strstr(name, "elite") ? _actor_elite : strstr(name, "marine") ? _actor_marine : _actor_grunt;
+	}
+	switch (type)
+	{
+	case _actor_infection_form:
+		return 0;
+	case _actor_hunter:
+		value = 3;
+		break;
+	case _actor_elite:
+	case _actor_marine:
+	case _actor_crew:
+	case _actor_combat_form:
+		value = 2;
+		break;
+	default:
+		value = 1;
+		break;
+	}
+	if (strstr(name, "commander") || strstr(name, "zealot") || strstr(name, "captain"))
+		value += 3;
+	else if (strstr(name, "ultra") || strstr(name, "specops") || strstr(name, "spec ops") || strstr(name, "stealth"))
+		value += 2;
+	else if (strstr(name, "major"))
+		value += 1;
+	return value;
+}
+
 static boolean ffo_collect_start(void)
 {
 	if (get_ball_definition_index() == NONE || (!g.hill_count && !g.flag_count))
@@ -2717,7 +2915,8 @@ static boolean ffo_collect_start(void)
 		g_view.set_site = g.flags[flag];
 		g_view.set_radius = FFO_CAPTURE_RADIUS;
 	}
-	g_view.set_goal = MIN(60L, 20L + 8L * MAX(0, g.counted_count - 1));
+	/* (more than one a kill now, by the enemies' kinds and ranks: ffo_skull_value) */
+	g_view.set_goal = MIN(150L, 50L + 20L * MAX(0, g.counted_count - 1));
 	g_view.set_progress = 0;
 	ffo_tokens_clear();
 	ffo_deposit_update();
@@ -2852,11 +3051,31 @@ static boolean ffo_bomb_start(void)
 
 static char const *const ffo_blast_effects[] =
 {
+	"vehicles\\scorpion\\effects\\scorpion shell explosion",
+	"vehicles\\scorpion\\effects\\shell explosion",
 	"effects\\explosions\\large explosion",
 	"vehicles\\wraith\\effects\\wraith explosion",
 	"effects\\explosions\\medium explosion",
 	"weapons\\rocket launcher\\effects\\impact explosion"
 };
+
+/* a big blast's looks on this machine (each machine's own): at its middle
+and round it */
+static void ffo_big_blast(real_point3d const *at)
+{
+	short index;
+
+	firefight_objective_effect(ffo_blast_effects, (short)NUMBEROF(ffo_blast_effects), at);
+	for (index = 0; index < 4; index++)
+	{
+		real angle = (real)index * 0.5f * _pi;
+		real_point3d around = *at;
+
+		around.x += cosine(angle) * 3.0f;
+		around.y += sine(angle) * 3.0f;
+		firefight_objective_effect(ffo_blast_effects, (short)NUMBEROF(ffo_blast_effects), &around);
+	}
+}
 
 static void ffo_bomb_update(void)
 {
@@ -2905,7 +3124,6 @@ static void ffo_bomb_update(void)
 			g_view.set_progress = 0;
 			g.disarm_ticks = 0;
 			g.last_raid_tick = now;
-			ffo_raid(&g_view.set_site, 4, _ffo_role_attacker);
 			ffo_notice("BOMB PLANTED: DEFEND IT", FFO_NOTICE_TICKS);
 		}
 		return;
@@ -2965,30 +3183,12 @@ static void ffo_bomb_update(void)
 		ffo_notice("THE BOMB WAS DISARMED", FFO_NOTICE_TICKS);
 		return;
 	}
-	if (now - g.last_raid_tick >= FFO_BOMB_RAID_TICKS)
-	{
-		g.last_raid_tick = now;
-		ffo_raid(&g_view.set_site, 2, _ffo_role_attacker);
-	}
 	if (g_view.set_progress >= g_view.set_goal)
 	{
-		/* (it goes off: every enemy near it with it) */
-		struct object_iterator iterator;
-		struct object_datum *object;
-
-		firefight_objective_effect(ffo_blast_effects, (short)NUMBEROF(ffo_blast_effects), &g_view.set_site);
-		object_iterator_new(&iterator, _object_mask_unit, 0);
-		while ((object = (struct object_datum *)object_iterator_next(&iterator)) != NULL)
-		{
-			struct unit_datum *unit = (struct unit_datum *)object;
-
-			if (!TEST_FLAG(object->object.damage_flags, _object_dead_bit) && unit->unit.player_index == NONE &&
-				unit->unit.actor_index != NONE && firefight_team_is_hostile(object->object.owner_team_index) &&
-				distance3d(&object->object.position, &g_view.set_site) < FFO_BLAST_RADIUS)
-			{
-				unit_kill(iterator.index);
-			}
-		}
+		/* (it goes off: a tank shell's blast, and more round it, which
+		hurts all it reaches, the players too) */
+		ffo_big_blast(&g_view.set_site);
+		firefight_objective_blast_damage(&g_view.set_site, FFO_BLAST_RADIUS * 0.4f);
 		if (object_try_and_get(g.bomb_planted))
 			object_delete(g.bomb_planted);
 		g.bomb_planted = NONE;
@@ -3007,7 +3207,10 @@ static void ffo_marks_clear(void)
 	for (index = 0; index < FF_OBJECTIVE_UNIT_MARKS; index++)
 		g_view.set_units[index] = NONE;
 	for (index = 0; index < FF_OBJECTIVE_DROP_MARKS; index++)
+	{
 		g_view.set_drops[index] = NONE;
+		g_view.set_drop_values[index] = 0;
+	}
 }
 
 /* (Use X only's) its weapons lying about, kept (never taken as garbage)
@@ -3099,7 +3302,10 @@ static void ffo_marks_update(void)
 		for (index = 0; index < g.token_count && marks < FF_OBJECTIVE_DROP_MARKS; index++)
 		{
 			if (g.token_dropped[index] && object_try_and_get(g.tokens[index]))
+			{
+				g_view.set_drop_values[marks] = (byte)MIN(255, g.token_values[index]);
 				g_view.set_drops[marks++] = ffo_absolute_of_object(g.tokens[index]);
+			}
 		}
 	}
 }
@@ -3196,6 +3402,31 @@ void firefight_objectives_render(void)
 		vertices[3].texcoord.y = 1.0f;
 		render_dynamic_quad(vertices, information->hill_shader.index, NULL, NULL, MAX(1.0f, length), 1.0f);
 	}
+}
+
+/* (actor_perception.c) whether an actor sees nothing: a camp's unit (a
+defender, the VIP) while the camp has not noticed the players (ffo_camp_update);
+it hears and feels as ever */
+boolean firefight_objectives_actor_unaware(long actor_index)
+{
+	struct actor_datum *actor;
+	short index;
+
+	if (g_view.set_state != _ff_objective_running || g.camp_aware || actor_index == NONE ||
+		(g_view.set_kind != _ff_set_objective_target && g_view.set_kind != _ff_set_objective_generator &&
+			g_view.set_kind != _ff_set_objective_purge) || !firefight_active())
+	{
+		return FALSE;
+	}
+	actor = actor_try_and_get(actor_index);
+	if (!actor || actor->meta.unit_index == NONE)
+		return FALSE;
+	for (index = 0; index < g.unit_count; index++)
+	{
+		if (g.units[index] == actor->meta.unit_index)
+			return g.unit_roles[index] == _ffo_role_defender || g.unit_roles[index] == _ffo_role_target;
+	}
+	return FALSE;
 }
 
 struct firefight_objectives_view const *firefight_objectives_view_get(void)
@@ -3353,29 +3584,7 @@ void firefight_objectives_round_ended(void)
 	if (!ffo_host())
 		return;
 	g.set_start_round = 0;
-	/* (Rescue's marines alive: their points now) */
-	if (g_view.set_kind == _ff_set_objective_rescue && (g_view.set_flags & FF_OBJECTIVE_RESCUED))
-	{
-		short alive = 0;
-		short index;
-
-		for (index = 0; index < g.marine_count; index++)
-		{
-			if (ffo_living_unit(g.marines[index]))
-				alive++;
-		}
-		if (alive)
-		{
-			char text[96];
-
-			ffo_award(g.set_contribution, (long)alive * FFO_MARINE_POINTS, FALSE, FALSE);
-			snprintf(text, sizeof(text), "%d MARINES SURVIVED: +%d", (int)alive, (int)(alive * FFO_MARINE_POINTS));
-			ffo_notice(text, FFO_NOTICE_TICKS);
-		}
-		g_view.set_kind = _ff_set_objective_none;
-		g_view.set_state = _ff_objective_off;
-		return;
-	}
+	/* (Rescue's marines, rescued, were paid for as it was done) */
 	ffo_set_end(_ff_objective_failed);
 	/* (what is left of a camp or a raid goes with the set) */
 	if (g.unit_count > 0 && g.teleport_until == NONE)
@@ -3390,12 +3599,23 @@ void firefight_objectives_update(void)
 		return;
 	if (g_view.notice_ticks > 0)
 		g_view.notice_ticks--;
+	/* (Collect's deposit's skull, big, on every machine: its size is not
+	sent) */
+	if (g_view.set_kind == _ff_set_objective_collect && g_view.set_state == _ff_objective_running &&
+		g_view.deposit_object != NONE)
+	{
+		long skull = firefight_objectives_object(g_view.deposit_object);
+		struct object_datum *object = skull != NONE ? object_try_and_get(skull) : NULL;
+
+		if (object)
+			object->object.scale = FFO_DEPOSIT_SCALE;
+	}
 	/* (Collect's deposit's fire, each machine's own, harmless) */
 	if (g_view.set_kind == _ff_set_objective_collect && g_view.set_state == _ff_objective_running &&
 		game_time_get() % FFO_FIRE_TICKS == 0)
 	{
 		real angle = ffo_rand_range(0.0f, 2.0f * _pi);
-		real distance = ffo_rand_range(0.5f, 1.3f);
+		real distance = ffo_rand_range(1.0f, 2.2f);
 		real_point3d at = g_view.set_site;
 
 		firefight_objective_ground(&at, &at);
@@ -3410,9 +3630,17 @@ void firefight_objectives_update(void)
 		ffo_client_generator_update();
 		/* (the bomb going off: each machine's own blast) */
 		if (g_view.set_kind == _ff_set_objective_bomb && g_view.set_state == _ff_objective_won && was_planted)
-			firefight_objective_effect(ffo_blast_effects, (short)NUMBEROF(ffo_blast_effects), &g_view.set_site);
+			ffo_big_blast(&g_view.set_site);
 		was_planted = g_view.set_kind == _ff_set_objective_bomb && g_view.set_state == _ff_objective_running &&
 			(g_view.set_flags & FF_OBJECTIVE_PLANTED) != 0;
+		/* (the generator destroyed: each machine's own plasma blast) */
+		{
+			static boolean was_generator;
+
+			if (g_view.set_kind == _ff_set_objective_generator && g_view.set_state == _ff_objective_won && was_generator)
+				ffo_generator_blast(&g_view.set_site);
+			was_generator = g_view.set_kind == _ff_set_objective_generator && g_view.set_state == _ff_objective_running;
+		}
 		return;
 	}
 	ffo_notice_update();
@@ -3455,8 +3683,8 @@ void firefight_objectives_update(void)
 	ffo_set_update();
 }
 
-void firefight_objectives_enemy_killed(long dead_unit_index, long killer_player_index, boolean headshot, boolean melee,
-	boolean grenade, boolean splatter)
+void firefight_objectives_enemy_killed(long actor_index, long dead_unit_index, long killer_player_index, boolean headshot,
+	boolean melee, boolean grenade, boolean splatter)
 {
 	long absolute = ffo_absolute(killer_player_index);
 	boolean by_player = killer_player_index != NONE && absolute >= 0 && absolute < HALO_PORT_MAXIMUM_NETWORK_PLAYERS;
@@ -3541,7 +3769,7 @@ void firefight_objectives_enemy_killed(long dead_unit_index, long killer_player_
 			real_point3d at;
 
 			object_get_origin(dead_unit_index, &at);
-			ffo_token_spawn(&at, 1, FALSE);
+			ffo_token_spawn(&at, ffo_skull_value(actor_index, dead_unit_index), FALSE);
 		}
 	}
 	for (index = 0; index < g.unit_count && g.units[index] != dead_unit_index; index++)
@@ -3584,6 +3812,15 @@ void firefight_objectives_player_died(long dead_player_index)
 
 			object_get_origin(player->unit_index, &at);
 			ffo_token_spawn(&at, g_view.carried[absolute], TRUE);
+		}
+		{
+			char name[48];
+			char text[96];
+
+			ffo_player_name(dead_player_index, name, sizeof(name));
+			snprintf(text, sizeof(text), "%s DROPPED %d SKULL%s", name, (int)g_view.carried[absolute],
+				g_view.carried[absolute] == 1 ? "" : "S");
+			ffo_notice(text, FFO_NOTICE_TICKS);
 		}
 		g_view.carried[absolute] = 0;
 	}
@@ -3690,12 +3927,16 @@ boolean firefight_objectives_apply_damage(long object_index, long attacker_playe
 		return TRUE;
 	}
 	points = MAX(1L, (long)(damage_amount * 0.45f));
+	g.camp_alarm_until = game_time_get() + 10 * TICKS_PER_SECOND;
 	g_view.set_progress = MAX(0L, g_view.set_progress - points);
 	absolute = ffo_absolute(attacker_player_index);
 	if (absolute >= 0 && absolute < HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
 		g.set_contribution[absolute] += points;
 	if (g_view.set_progress <= 0)
+	{
+		ffo_generator_blast(&g_view.set_site);
 		ffo_set_end(_ff_objective_won);
+	}
 	return TRUE;
 }
 
@@ -3857,8 +4098,7 @@ boolean firefight_objectives_set_card(char *title, size_t title_size, char *stat
 	char goal[16];
 
 	if (g_view.set_kind == _ff_set_objective_none ||
-		(g_view.set_state != _ff_objective_running && g_view.set_result_ticks <= 0 &&
-			!(g_view.set_kind == _ff_set_objective_rescue && g_view.set_state == _ff_objective_won)))
+		(g_view.set_state != _ff_objective_running && g_view.set_result_ticks <= 0))
 	{
 		return FALSE;
 	}
@@ -3869,13 +4109,7 @@ boolean firefight_objectives_set_card(char *title, size_t title_size, char *stat
 		ffo_time_text(g_view.set_ticks_left, left, sizeof(left));
 	if (g_view.set_state != _ff_objective_running)
 	{
-		if (g_view.set_kind == _ff_set_objective_rescue && g_view.set_state == _ff_objective_won &&
-			g_view.set_result_ticks <= 0)
-		{
-			snprintf(status, status_size, "MARINES WITH YOU");
-		}
-		else
-			snprintf(status, status_size, "%s", ffo_result_text(g_view.set_state));
+		snprintf(status, status_size, "%s", ffo_result_text(g_view.set_state));
 		return TRUE;
 	}
 	switch (g_view.set_kind)

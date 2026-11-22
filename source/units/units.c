@@ -7987,6 +7987,34 @@ boolean unit_drop_current_weapon(
 	return result;
 }
 
+/* port: a weapon of the unit's out of its inventory, onto the ground, in
+hand or not (Firefight's objectives taking their flag or ball back from a
+rider: port/linux/game/firefight_objectives.c); whether it had it */
+boolean unit_drop_weapon_object(
+	long unit_index,
+	long weapon_index)
+{
+	struct unit_datum *unit = unit_try_and_get(unit_index);
+	short slot;
+
+	if (!unit || weapon_index == NONE)
+		return FALSE;
+	for (slot = 0; slot < MAXIMUM_WEAPONS_PER_UNIT && unit->unit.weapon_object_indices[slot] != weapon_index; slot++)
+		;
+	if (slot == MAXIMUM_WEAPONS_PER_UNIT)
+		return FALSE;
+	if (slot == unit->unit.current_weapon_index)
+		return unit_drop_current_weapon(unit_index, TRUE);
+	unit_drop_item(unit_index, weapon_index);
+	unit->unit.weapon_object_indices[slot] = NONE;
+	if (unit->unit.desired_weapon_index == slot)
+	{
+		unit->unit.desired_weapon_index = unit->unit.current_weapon_index != NONE ?
+			unit->unit.current_weapon_index : unit_weapon_next_index(unit_index, NONE, 0);
+	}
+	return TRUE;
+}
+
 /* port: a swap's weapon out: the one the player chose, though the weapon
 in hand is still being put away for it (a network player's choice gets to
 the host before the switch is done), not that one, their backup */

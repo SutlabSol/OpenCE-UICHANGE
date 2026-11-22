@@ -420,6 +420,40 @@ Contribution by objective **(proposed)**:
   OBJECTIVES) are on the hub, after GAME SETTINGS.
 - The marks are at the view's end: mod version 112.
 
+## Playtest changes 2 (2026-11-22, untested in game)
+
+- Rescue: the marines' life drains at 40% of the old pace (their patience
+  2.5 times a hold's); once a player comes they follow the nearest player as
+  Forge's FOLLOW does (firefight_objective_follow), and after the round they
+  join the friendly reinforcements, which follow the nearest player too.
+- Flag, Oddball, Bomb: the carrier is the player whose unit has the item, in
+  hand or put away (a rider's, as CTF finds it), so riding a vehicle no
+  longer reads as dropped; the marker is drawn over the carrier.
+- A camp's units (VIP, generator, Purge) are blind to the players till one
+  comes within 8 units of the camp's edge or one of them is hurt (10 s),
+  roaming the camp meanwhile (actor_perception.c's
+  firefight_objectives_actor_unaware).
+
+## Playtest changes 3 (2026-11-22, untested in game)
+
+- Enemy generator: a harmless plasma blast as it goes (every machine's).
+- Collect: the deposit's skull 5 times its size; "X DROPPED N SKULLS" told on a
+  carrier's death, and their skulls marked "N DROPPED SKULLS"; an enemy drops
+  by its kind (grunts, jackals, sentinels, carrier forms 1; elites, marines,
+  combat forms 2; hunters 3; infection forms 0) plus its rank (major +1,
+  ultra/spec ops/stealth +2, commander/zealot +3); the goal 50 (+20 a player
+  past the first, at most 150).
+- Rescue: done once its attackers are dead, each marine alive paid for then
+  (250); they join the friendly reinforcements.
+- Data Link and Bomb: no squads of their own; the waves' enemies contest them.
+- Bomb: goes off as a tank shell's blast at it and four round it, damage
+  dealt to everything it reaches, the players too
+  (firefight_objective_blast_damage; debug.txt says which damage it found).
+- Purge the base: a 30-unit base, 10 (+3 a player, at most 16) enemies, up to
+  3 enemy vehicles at the map's vehicle spots in it; a players' vehicle
+  standing on one is taken away and made again once the enemy vehicle there
+  is destroyed (or the round is over).
+
 ## Open
 
 - Default amounts (above) to be tuned in play.

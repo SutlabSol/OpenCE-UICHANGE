@@ -267,13 +267,24 @@ have: their rate and their bursts this much, the pauses between bursts by
 its inverse. Firefight's waves see the players across the map and charge
 them (firefight_spawner.c's pursuit), so as the campaign's they fired too
 often; 1 for anyone else's, and outside Firefight */
-#define FIREFIGHT_ENEMY_FIRE_PACING 0.65f
+/* (the host's setting game.firefight_enemy_fire_rate, percent) */
+long config_integer(const char *name);
 real firefight_enemy_fire_pacing(
 	short team_index)
 {
 	if (!firefight_active() || team_index == NONE || !firefight_team_is_hostile(team_index))
 		return 1.0f;
-	return FIREFIGHT_ENEMY_FIRE_PACING;
+	return (real)PIN(config_integer("game.firefight_enemy_fire_rate"), 10, 100) / 100.0f;
+}
+
+/* (actor_combat.c) Firefight's enemies' aim error, of their tags'
+(game.firefight_enemy_aim_error, percent); 1 for anyone else's */
+real firefight_enemy_aim_error_scale(
+	short team_index)
+{
+	if (!firefight_active() || team_index == NONE || !firefight_team_is_hostile(team_index))
+		return 1.0f;
+	return (real)PIN(config_integer("game.firefight_enemy_aim_error"), 100, 300) / 100.0f;
 }
 
 boolean firefight_active(
@@ -1331,7 +1342,8 @@ void firefight_notify_actor_or_unit_killed(
 	}
 
 	firefight_prune_dead_tracked_enemies();
-	firefight_objectives_enemy_killed(dead_unit_index, killer_player_index, headshot, melee, explosion, splatter);
+	firefight_objectives_enemy_killed(actor_index, dead_unit_index, killer_player_index, headshot, melee, explosion,
+		splatter);
 	ff_state.team_score = campaign_score_team_points();
 	while (ff_state.next_bonus_life_score > 0 && ff_state.team_score >= ff_state.next_bonus_life_score)
 	{
@@ -2081,6 +2093,8 @@ static void firefight_update(
 		if (ff_state.phase_timer_ticks <= 0)
 		{
 			ff_state.in_bonus_round = FALSE;
+			/* (its enemies left: teleported out, not killed) */
+			firefight_teleport_out_tracked_enemies();
 			firefight_recalculate_skulls_and_multiplier();
 			ff_state.phase_state = _ff_phase_set_complete;
 			ff_state.phase_timer_ticks = 5 * TICKS_PER_SECOND;

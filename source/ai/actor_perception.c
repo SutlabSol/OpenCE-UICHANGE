@@ -3808,9 +3808,12 @@ void prop_status_refresh(
 		struct prop_datum *prop = prop_get(prop_index);
 		struct unit_datum *unit = unit_get(prop->unit_index);
 		long game_time = game_time_get();
+		/* port: a Firefight camp's unit that has not noticed the players
+		(firefight_objectives.c) */
 		boolean blind =
 			(encounter != NULL && encounter->blind) ||
-			actor->state.mode == _actor_mode_asleep;
+			actor->state.mode == _actor_mode_asleep ||
+			firefight_objectives_actor_unaware(actor_index);
 		short previous_quantized_speed;
 		real_vector3d velocity;
 		real_vector3d relative_velocity;
@@ -4995,7 +4998,8 @@ static void actor_perception_refresh_danger_zone(
 					short line_of_sight;
 
 					if (actor->state.mode == _actor_mode_asleep ||
-						(encounter != NULL && encounter->blind))
+						(encounter != NULL && encounter->blind) ||
+						firefight_objectives_actor_unaware(actor_index))
 					{
 						blind = TRUE;
 					}

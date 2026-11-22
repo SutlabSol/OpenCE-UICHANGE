@@ -3988,6 +3988,16 @@ static boolean ui_network_game_has_remote_peers(
 	return game && game->machine_count > 1;
 }
 
+/* port: a network game of this machine alone (solo Firefight: its host and
+its own client over the loopback) paused by a screen: its clock stopped,
+neither end sends the other anything, which their connections must not take
+for a lost machine (network_connection.c's idle) */
+boolean network_game_paused_alone(
+	void)
+{
+	return network_game_is_active() && game_time_get_paused() && !ui_network_game_has_remote_peers();
+}
+
 static char const *ui_resolve_pause_widget_name(
 	char const *preferred,
 	short local_player_count)

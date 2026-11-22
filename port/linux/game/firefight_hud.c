@@ -1385,6 +1385,46 @@ static long objective_local_unit(void)
 	return player && object_try_and_get(player->unit_index) ? player->unit_index : NONE;
 }
 
+/* the carrier's unit (an absolute player index), NONE for none */
+static long objective_carrier_unit(short carrier)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+
+	if (carrier == NONE || !player_data)
+		return NONE;
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		if ((short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index) == carrier)
+			return object_try_and_get(player->unit_index) ? player->unit_index : NONE;
+	}
+	return NONE;
+}
+
+/* where a carried objective is shown: over its carrier (a rider's put away,
+its own place left where they got in), else where it lies; FALSE for none */
+static boolean objective_item_position(short carrier, short item, real_point3d *at)
+{
+	long unit = objective_carrier_unit(carrier);
+	long object_index;
+
+	if (unit != NONE)
+	{
+		struct object_datum *object = object_get(unit);
+
+		object_get_origin(unit, at);
+		at->z += object->object.bounding_sphere_radius + 0.6f;
+		return TRUE;
+	}
+	object_index = item != NONE ? firefight_objectives_object(item) : NONE;
+	if (object_index == NONE || !object_try_and_get(object_index))
+		return FALSE;
+	object_get_origin(object_index, at);
+	at->z += 0.8f;
+	return TRUE;
+}
+
 /* (a mark of the view's: an object lying about, its absolute index) drawn
 over it, with its label */
 static void draw_objective_object_mark(long font_index, short line_height, real scale, short absolute, char const *label,
@@ -1593,15 +1633,10 @@ static void draw_objectives(
 			draw_world_navpoint(font_index, line_height, scale, &at, "CAPTURE", FF_HUD_LOCK_BAR, &gold, FALSE);
 		else
 		{
-			long flag = firefight_objectives_object(view->set_target);
-			struct object_datum *object = flag != NONE ? object_try_and_get(flag) : NULL;
+			real_point3d flag_at;
 
-			if (object)
+			if (objective_item_position(view->set_carrier, view->set_target, &flag_at))
 			{
-				real_point3d flag_at;
-
-				object_get_origin(flag, &flag_at);
-				flag_at.z += 0.8f;
 				draw_world_navpoint(font_index, line_height, scale, &flag_at,
 					view->set_carrier != NONE ? "FLAG CARRIER" : "FLAG", FF_HUD_LOCK_BAR, &gold, FALSE);
 			}
@@ -1618,7 +1653,11 @@ static void draw_objectives(
 		/* (the skulls a player dropped, dying) */
 		for (index = 0; index < FF_OBJECTIVE_DROP_MARKS; index++)
 		{
-			draw_objective_object_mark(font_index, line_height, scale, view->set_drops[index], "DROPPED SKULLS",
+			char label[32];
+
+			snprintf(label, sizeof(label), "%d DROPPED SKULL%s", (int)view->set_drop_values[index],
+				view->set_drop_values[index] == 1 ? "" : "S");
+			draw_objective_object_mark(font_index, line_height, scale, view->set_drops[index], label,
 				FF_HUD_LOCK_BAR, &gold);
 		}
 		break;
@@ -1638,14 +1677,10 @@ static void draw_objectives(
 		draw_world_navpoint(font_index, line_height, scale, &at, "TARGET", FF_HUD_LOCK_BAR, &gold, FALSE);
 		if (!objective_local_carrier(view->set_carrier))
 		{
-			long bomb = firefight_objectives_object(view->set_target);
+			real_point3d bomb_at;
 
-			if (bomb != NONE && object_try_and_get(bomb))
+			if (objective_item_position(view->set_carrier, view->set_target, &bomb_at))
 			{
-				real_point3d bomb_at;
-
-				object_get_origin(bomb, &bomb_at);
-				bomb_at.z += 0.8f;
 				draw_world_navpoint(font_index, line_height, scale, &bomb_at,
 					view->set_carrier != NONE ? "BOMB CARRIER" : "BOMB", FF_HUD_LOCK_BAR, &gold, FALSE);
 			}
@@ -1669,14 +1704,15 @@ static void draw_objectives(
 			break;
 		if (object_try_and_get_and_verify_type(target, _object_mask_unit))
 			draw_hostile_navpoint(font_index, line_height, scale, target, hostile_nav_arrow_index(), "SKULL CARRIER", &red);
-		else if (object_try_and_get(target))
+		else
 		{
 			real_point3d at;
 
-			object_get_origin(target, &at);
-			at.z += 0.8f;
-			draw_world_navpoint(font_index, line_height, scale, &at, view->set_carrier != NONE ? "SKULL HOLDER" : "SKULL",
-				FF_HUD_LOCK_BAR, &gold, FALSE);
+			if (objective_item_position(view->set_carrier, view->set_target, &at))
+			{
+				draw_world_navpoint(font_index, line_height, scale, &at, view->set_carrier != NONE ? "SKULL HOLDER" : "SKULL",
+					FF_HUD_LOCK_BAR, &gold, FALSE);
+			}
 		}
 		break;
 	}

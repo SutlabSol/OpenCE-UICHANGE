@@ -840,6 +840,10 @@ real firefight_player_stun_scale(void);
 /* (actor_combat.c) Firefight's enemies' firing, of their tags': their rate
 and bursts by it, their pauses by its inverse (1: as they are) */
 real firefight_enemy_fire_pacing(short team_index);
+real firefight_enemy_aim_error_scale(short team_index);
+/* (firefight_spawner.c) the tracked enemies gone in a teleport's flash, not
+killed (the bonus round over) */
+void firefight_teleport_out_tracked_enemies(void);
 /* how far an actor walks a straight line on the level towards a point (at
 most most units, no drop over 1.2 units, no kill volume), where it stops into
 end; stopped at an edge with ground to land on beyond it, TRUE into edge and
@@ -1476,6 +1480,8 @@ struct firefight_objectives_view
 	short set_drops[FF_OBJECTIVE_DROP_MARKS];
 	short deposit_object;
 	short marks_pad;
+	/* (each of set_drops' worth: how many skulls) */
+	byte set_drop_values[FF_OBJECTIVE_DROP_MARKS];
 };
 
 /* the objectives as this machine shows them, and an object of the view's
@@ -1508,8 +1514,8 @@ void firefight_objectives_wave_ended(void);
 void firefight_objectives_round_ended(void);
 void firefight_objectives_dispose(void);
 /* (firefight.c) an enemy killed, a player killed */
-void firefight_objectives_enemy_killed(long dead_unit_index, long killer_player_index, boolean headshot, boolean melee,
-	boolean grenade, boolean splatter);
+void firefight_objectives_enemy_killed(long actor_index, long dead_unit_index, long killer_player_index, boolean headshot,
+	boolean melee, boolean grenade, boolean splatter);
 void firefight_objectives_player_died(long dead_player_index);
 /* (weapons.c, units.c) a weapon fired, a grenade thrown, by any unit */
 void firefight_objectives_weapon_fired(long weapon_index, long owner_unit_index);
@@ -1524,6 +1530,9 @@ real firefight_objectives_damage_scale(long object_index);
 and the unit every enemy goes for (a carrier's), NONE */
 boolean firefight_objectives_spawn_blocked(real_point3d const *point);
 long firefight_objectives_priority_target(void);
+/* (actor_perception.c) whether an actor sees nothing: a camp's unit while the
+camp has not noticed the players (a player near it, or one of it hurt) */
+boolean firefight_objectives_actor_unaware(long actor_index);
 /* (firefight_generators.c) whether an object is the enemy generator's hidden
 target unit */
 boolean firefight_objectives_generator_hidden(long object_index);
@@ -1549,6 +1558,18 @@ void firefight_objective_direct_at(long actor_index, long target_unit_index);
 /* (an objective's camp's unit) held where it is put: never charging the
 players, fighting from its camp (FALSE: as any) */
 void firefight_objective_hold_ground(long actor_index, boolean hold);
+/* an ally sent after the nearest player, as Forge's FOLLOW (the friendly
+reinforcements', Rescue's marines'): whether it was sent */
+boolean firefight_objective_follow(long unit_index);
+void firefight_adopt_friendly(long unit_index);
+/* (Purge's) the players' vehicles' spots in a camp taken for its enemy
+vehicles (each one there, empty, taken away, its slot held), and a slot given
+back (its vehicle made again) */
+short firefight_objective_take_vehicle_spots(real_point3d const *center, real radius, real_point3d *points,
+	real *facings, short *slots, short maximum);
+void firefight_objective_release_vehicle_slot(short slot);
+/* (Bomb's, the host's) a big blast's damage at a point and round it */
+void firefight_objective_blast_damage(real_point3d const *at, real spread);
 /* a harmless fire on this machine alone about a point (Collect's deposit) */
 void firefight_objective_fire_effect(real_point3d const *position);
 /* (Use X only's) a drop of one weapon, a pod of it for each of the players

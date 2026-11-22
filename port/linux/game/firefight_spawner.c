@@ -2656,8 +2656,8 @@ static void spawn_insertion_beacon_effect(
 }
 
 /* Firefight's enemies' firing range (world units), of their variant's own */
-#define FF_ENEMY_FIRING_RANGE_MIN 12.0f
-#define FF_ENEMY_FIRING_RANGE_MAX 25.0f
+#define FF_ENEMY_FIRING_RANGE_MIN 10.0f
+long config_integer(const char *name);
 
 static void patch_actor_for_firefight_pursuit(
 	struct actor_definition *actor_def,
@@ -2706,7 +2706,7 @@ static void patch_actor_for_firefight_pursuit(
 		if (variant_def->ranged_combat.maximum_firing_range <= 0.0f)
 			variant_def->ranged_combat.maximum_firing_range = 18.0f;
 		variant_def->ranged_combat.maximum_firing_range = PIN(variant_def->ranged_combat.maximum_firing_range,
-			FF_ENEMY_FIRING_RANGE_MIN, FF_ENEMY_FIRING_RANGE_MAX);
+			FF_ENEMY_FIRING_RANGE_MIN, (real)PIN(config_integer("game.firefight_enemy_firing_range"), 10, 45));
 		if (variant_def->ranged_combat.modified_vision_range < 350.0f)
 			variant_def->ranged_combat.modified_vision_range = 350.0f;
 		if (variant_def->ranged_combat.combat_range_lower_bound > 1.5f ||
@@ -7686,6 +7686,106 @@ void firefight_spawn_friendly_reinforcements(short count)
 	}
 }
 
+/* an ally kept with the nearest player, as Forge's FOLLOW: sent near them
+(a spot 2 to 3.5 units off, on the ground) once more than FF_FOLLOW_IDLE away
+while nothing is in its sight, or FF_FOLLOW_ALWAYS away whatever it is doing;
+never charging off after what it sees. Whether it was sent */
+#define FF_FOLLOW_IDLE 5.0f
+#define FF_FOLLOW_ALWAYS 10.0f
+boolean firefight_objective_follow(long unit_index)
+{
+	struct unit_datum *unit = unit_index != NONE ?
+		(struct unit_datum *)object_try_and_get_and_verify_type(unit_index, _object_mask_unit) : NULL;
+	struct actor_datum *actor;
+	real_point3d positions[16];
+	short count;
+	real_point3d at;
+	real best = 1.0e9f;
+	short nearest = NONE;
+	short i;
+
+	if (!unit || TEST_FLAG(unit->object.damage_flags, _object_dead_bit) || unit->unit.actor_index == NONE ||
+		(actor = actor_try_and_get(unit->unit.actor_index)) == NULL)
+	{
+		return FALSE;
+	}
+	actor->external_orders.disable_charging = TRUE;
+	actor->emotions.forced_to_charge = FALSE;
+	count = get_living_player_positions(positions, NULL, 16);
+	object_get_origin(unit_index, &at);
+	for (i = 0; i < count; i++)
+	{
+		real distance = distance3d(&at, &positions[i]);
+
+		if (distance < best)
+		{
+			best = distance;
+			nearest = i;
+		}
+	}
+	if (nearest == NONE || best <= FF_FOLLOW_IDLE ||
+		(best <= FF_FOLLOW_ALWAYS && actor->target.target_prop_index != NONE))
+	{
+		return FALSE;
+	}
+	{
+		real angle = spawner_rand_range(0.0f, 2.0f * _pi);
+		real distance = spawner_rand_range(2.0f, 3.5f);
+		real_point3d spot = positions[nearest];
+		real_point3d ground;
+		long surface;
+
+		spot.x += cosine(angle) * distance;
+		spot.y += sine(angle) * distance;
+		if (!spot_reachable_from(&positions[nearest], &spot))
+			spot = positions[nearest];
+		surface = reach_ground(&spot, &ground);
+		if (surface == NONE)
+			surface = reach_ground(&positions[nearest], &ground);
+		if (surface == NONE)
+			return FALSE;
+		actor_move_to_point(unit->unit.actor_index, &ground, surface, NONE);
+	}
+	return TRUE;
+}
+
+/* (firefight_objectives.c's Rescue, its round over) a marine of an
+objective's made one of the friendly reinforcements, following the players */
+void firefight_adopt_friendly(long unit_index)
+{
+	short i;
+
+	if (unit_index == NONE)
+		return;
+	for (i = 0; i < g_friendly_unit_count; i++)
+	{
+		if (g_friendly_units[i] == unit_index)
+			return;
+		if (g_friendly_units[i] == NONE)
+		{
+			g_friendly_units[i] = unit_index;
+			return;
+		}
+	}
+	if (g_friendly_unit_count < MAX_FRIENDLY_UNITS)
+		g_friendly_units[g_friendly_unit_count++] = unit_index;
+}
+
+/* (the host's) the friendly reinforcements with the players, so often */
+#define FF_FOLLOW_TICKS 20
+static void friendlies_follow_update(void)
+{
+	short i;
+
+	if (!g_friendly_unit_count || game_time_get() % FF_FOLLOW_TICKS)
+		return;
+	for (i = 0; i < g_friendly_unit_count; i++)
+	{
+		if (g_friendly_units[i] != NONE)
+			firefight_objective_follow(g_friendly_units[i]);
+	}
+}
+
 /* ---------- Round-Scheduled Player Vehicle Spawning & End-of-Round Despawning (Feature 7) */
 
 /* a vehicle placement (custom_edition_objects.c has the fields past the object) */
@@ -8898,6 +8998,9 @@ static struct
 	short placements[FIREFIGHT_MAX_SET_VEHICLES];
 	boolean earned[FIREFIGHT_MAX_SET_VEHICLES];
 	boolean rewarded[FIREFIGHT_MAX_SET_VEHICLES];
+	/* (a slot whose spot an objective's enemy vehicle took: not made again
+	till it gives it back, firefight_objective_release_vehicle_slot) */
+	boolean held[FIREFIGHT_MAX_SET_VEHICLES];
 	short rewards_pending;
 	long reward_time;
 } g_player_vehicles;
@@ -9085,7 +9188,7 @@ void firefight_spawn_player_vehicles(void)
 			continue;
 		}
 		ff_state.deployed_set_vehicles[slot] = NONE;
-		if (slot >= g_player_vehicles.count || !g_player_vehicles.earned[slot])
+		if (slot >= g_player_vehicles.count || !g_player_vehicles.earned[slot] || g_player_vehicles.held[slot])
 			continue;
 		if (player_vehicle_make(slot, nth))
 		{
@@ -9095,6 +9198,71 @@ void firefight_spawn_player_vehicles(void)
 	}
 	if (made)
 		firefight_announce_banner(_ff_banner_vehicle_deployed, MAX(1, ff_state.current_round), 3 * TICKS_PER_SECOND);
+}
+
+/* (firefight_objectives.c's Purge) the players' vehicles' spots within
+`radius` of `center` for its enemy vehicles: each one there empty of players
+taken away, its slot held (made again once given back:
+firefight_objective_release_vehicle_slot). The spots, which way, each its
+slot; at most `maximum` */
+short firefight_objective_take_vehicle_spots(real_point3d const *center, real radius, real_point3d *points,
+	real *facings, short *slots, short maximum)
+{
+	struct scenario *scen = global_scenario_try_and_get();
+	short count = 0;
+	short slot;
+
+	if (!scen || !center || network_game_distributed_client())
+		return 0;
+	player_vehicles_build();
+	for (slot = 0; slot < g_player_vehicles.count && count < maximum; slot++)
+	{
+		struct ff_scenario_vehicle *placement = NULL;
+		long vehicle = ff_state.deployed_set_vehicles[slot];
+		struct object_datum *object;
+		struct object_iterator iterator;
+		struct object_datum *rider;
+		boolean occupied = FALSE;
+
+		if (g_player_vehicles.held[slot] ||
+			player_vehicle_placement_tag(scen, g_player_vehicles.placements[slot], &placement) == NONE || !placement ||
+			distance3d(&placement->object.position, center) > radius || !player_vehicle_present(vehicle))
+		{
+			continue;
+		}
+		object = object_get(vehicle);
+		if (distance3d(&object->object.position, &placement->object.position) > 4.0f)
+			continue;
+		object_iterator_new(&iterator, _object_mask_unit, 0);
+		while ((rider = (struct object_datum *)object_iterator_next(&iterator)) != NULL)
+		{
+			if (rider->object.parent_object_index == vehicle)
+				occupied = TRUE;
+		}
+		if (occupied)
+			continue;
+		object_delete(vehicle);
+		ff_state.deployed_set_vehicles[slot] = NONE;
+		g_player_vehicles.held[slot] = TRUE;
+		points[count] = placement->object.position;
+		facings[count] = placement->object.rotation.yaw;
+		slots[count] = slot;
+		count++;
+	}
+	return count;
+}
+
+/* ... a held slot given back: its vehicle made again, where the map has it */
+void firefight_objective_release_vehicle_slot(short slot)
+{
+	if (slot < 0 || slot >= FIREFIGHT_MAX_SET_VEHICLES || !g_player_vehicles.held[slot])
+		return;
+	g_player_vehicles.held[slot] = FALSE;
+	if (slot < g_player_vehicles.count && g_player_vehicles.earned[slot] &&
+		!player_vehicle_present(ff_state.deployed_set_vehicles[slot]))
+	{
+		player_vehicle_make(slot, 0);
+	}
 }
 
 void firefight_reward_player_vehicle(void)
@@ -9426,6 +9594,7 @@ void firefight_update_dropships_and_vehicles(void)
 	long now = game_time_get();
 
 	player_vehicle_rewards_update();
+	friendlies_follow_update();
 
 	/* Drain queued reinforcement enemies as active alive enemies fall below the safe 28-actor cap */
 	if (g_queued_reinforcement_enemies > 0 &&
@@ -9950,6 +10119,51 @@ void firefight_update_dropships_and_vehicles(void)
 	}
 }
 
+/* (firefight.c, the bonus round over) its enemies gone, not killed: each in
+the teleport's flash, with its vehicle when no player is in it; untracked */
+void firefight_teleport_out_tracked_enemies(void)
+{
+	short slot;
+
+	for (slot = 0; slot < FIREFIGHT_MAX_TRACKED_ENEMIES; slot++)
+	{
+		long unit_index = ff_state.tracked_enemy_units[slot];
+		struct unit_datum *unit = unit_index != NONE ? unit_try_and_get(unit_index) : NULL;
+
+		ff_state.tracked_enemy_units[slot] = NONE;
+		ff_state.tracked_enemy_tiers[slot] = 0;
+		if (!unit)
+			continue;
+		{
+			real_point3d at;
+			long vehicle = unit->object.parent_object_index;
+
+			object_get_origin(unit_index, &at);
+			spawn_insertion_beacon_effect(&at, NONE, _firefight_faction_covenant, FALSE);
+			object_delete(unit_index);
+			if (vehicle != NONE && object_try_and_get_and_verify_type(vehicle, _object_mask_vehicle))
+			{
+				struct object_iterator iterator;
+				struct object_datum *rider;
+				boolean player_in = FALSE;
+
+				object_iterator_new(&iterator, _object_mask_unit, 0);
+				while ((rider = (struct object_datum *)object_iterator_next(&iterator)) != NULL)
+				{
+					if (rider->object.parent_object_index == vehicle &&
+						((struct unit_datum *)rider)->unit.player_index != NONE)
+					{
+						player_in = TRUE;
+					}
+				}
+				if (!player_in)
+					object_delete(vehicle);
+			}
+		}
+	}
+	ff_state.enemies_alive = 0;
+}
+
 /* ---------- An objective's units (firefight_objectives.c)
 
 Made as a wave's are, of the waves' faction and with their weapons, but no
@@ -10291,6 +10505,64 @@ long firefight_objective_give_vehicle(long vehicle_tag)
 	if (vehicle_index != NONE)
 		object_set_automatic_deactivation(vehicle_index, FALSE);
 	return vehicle_index;
+}
+
+/* (the host's: Bomb's going off) a big blast's damage, a tank shell's (else
+a rocket's, a grenade's: the first the map has) at a point and four round it
+`spread` off, hurting all it reaches, the players too; the looks are each
+machine's (firefight_objective_effect) */
+void firefight_objective_blast_damage(real_point3d const *at, real spread)
+{
+	static char const *const names[] =
+	{
+		"vehicles\\scorpion\\shell explosion", "vehicles\\scorpion\\tank shell explosion",
+		"vehicles\\wraith\\wraith mortar explosion", "weapons\\rocket launcher\\explosion",
+		"weapons\\frag grenade\\explosion", "weapons\\plasma grenade\\explosion"
+	};
+	long damage_tag = NONE;
+	short index;
+
+	if (!at || network_game_distributed_client())
+		return;
+	for (index = 0; index < (short)NUMBEROF(names) && damage_tag == NONE; index++)
+		damage_tag = tag_loaded(DAMAGE_EFFECT_DEFINITION_TAG, names[index]);
+	if (damage_tag == NONE)
+	{
+		struct tag_iterator iterator;
+		long tag_index;
+
+		tag_iterator_new(&iterator, DAMAGE_EFFECT_DEFINITION_TAG);
+		while (damage_tag == NONE && (tag_index = tag_iterator_next(&iterator)) != NONE)
+		{
+			char lowered[256];
+
+			lowercase_copy(tag_get_name(tag_index), lowered, sizeof(lowered));
+			if (strstr(lowered, "explosion") && (strstr(lowered, "shell") || strstr(lowered, "rocket")))
+				damage_tag = tag_index;
+		}
+	}
+	error(_error_silent, "firefight objectives: the bomb's blast deals %s",
+		damage_tag != NONE ? tag_get_name(damage_tag) : "nothing (no explosion's damage here)");
+	if (damage_tag == NONE)
+		return;
+	for (index = 0; index < 5; index++)
+	{
+		struct damage_data damage;
+		real_point3d point = *at;
+
+		if (index)
+		{
+			real angle = (real)(index - 1) * 0.5f * _pi;
+
+			point.x += cosine(angle) * spread;
+			point.y += sine(angle) * spread;
+		}
+		point.z += 0.5f;
+		damage_data_new(&damage, damage_tag);
+		damage.origin = damage.epicenter = point;
+		scenario_location_from_point(&damage.location, &point);
+		area_of_effect_cause_damage(&damage, NONE);
+	}
 }
 
 /* an effect on this machine alone (as the pods' are), the first of `names`

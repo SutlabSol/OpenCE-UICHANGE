@@ -477,6 +477,7 @@ pulled it 6 times a second (an assault rifle's on a rocket launcher) */
 /* port: Firefight's enemies fire less often than their tags say
 (firefight.c's firefight_enemy_fire_pacing) */
 real firefight_enemy_fire_pacing(short team_index);
+real firefight_enemy_aim_error_scale(short team_index);
 static real actor_combat_rate_of_fire(
 	long actor_index,
 	struct actor_variant_definition const *firing_variant_definition)
@@ -1325,6 +1326,8 @@ static void actor_start_burst(
 		{
 			burst_error *= firing_pattern->error_angle_modifier;
 		}
+		/* port: Firefight's enemies miss more */
+		burst_error *= firefight_enemy_aim_error_scale(actor->meta.team_index);
 		if (actor->external_orders.playfighting)
 		{
 			burst_error = 2.0f*burst_error + DEGREES_TO_RADIANS(1.0f);

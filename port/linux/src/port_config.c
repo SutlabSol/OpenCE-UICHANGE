@@ -725,8 +725,19 @@ static const struct config_setting config_settings[] =
 	{ "game.third_person_distance", _config_string, "\"normal\"", "HALO_THIRD_PERSON_DISTANCE", _environment_value,
 		_platform_all,
 		"How far back the third-person view is: \"near\", \"normal\" or \"far\"." },
+	{ "game.firefight_enemy_fire_rate", _config_integer, "50", NULL, _environment_value, _platform_all,
+		"How often Firefight's enemies fire, in percent of what their tags say\n"
+		"(10 to 100): their rate and bursts that much, the pauses between bursts\n"
+		"longer by as much. Firefight's enemies see the players across the map\n"
+		"and charge them, so at 100 they fire far too often." },
+	{ "game.firefight_enemy_firing_range", _config_integer, "20", NULL, _environment_value, _platform_all,
+		"The farthest Firefight's enemies fire from, in world units (10 to 45):\n"
+		"each keeps its own range under it, and no less than 10." },
+	{ "game.firefight_enemy_aim_error", _config_integer, "150", NULL, _environment_value, _platform_all,
+		"Firefight's enemies' aim, in percent of their tags' error (100 to 300):\n"
+		"higher misses more." },
 	{ "game.firefight_objectives_round", _config_boolean, "false", NULL, _environment_value, _platform_all,
-		"Firefight's WAVE OBJECTIVES (Server Setup > GAME SETTINGS): a challenge\n"
+		"Firefight's WAVE OBJECTIVES (Server Setup > OBJECTIVE SETTINGS): a challenge\n"
 		"for a wave, rolled as each wave starts (game.firefight_objectives_round_chance), of\n"
 		"those turned on below; done before the wave is cleared, it\n"
 		"gives the team points (port/linux/game/firefight_objectives.c). The\n"
