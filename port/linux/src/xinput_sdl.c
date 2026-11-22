@@ -439,6 +439,10 @@ would never open it */
 static WORD overlay_held_buttons[PORT_COUNT];
 static unsigned char overlay_held_analog[PORT_COUNT];
 
+/* whether the overlay (or the host's dashboard) took a port's pad at its
+last read (for Forge: xinput_forge_unmapped) */
+static BOOL overlay_took_pad[PORT_COUNT];
+
 static void overlay_pad_take(int port, XINPUT_GAMEPAD *pad, SDL_Gamepad *gamepad)
 {
 	/* (an analog button pressed half way; the stick most of the way) */
@@ -469,8 +473,10 @@ static void overlay_pad_take(int port, XINPUT_GAMEPAD *pad, SDL_Gamepad *gamepad
 			buttons |= 1UL << HALO_OVERLAY_PAD_DPAD_DOWN;
 	}
 	/* (the overlay first, which opens over the host's screen too) */
+	overlay_took_pad[port] = FALSE;
 	if (overlay_menu_take_pad((short)port, buttons) || host_dashboard_take_pad((short)port, buttons))
 	{
+		overlay_took_pad[port] = TRUE;
 		overlay_held_buttons[port] = pad->wButtons;
 		overlay_held_analog[port] = 0;
 		for (index = 0; index < 8; index++)
@@ -2419,6 +2425,38 @@ int xinput_device_port(HANDLE device)
 	return controller_port(device);
 }
 
+/* port 0's gamepad as it was pressed and as a custom controller layout
+(controller_remap_input) made it, at its last read, whether that layout
+changed it: Forge's binds name the buttons where they sit (D-pad Right goes
+into Forge mode), where a custom layout keeps only the game's actions */
+static XINPUT_GAMEPAD forge_unmapped_pad, forge_remapped_pad;
+static BOOL forge_pad_remapped;
+
+/* a state XInputGetState gave port 0, made the buttons pressed again for
+Forge: what the layout made of them taken out, what was pressed put back (a
+key's or the touch controls' press on the same button may be lost with it) */
+void xinput_forge_unmapped(XINPUT_GAMEPAD *pad)
+{
+	int index;
+
+	/* (nothing put back while the overlay has the pad, nor a button it or a
+	vote holds over till it is let go) */
+	if (!forge_pad_remapped || overlay_took_pad[0])
+		return;
+	pad->wButtons = (WORD)((pad->wButtons & ~forge_remapped_pad.wButtons) |
+		(forge_unmapped_pad.wButtons & ~(overlay_held_buttons[0] | vote_held_buttons)));
+	for (index = 0; index < 8; index++)
+	{
+		BYTE value = pad->bAnalogButtons[index];
+
+		if (forge_remapped_pad.bAnalogButtons[index] && value <= forge_remapped_pad.bAnalogButtons[index])
+			value = 0;
+		if (forge_unmapped_pad.bAnalogButtons[index] > value && !(overlay_held_analog[0] & (1 << index)))
+			value = forge_unmapped_pad.bAnalogButtons[index];
+		pad->bAnalogButtons[index] = value;
+	}
+}
+
 /* debug camera (director.c): the middle button, R and F, and the wheel's
 notches since the director last asked */
 static BOOL debug_cam_middle = FALSE;
@@ -2539,7 +2577,15 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		abs(physical.sThumbLX) > 12000 || abs(physical.sThumbLY) > 12000 ||
 		abs(physical.sThumbRX) > 12000 || abs(physical.sThumbRY) > 12000,
 		gamepad != NULL);
+	if (port == 0)
+		forge_unmapped_pad = physical;
 	captured = controller_remap_input((short)port, &physical, gamepad != NULL);
+	if (port == 0)
+	{
+		forge_remapped_pad = physical;
+		forge_pad_remapped = !captured && gamepad &&
+			memcmp(&forge_unmapped_pad, &forge_remapped_pad, sizeof(forge_remapped_pad)) != 0;
+	}
 	if (port == 0)
 	{
 		unsigned long held;

@@ -3750,6 +3750,9 @@ BOOL platform_next_keystroke(struct forge_sdl_keystroke *keystroke)
 below): the port's, its buttons remapped and the touch controls' in it, for
 Forge's controls (forge_pad_read) */
 extern int xinput_device_port(HANDLE device);
+/* (a custom controller layout's buttons put back where they were pressed:
+Forge's binds name them by where they sit) */
+extern void xinput_forge_unmapped(XINPUT_GAMEPAD *pad);
 static XINPUT_GAMEPAD s_forge_pad;
 static BOOL s_forge_pad_valid;
 
@@ -3764,6 +3767,8 @@ DWORD WINAPI XInputGetState(HANDLE hDevice, PXINPUT_STATE pState)
 	{
 		s_forge_pad_valid = rc == ERROR_SUCCESS;
 		s_forge_pad = pState->Gamepad;
+		if (s_forge_pad_valid && forge_window_is_focused())
+			xinput_forge_unmapped(&s_forge_pad);
 	}
 	return rc;
 }

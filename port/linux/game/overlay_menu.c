@@ -26,7 +26,8 @@ toggle off and on (else right goes into a folder and left back out), B goes
 back out of a folder and closes it at the top, Back closes it; the
 keyboard's arrows, Enter and Escape are those; the mouse and the
 touchscreen choose a row with a click or a tap (one outside the panel closes
-it, one on the folder's name goes back out of it) and scroll with the wheel
+it, one on the folder's name goes back out of it, one on a Tag Editor's
+value's left or right arrow steps it down or up) and scroll with the wheel
 or a drag. The game itself goes on underneath: it is not paused.
 
 game.overlay_menu (on by default) lets those buttons open it.
@@ -598,6 +599,10 @@ static struct
 	short rows_top;
 	short row_height;
 	short rows_shown;
+	/* where the last frame drew a Tag Editor's value between its arrows
+	(the screen's coordinates; a click on its left half steps it down, on
+	its right half up) */
+	short value_x0, value_x1;
 	/* the chosen row's label's scroll: the folder and the row, and since
 	when */
 	struct overlay_folder *scroll_folder;
@@ -1411,6 +1416,21 @@ static void overlay_move(
 	overlay_keep_selection_shown();
 }
 
+/* a Tag Editor's value stepped (by left or right, or a click on its
+arrows) */
+static void overlay_editor_adjust(
+	short row,
+	short direction,
+	boolean fast)
+{
+	char status[96];
+
+	tag_editor_menu_adjust(row, direction, fast, status, sizeof(status));
+	overlay_editor_refresh();
+	if (status[0])
+		overlay_set_status(status);
+}
+
 static void overlay_choose(
 	short row)
 {
@@ -1796,9 +1816,26 @@ void overlay_menu_pointer(
 		else if (click_y >= overlay.rows_top && overlay.row_height > 0)
 		{
 			short row = (short)(overlay.first_row + (click_y - overlay.rows_top) / overlay.row_height);
+			struct overlay_folder *folder = overlay_folder();
+			struct overlay_entry *entry = row < folder->count ? folder->entries[row] : NULL;
 
-			if (row < overlay.first_row + overlay.rows_shown)
+			/* (a Tag Editor's value: a click on its arrows steps it, one on
+			its label chooses the row alone, A's putting back the map's value
+			left to the buttons) */
+			if (row < overlay.first_row + overlay.rows_shown && entry &&
+				entry->type == _overlay_entry_editor_row && entry->editor_kind == _tag_editor_row_value)
+			{
+				overlay.selected[overlay.depth] = row;
+				if (overlay.value_x1 > overlay.value_x0 && click_x >= overlay.value_x0 && click_x < overlay.value_x1)
+				{
+					overlay_editor_adjust(row,
+						(short)(click_x < (overlay.value_x0 + overlay.value_x1) / 2 ? -1 : 1), FALSE);
+				}
+			}
+			else if (row < overlay.first_row + overlay.rows_shown)
+			{
 				overlay_choose(row);
+			}
 		}
 	}
 }
@@ -1888,12 +1925,8 @@ void overlay_menu_update(
 		}
 		else if (editor_kind == _tag_editor_row_value)
 		{
-			char status[96];
-
-			tag_editor_menu_adjust(selected, (short)((pressed & (1UL << HALO_OVERLAY_PAD_LEFT)) ? -1 : 1),
-				(long)(now - overlay.sideways_since) >= FAST_AFTER_MILLISECONDS, status, sizeof(status));
-			if (status[0])
-				overlay_set_status(status);
+			overlay_editor_adjust(selected, (short)((pressed & (1UL << HALO_OVERLAY_PAD_LEFT)) ? -1 : 1),
+				(long)(now - overlay.sideways_since) >= FAST_AFTER_MILLISECONDS);
 		}
 		else if (pressed & (1UL << HALO_OVERLAY_PAD_LEFT))
 		{
@@ -2186,6 +2219,11 @@ void overlay_menu_draw(
 
 			value_room.x0 = (short)(room.x1 - (entry->type == _overlay_entry_editor_row ? OVERLAY_EDITOR_VALUE_WIDTH :
 				OVERLAY_VALUE_WIDTH));
+			if (arrows && entry->type == _overlay_entry_editor_row)
+			{
+				overlay.value_x0 = value_room.x0;
+				overlay.value_x1 = value_room.x1;
+			}
 			if (arrows)
 			{
 				overlay_arrow(value_room.x0, middle, FALSE, BLUE);
