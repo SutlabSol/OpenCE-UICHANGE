@@ -146,7 +146,7 @@ Optional objectives beside a Firefight game's waves, which the host's settings c
 | `game.firefight_objectives_set_chance` | `80` | All | The chance, in percent, that a set has one. |
 | `game.firefight_objective_target` | `true` | All | HIGH VALUE TARGET: an enemy camp round a map objective; its VIP killed before they teleport out. |
 | `game.firefight_objective_generator` | `true` | All | ENEMY GENERATOR: an enemy camp round a map objective; its generator destroyed before time runs out. |
-| `game.firefight_objective_purge` | `true` | All | PURGE THE BASE: an enemy camp round a map objective; every one of them killed before the set ends. |
+| `game.firefight_objective_purge` | `true` | All | CLEAR ENEMY BASE: an enemy camp round a map objective; every one of them killed before the set ends. |
 | `game.firefight_objective_data_link` | `true` | All | DATA LINK: a King of the Hill hill held, uncontested, for a quarter of the set's time. |
 | `game.firefight_objective_flag` | `true` | All | FLAG: a flag carried to the other base; every enemy goes for its carrier. |
 | `game.firefight_objective_rescue` | `true` | All | RESCUE: marines reached in time and their attackers cleared; they follow the players. |

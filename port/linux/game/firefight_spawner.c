@@ -4844,7 +4844,10 @@ static long spawn_boss_vehicle_at(
 	vector3d_from_angle(&placement.forward, facing);
 	placement.owner_team_index = enemy_team;
 
+	/* (Firefight's own, whatever the game type's vehicle set, which only placements follow) */
+	game_engine_vehicle_always_spawn = TRUE;
 	vehicle_index = object_new(&placement);
+	game_engine_vehicle_always_spawn = FALSE;
 	if (vehicle_index == NONE)
 		return NONE;
 
@@ -4981,7 +4984,10 @@ static long spawn_specific_enemy_vehicle_at(
 		vector3d_from_angle(&placement.forward, facing);
 		placement.owner_team_index = enemy_team;
 
+		/* (Firefight's own, whatever the game type's vehicle set, which only placements follow) */
+		game_engine_vehicle_always_spawn = TRUE;
 		vehicle_index = object_new(&placement);
+		game_engine_vehicle_always_spawn = FALSE;
 		if (vehicle_index == NONE)
 			return NONE;
 
@@ -9211,6 +9217,7 @@ short firefight_objective_take_vehicle_spots(real_point3d const *center, real ra
 	struct scenario *scen = global_scenario_try_and_get();
 	short count = 0;
 	short slot;
+	short far = 0, gone = 0, moved = 0, ridden = 0;
 
 	if (!scen || !center || network_game_distributed_client())
 		return 0;
@@ -9226,13 +9233,31 @@ short firefight_objective_take_vehicle_spots(real_point3d const *center, real ra
 
 		if (g_player_vehicles.held[slot] ||
 			player_vehicle_placement_tag(scen, g_player_vehicles.placements[slot], &placement) == NONE || !placement ||
-			distance3d(&placement->object.position, center) > radius || !player_vehicle_present(vehicle))
+			distance3d(&placement->object.position, center) > radius)
 		{
+			far++;
+			continue;
+		}
+		/* (none there now: the spot is free) */
+		if (!player_vehicle_present(vehicle))
+		{
+			gone++;
+			points[count] = placement->object.position;
+			facings[count] = placement->object.rotation.yaw;
+			slots[count] = NONE;
+			count++;
 			continue;
 		}
 		object = object_get(vehicle);
 		if (distance3d(&object->object.position, &placement->object.position) > 4.0f)
+		{
+			moved++;
+			points[count] = placement->object.position;
+			facings[count] = placement->object.rotation.yaw;
+			slots[count] = NONE;
+			count++;
 			continue;
+		}
 		object_iterator_new(&iterator, _object_mask_unit, 0);
 		while ((rider = (struct object_datum *)object_iterator_next(&iterator)) != NULL)
 		{
@@ -9240,7 +9265,10 @@ short firefight_objective_take_vehicle_spots(real_point3d const *center, real ra
 				occupied = TRUE;
 		}
 		if (occupied)
+		{
+			ridden++;
 			continue;
+		}
 		object_delete(vehicle);
 		ff_state.deployed_set_vehicles[slot] = NONE;
 		g_player_vehicles.held[slot] = TRUE;
@@ -9249,6 +9277,10 @@ short firefight_objective_take_vehicle_spots(real_point3d const *center, real ra
 		slots[count] = slot;
 		count++;
 	}
+	error(_error_silent, "firefight: a camp's vehicle spots: %d of the players' %d placements in reach, %d taken from "
+		"them, %d free (gone %d, driven off %d), %d ridden; %d not in reach", (int)(g_player_vehicles.count - far),
+		(int)g_player_vehicles.count, (int)(count - gone - moved), (int)(gone + moved), (int)gone, (int)moved,
+		(int)ridden, (int)far);
 	return count;
 }
 
@@ -10279,11 +10311,18 @@ long firefight_objective_spawn_vehicle(real_point3d const *at, real facing, bool
 	short team = objective_enemy_team(faction);
 	long vehicle_index;
 
-	if (!at || !ai_globals || !ai_globals->ai_initialized_for_map || faction == _firefight_faction_flood)
+	if (faction == _firefight_faction_flood)
+	{
+		error(_error_silent, "firefight: an objective's enemy vehicle: none for the Flood (no drivers)");
+		return NONE;
+	}
+	if (!at || !ai_globals || !ai_globals->ai_initialized_for_map)
 		return NONE;
 	g_objective_spawning = TRUE;
 	vehicle_index = spawn_specific_enemy_vehicle_at(heavy, at, facing, team != NONE ? team : _game_team_covenant, TRUE);
 	g_objective_spawning = FALSE;
+	if (vehicle_index == NONE)
+		error(_error_silent, "firefight: an objective's enemy vehicle at (%.1f %.1f %.1f) wasn't made", at->x, at->y, at->z);
 	return vehicle_index;
 }
 
@@ -10501,7 +10540,10 @@ long firefight_objective_give_vehicle(long vehicle_tag)
 	placement.position = position;
 	vector3d_from_angle(&placement.forward, facing);
 	placement.owner_team_index = _game_team_player;
+	/* (Firefight's own, whatever the game type's vehicle set, which only placements follow) */
+	game_engine_vehicle_always_spawn = TRUE;
 	vehicle_index = object_new(&placement);
+	game_engine_vehicle_always_spawn = FALSE;
 	if (vehicle_index != NONE)
 		object_set_automatic_deactivation(vehicle_index, FALSE);
 	return vehicle_index;

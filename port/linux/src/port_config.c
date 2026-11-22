@@ -786,7 +786,7 @@ static const struct config_setting config_settings[] =
 		"Round objective ENEMY GENERATOR: an enemy camp round a map objective, its\n"
 		"generator at the middle, destroyed before time runs out." },
 	{ "game.firefight_objective_purge", _config_boolean, "true", NULL, _environment_value, _platform_all,
-		"Round objective PURGE THE BASE: an enemy camp round a map objective, every\n"
+		"Round objective CLEAR ENEMY BASE: an enemy camp round a map objective, every\n"
 		"one of them killed before the round ends." },
 	{ "game.firefight_objective_data_link", _config_boolean, "true", NULL, _environment_value, _platform_all,
 		"Round objective DATA LINK: a King of the Hill hill turns on; held, with no\n"

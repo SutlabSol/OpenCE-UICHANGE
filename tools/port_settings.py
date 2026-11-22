@@ -4261,7 +4261,7 @@ FF_OBJECTIVES_SETUP_SCREENS = [
             "An enemy camp round a map objective: destroy its\\ngenerator before time runs out.",
             "Never this objective.",
         ]),
-        ("ffo_purge", "PURGE THE BASE:", OBJECTIVE_SWITCH, [
+        ("ffo_purge", "CLEAR ENEMY BASE:", OBJECTIVE_SWITCH, [
             "An enemy camp round a map objective: kill every\\none of them before the round ends.",
             "Never this objective.",
         ]),

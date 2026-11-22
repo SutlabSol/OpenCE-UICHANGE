@@ -138,6 +138,8 @@ and a flag's capture */
 #define FFO_PURGE_RADIUS 30.0f
 /* (Collect's deposit's skull, so many times its size) */
 #define FFO_DEPOSIT_SCALE 5.0f
+/* (a camp's ring on the ground, so many points: firefight_objectives_render) */
+#define FFO_RING_POINTS 48
 #define FFO_RESCUE_ARRIVE 14.0f
 #define FFO_CAPTURE_RADIUS 3.0f
 #define FFO_HILL_HEIGHT 3.5f
@@ -290,7 +292,7 @@ static long g_local_generator_scenery = NONE;
 
 static char const *const ffo_set_names[NUMBER_OF_FF_SET_OBJECTIVES] =
 {
-	"", "HIGH VALUE TARGET", "ENEMY GENERATOR", "PURGE THE BASE", "DATA LINK", "FLAG", "RESCUE", "ODDBALL",
+	"", "HIGH VALUE TARGET", "ENEMY GENERATOR", "CLEAR ENEMY BASE", "DATA LINK", "FLAG", "RESCUE", "ODDBALL",
 	"COLLECT", "BOMB"
 };
 
@@ -561,6 +563,47 @@ static boolean ffo_spot_near(real_point3d const *center, real inner, real outer,
 		{
 			*spot = ground;
 			return TRUE;
+		}
+	}
+	*spot = *center;
+	return FALSE;
+}
+
+/* a camp's spot: on the ground `inner` to `outer` from its middle, on
+ground walked to from it (the same walkable group: through a base's doors,
+round its walls, which a straight line from a flag inside it is not), not
+over a drop; FALSE (the middle itself) for none found */
+static boolean ffo_camp_spot(real_point3d const *center, real inner, real outer, real_point3d *spot)
+{
+	long group = firefight_objective_reach_group(center);
+	short tries;
+
+	for (tries = 0; tries < 32; tries++)
+	{
+		real angle = ffo_rand_range(0.0f, 2.0f * _pi);
+		real distance = ffo_rand_range(inner, MAX(inner, outer));
+		static real const heights[] = { 1.0f, 4.0f, 8.0f };
+		short height;
+
+		for (height = 0; height < (short)NUMBEROF(heights); height++)
+		{
+			real_point3d candidate = *center;
+			real_point3d ground;
+			long candidate_group;
+
+			candidate.x += cosine(angle) * distance;
+			candidate.y += sine(angle) * distance;
+			candidate.z += heights[height];
+			if (firefight_objective_ground(&candidate, &ground) == NONE || fabs(ground.z - center->z) > 10.0f)
+				continue;
+			candidate_group = firefight_objective_reach_group(&ground);
+			if (group != NONE && candidate_group != NONE ? candidate_group == group :
+				firefight_objective_reachable(center, &ground))
+			{
+				*spot = ground;
+				return TRUE;
+			}
+			break;
 		}
 	}
 	*spot = *center;
@@ -1915,6 +1958,9 @@ static boolean ffo_camp_start(short kind)
 	short defenders = purge ? (short)MIN(16, 10 + 3 * MAX(0, g.counted_count - 1)) :
 		(short)MIN(9, 5 + 2 * MAX(0, g.counted_count - 1));
 	short index;
+	short missed_spots = 0;
+	short taken = 0;
+	short made_vehicles = 0;
 
 	if (site == NONE)
 		return FALSE;
@@ -1947,12 +1993,14 @@ static boolean ffo_camp_start(short kind)
 		short rank = kind == _ff_set_objective_target || (index & 1) ? _firefight_objective_rank_heavy :
 			_firefight_objective_rank_regular;
 
-		ffo_spot_near(&center, 3.0f, radius * 0.75f, &spot);
+		if (!ffo_camp_spot(&center, 3.0f, radius * 0.75f, &spot))
+			missed_spots++;
 		ffo_unit_add(firefight_objective_spawn_enemy(&spot, ffo_rand_range(0.0f, 2.0f * _pi), rank), _ffo_role_defender);
 	}
 	/* (Purge's take the players' vehicles' spots in it too, those given
 	back once its vehicle there is destroyed; then the map's free spots) */
 	vehicles = purge ? firefight_objective_take_vehicle_spots(&center, radius, spots, facings, slots, FFO_MAX_VEHICLES) : 0;
+	taken = vehicles;
 	{
 		real_point3d free_spots[FFO_MAX_VEHICLES];
 		real free_facings[FFO_MAX_VEHICLES];
@@ -1976,9 +2024,33 @@ static boolean ffo_camp_start(short kind)
 	}
 	for (index = 0; index < vehicles; index++)
 	{
-		ffo_vehicle_add(firefight_objective_spawn_vehicle(&spots[index], facings[index], index == 0),
-			_ffo_role_defender, slots[index]);
+		long vehicle = firefight_objective_spawn_vehicle(&spots[index], facings[index], index == 0);
+
+		made_vehicles += vehicle != NONE;
+		ffo_vehicle_add(vehicle, _ffo_role_defender, slots[index]);
 	}
+	/* (each vehicle not had, two more on foot: Purge's whole count, which
+	no spot, a failed one or a faction with no drivers takes; the others'
+	failed ones) */
+	for (index = (purge ? FFO_MAX_VEHICLES : vehicles) - made_vehicles; index > 0; index--)
+	{
+		short extra;
+
+		for (extra = 0; extra < 2; extra++)
+		{
+			real_point3d spot;
+
+			if (!ffo_camp_spot(&center, 3.0f, radius * 0.75f, &spot))
+				missed_spots++;
+			ffo_unit_add(firefight_objective_spawn_enemy(&spot, ffo_rand_range(0.0f, 2.0f * _pi),
+				(extra & 1) ? _firefight_objective_rank_heavy : _firefight_objective_rank_regular), _ffo_role_defender);
+			defenders++;
+		}
+	}
+	error(_error_silent, "firefight objectives: %s camp at (%.1f %.1f %.1f), radius %.0f: %d defenders (%d at the "
+		"middle, no spot found), %d vehicle spots (%d of the players' taken), %d vehicles made",
+		ffo_set_names[kind], center.x, center.y, center.z, radius, (int)defenders, (int)missed_spots, (int)vehicles,
+		(int)taken, (int)made_vehicles);
 	g_view.set_total = ffo_units_alive(0, TRUE);
 	g_view.set_count = g_view.set_total;
 	g_view.set_target = ffo_absolute_of_object(g.target_unit);
@@ -2297,7 +2369,7 @@ static void ffo_units_update(void)
 				{
 					real_point3d spot;
 
-					ffo_spot_near(&g_view.set_site, 2.0f, g_view.set_radius * 0.6f, &spot);
+					ffo_camp_spot(&g_view.set_site, 2.0f, g_view.set_radius * 0.7f, &spot);
 					ffo_order_move(unit_index, &spot);
 					/* (sooner back while it is out) */
 					if (from_site > g_view.set_radius * 0.8f)
@@ -3287,11 +3359,33 @@ static void ffo_marks_update(void)
 	if (g_view.set_kind == _ff_set_objective_purge)
 	{
 		short marks = 0;
+		real distances[FF_OBJECTIVE_UNIT_MARKS];
 
-		for (index = 0; index < g.unit_count && marks < FF_OBJECTIVE_UNIT_MARKS; index++)
+		/* (more than it marks: the nearest a player) */
+		for (index = 0; index < g.unit_count; index++)
 		{
-			if (g.unit_roles[index] != _ffo_role_marine && ffo_living_unit(g.units[index]))
-				g_view.set_units[marks++] = ffo_absolute_of_object(g.units[index]);
+			struct object_datum *unit;
+			real distance;
+			short at;
+
+			if (g.unit_roles[index] == _ffo_role_marine || !ffo_living_unit(g.units[index]))
+				continue;
+			unit = object_get(g.units[index]);
+			distance = ffo_nearest_player_distance(&unit->object.position, NULL);
+			for (at = marks; at > 0 && distances[at - 1] > distance; at--)
+			{
+				if (at < FF_OBJECTIVE_UNIT_MARKS)
+				{
+					distances[at] = distances[at - 1];
+					g_view.set_units[at] = g_view.set_units[at - 1];
+				}
+			}
+			if (at >= FF_OBJECTIVE_UNIT_MARKS)
+				continue;
+			distances[at] = distance;
+			g_view.set_units[at] = ffo_absolute_of_object(g.units[index]);
+			if (marks < FF_OBJECTIVE_UNIT_MARKS)
+				marks++;
 		}
 	}
 	/* (Collect's skulls a player dropped) */
@@ -3320,12 +3414,15 @@ void firefight_objectives_render(void)
 	struct game_globals *globals = scenario_get_game_globals();
 	struct game_globals_multiplayer_information *information;
 	struct ffo_hill const *hill = NULL;
-	real_point3d points[FFO_HILL_POINTS];
+	real_point3d points[FFO_RING_POINTS];
 	real best = 4.0f * 4.0f;
 	short count;
 	short index;
 
-	if (!firefight_active() || g_view.set_kind != _ff_set_objective_data_link ||
+	boolean camp = g_view.set_kind == _ff_set_objective_target || g_view.set_kind == _ff_set_objective_generator ||
+		g_view.set_kind == _ff_set_objective_purge;
+
+	if (!firefight_active() || (g_view.set_kind != _ff_set_objective_data_link && !camp) ||
 		g_view.set_state != _ff_objective_running || !globals || globals->multiplayer_information.count < 1)
 	{
 		return;
@@ -3334,8 +3431,46 @@ void firefight_objectives_render(void)
 		struct game_globals_multiplayer_information);
 	if (information->hill_shader.index == NONE)
 		return;
+	/* (a camp's: a ring of its size on the ground round it, each point's
+	height the ground's there, found once for each camp) */
+	if (camp)
+	{
+		static real_point3d ring[FFO_RING_POINTS];
+		static real_point3d ring_site;
+		static real ring_radius = 0.0f;
+
+		if (ring_radius != g_view.set_radius || distance3d(&ring_site, &g_view.set_site) > 0.1f)
+		{
+			ring_site = g_view.set_site;
+			ring_radius = g_view.set_radius;
+			for (index = 0; index < FFO_RING_POINTS; index++)
+			{
+				real angle = 2.0f * _pi * (real)index / (real)FFO_RING_POINTS;
+				static real const heights[] = { 1.0f, 5.0f, 10.0f };
+				short height;
+
+				ring[index] = g_view.set_site;
+				ring[index].x += cosine(angle) * g_view.set_radius;
+				ring[index].y += sine(angle) * g_view.set_radius;
+				for (height = 0; height < (short)NUMBEROF(heights); height++)
+				{
+					real_point3d from = ring[index];
+					real_point3d ground;
+
+					from.z = g_view.set_site.z + heights[height];
+					if (firefight_objective_ground(&from, &ground) != NONE)
+					{
+						ring[index].z = ground.z + 0.05f;
+						break;
+					}
+				}
+			}
+		}
+		count = FFO_RING_POINTS;
+		csmemcpy(points, ring, sizeof(ring));
+	}
 	/* (the hill the view's middle is: the host picked it) */
-	for (index = 0; index < g.hill_count; index++)
+	for (index = 0; !camp && index < g.hill_count; index++)
 	{
 		real dx = g.hills[index].center.x - g_view.set_site.x;
 		real dy = g.hills[index].center.y - g_view.set_site.y;
@@ -3346,7 +3481,10 @@ void firefight_objectives_render(void)
 			hill = &g.hills[index];
 		}
 	}
-	if (hill && hill->point_count >= 3)
+	if (camp)
+	{
+	}
+	else if (hill && hill->point_count >= 3)
 	{
 		count = hill->point_count;
 		for (index = 0; index < count; index++)

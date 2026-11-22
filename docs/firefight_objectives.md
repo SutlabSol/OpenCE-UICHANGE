@@ -404,7 +404,7 @@ Contribution by objective **(proposed)**:
   apart at most). Firing a vehicle's or a turret's gun, or throwing any
   grenade, breaks it too.
 - Purge the base: each of the base's enemies within 30 units of the player
-  is marked PURGE.
+  is marked ELIMINATE (CLEAR ENEMY BASE since 2026-11-22; each vehicle it doesn't make is 2 more enemies).
 - High value target, Purge and Rescue take a flag's spot (a base, with its
   cover) when the map has flags; the camp's units defend it: no charging,
   sent back once past 0.8 of its radius, fighting or not.

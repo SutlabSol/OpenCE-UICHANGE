@@ -1610,7 +1610,7 @@ static void draw_objectives(
 			if (distance3d(&head, &from) > FF_OBJECTIVE_UNIT_MARK_DISTANCE)
 				continue;
 			head.z += object->object.bounding_sphere_radius * 1.3f + 0.3f;
-			draw_world_navpoint(font_index, line_height, scale, &head, "PURGE", FF_HUD_WARN_EDGE, &red, FALSE);
+			draw_world_navpoint(font_index, line_height, scale, &head, "ELIMINATE", FF_HUD_WARN_EDGE, &red, FALSE);
 		}
 		break;
 	}
