@@ -22789,8 +22789,8 @@ static struct gametype_option const gametype_options[] =
 	OBJECTIVES: tools/port_settings.py's FF_OBJECTIVES_SETUP_SCREENS;
 	firefight_objectives.c) */
 	{ "ffo_round_enabled_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objectives_round", { "true", "false" } },
-	{ "ffo_round_chance_spinner", _option_setting, 0, 0, 5, { 0 }, "game.firefight_objectives_round_chance",
-		{ "10", "25", "50", "75", "100" } },
+	{ "ffo_round_chance_spinner", _option_setting, 0, 0, 10, { 0 }, "game.firefight_objectives_round_chance",
+		{ "10", "20", "30", "40", "50", "60", "70", "80", "90", "100" } },
 	{ "ffo_kills_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_kills", { "true", "false" } },
 	{ "ffo_no_deaths_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_no_deaths", { "true", "false" } },
 	{ "ffo_shields_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_shields", { "true", "false" } },
@@ -22802,7 +22802,8 @@ static struct gametype_option const gametype_options[] =
 	{ "ffo_weapon_only_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_weapon_only",
 		{ "true", "false" } },
 	{ "ffo_set_enabled_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objectives_set", { "true", "false" } },
-	{ "ffo_set_chance_spinner", _option_setting, 0, 0, 4, { 0 }, "game.firefight_objectives_set_chance", { "25", "50", "80", "100" } },
+	{ "ffo_set_chance_spinner", _option_setting, 0, 0, 10, { 0 }, "game.firefight_objectives_set_chance",
+		{ "10", "20", "30", "40", "50", "60", "70", "80", "90", "100" } },
 	{ "ffo_target_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_target", { "true", "false" } },
 	{ "ffo_generator_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_generator", { "true", "false" } },
 	{ "ffo_purge_spinner", _option_setting, 0, 0, 2, { 0 }, "game.firefight_objective_purge", { "true", "false" } },

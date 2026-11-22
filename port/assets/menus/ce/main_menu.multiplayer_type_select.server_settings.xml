@@ -1462,9 +1462,14 @@
 	</widget>
 	<strings name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/var_ffo_round_chance">
 		<string text="10%"/>
-		<string text="25%"/>
+		<string text="20%"/>
+		<string text="30%"/>
+		<string text="40%"/>
 		<string text="50%"/>
-		<string text="75%"/>
+		<string text="60%"/>
+		<string text="70%"/>
+		<string text="80%"/>
+		<string text="90%"/>
 		<string text="100%"/>
 	</strings>
 	<widget name="main_menu/multiplayer_type_select/server_settings/ff_round_objectives/op_ffo_kills" width="512" height="26" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
@@ -1591,6 +1596,11 @@
 		<string text="How likely each wave is to have an objective."/>
 		<string text="How likely each wave is to have an objective."/>
 		<string text="How likely each wave is to have an objective."/>
+		<string text="How likely each wave is to have an objective."/>
+		<string text="How likely each wave is to have an objective."/>
+		<string text="How likely each wave is to have an objective."/>
+		<string text="How likely each wave is to have an objective."/>
+		<string text="How likely each wave is to have an objective."/>
 		<string text="So many kills of a kind: headshots, melee,\ngrenades, splatters or a weapon class."/>
 		<string text="Never this objective."/>
 		<string text="The wave finished with no player dying. Anyone's\ndeath fails it for everyone."/>
@@ -1665,9 +1675,15 @@
 		<on event="left_mouse" run="mouse spinner 1wide click"/>
 	</widget>
 	<strings name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/var_ffo_set_chance">
-		<string text="25%"/>
+		<string text="10%"/>
+		<string text="20%"/>
+		<string text="30%"/>
+		<string text="40%"/>
 		<string text="50%"/>
+		<string text="60%"/>
+		<string text="70%"/>
 		<string text="80%"/>
+		<string text="90%"/>
 		<string text="100%"/>
 	</strings>
 	<widget name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/op_ffo_target" width="512" height="23" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
@@ -1803,6 +1819,12 @@
 	<strings name="main_menu/multiplayer_type_select/server_settings/ff_set_objectives/cap_ff_set_objectives">
 		<string text="A round can have an objective of those on below,\nfrom its 1st or 2nd wave to its end."/>
 		<string text="No round objectives: Firefight as it is."/>
+		<string text="How likely each round is to have an objective."/>
+		<string text="How likely each round is to have an objective."/>
+		<string text="How likely each round is to have an objective."/>
+		<string text="How likely each round is to have an objective."/>
+		<string text="How likely each round is to have an objective."/>
+		<string text="How likely each round is to have an objective."/>
 		<string text="How likely each round is to have an objective."/>
 		<string text="How likely each round is to have an objective."/>
 		<string text="How likely each round is to have an objective."/>

@@ -4201,8 +4201,8 @@ BOTS_SETUP = ("bots_options", "BOTS",
 # map Server Setup plays cannot play (menu_functions.c's
 # ff_objectives_unavailable_help)
 OBJECTIVE_SWITCH = ["ON", "OFF"]
-FF_ROUND_CHANCES = [10, 25, 50, 75, 100]
-FF_SET_CHANCES = [25, 50, 80, 100]
+FF_ROUND_CHANCES = list(range(10, 101, 10))
+FF_SET_CHANCES = list(range(10, 101, 10))
 FF_OBJECTIVES_SETUP_SCREENS = [
     ("ff_round_objectives", "WAVE OBJECTIVES",
      "Optional challenges for a wave, beside the fight.\\nKept for every map.", [
