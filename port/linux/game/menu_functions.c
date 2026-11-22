@@ -2030,11 +2030,14 @@ static void map_import_tell(void)
 come (mcc_import.c), the import's screen opened when it asks about a
 package on disk, and its report taken when it is done (the lists' MCC
 maps scanned again, and Custom Edition's) */
+static void social_invite_join_update(void);
+
 void map_import_update(void)
 {
 	enum mcc_import_state state = mcc_import_state();
 	unsigned long now = system_milliseconds();
 
+	social_invite_join_update();
 	map_import_page_update();
 	if (state == MCC_IMPORT_IDLE)
 	{
@@ -19502,6 +19505,50 @@ static boolean social_screen_join(struct widget_instance *widget, short choice, 
 	social_menu_join_begin(choice);
 	multiplayer.mode = _multiplayer_mode_direct_link;
 	return ui_widget_port_open(widget, JOIN_GAME_SCREEN_NAME, widget_deleted);
+}
+
+/* every frame (map_import_update): the chat's JOIN on an invite line
+(social_menu_invite_join), from the menus alone: Direct Link, or the server
+browser for a public game with a password, opened over the main menu as a
+JOIN GAME row opens them */
+static void social_invite_join_update(void)
+{
+	short choice = social_menu_invite_join_take();
+	long main_menu;
+	char logged[96];
+
+	if (choice == _social_menu_stays)
+		return;
+	if (!main_menu_is_active() || social_in_any_game())
+	{
+		social_chat_notice_text("Leave your game first, then press JOIN again");
+		return;
+	}
+	main_menu = tag_loaded(DAILY_WIDGET_DEFINITION_TAG, MAIN_MENU_NAME);
+	if (choice == _social_menu_join_listed)
+	{
+		snprintf(lobby_browser.seek_key, sizeof(lobby_browser.seek_key), "%s", social_menu_join_host_key());
+		lobby_browser.seek_time = system_milliseconds();
+		lobby_browser.seek_hidden = FALSE;
+		platform_log("social: finding an invite's game in the server browser");
+		social_menu_join_begin(choice);
+		multiplayer.mode = _multiplayer_mode_server_browser;
+	}
+	else
+	{
+		if (!p2p_join_invite(social_menu_join_invite()))
+		{
+			social_chat_notice_text("That invite could not be joined: internet play (network.online) is off, or it is old");
+			return;
+		}
+		platform_log("social: joining an invite from the chat (%s)", p2p_invite_log_text(social_menu_join_invite(),
+			logged, sizeof(logged)));
+		social_menu_join_begin(choice);
+		multiplayer.mode = _multiplayer_mode_direct_link;
+	}
+	ui_play_audio_feedback_sound(SOUND_FORWARD);
+	if (!ui_widget_load_by_name_or_tag(JOIN_GAME_SCREEN_NAME, NONE, NULL, NONE, main_menu, NONE, NONE))
+		social_menu_join_end("The join screen could not be opened.");
 }
 
 /* "port social choose" (A on a row): JOIN GAME joins the friend's invite

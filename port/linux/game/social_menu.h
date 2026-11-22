@@ -221,6 +221,8 @@ enum
 	_social_menu_act_mute,
 	_social_menu_act_unmute,
 	_social_menu_act_report,
+	_social_menu_act_block,
+	_social_menu_act_unblock,
 };
 
 /* a friend request, a mute, an unmute or a report (as from chat) of the
@@ -244,5 +246,19 @@ short social_menu_profile_card_draw(char const *code, short x0, short y0, short 
 /* whether the player is a friend, and muted, as the server last said */
 boolean social_menu_is_friend(char const *code);
 boolean social_menu_is_muted(char const *code);
+
+/* (the chat's commands: /add, /unmute, /unblock NAME) a friend's, or a
+player muted or blocked's, code by their name (ASCII, any case; a name
+starting so when no name is it): 1 found, 0 none, -1 several */
+short social_menu_friend_by_name(char const *name, char *code, long code_size, char *found, long found_size);
+short social_menu_moderated_by_name(char const *name, char *code, long code_size, char *found, long found_size);
+
+/* (the chat's JOIN, an invite line's) the game of an invite (its link, or
+a public password game's host key) to join from the menus: taken by
+menu_functions.c the next frame (social_menu_invite_join_take: _join,
+_join_listed, or _stays for none), which shows Direct Link or the server
+browser as a JOIN GAME row does */
+void social_menu_invite_join(char const *name, char const *link, char const *host_key);
+short social_menu_invite_join_take(void);
 
 #endif

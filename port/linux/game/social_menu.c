@@ -4791,8 +4791,8 @@ void social_menu_player_act(
 	char const *name,
 	short action)
 {
-	static char const *const actions[] = { NULL, "mute", "unmute", "report" };
-	static short const kinds[] = { _row_friend_add, _row_mute, _row_unmute, _row_reason };
+	static char const *const actions[] = { NULL, "mute", "unmute", "report", "block", "unblock" };
+	static short const kinds[] = { _row_friend_add, _row_mute, _row_unmute, _row_reason, _row_block, _row_unblock };
 
 	if (action < 0 || action >= (short)NUMBEROF(kinds))
 		return;
@@ -4870,6 +4870,118 @@ boolean social_menu_is_friend(
 			return TRUE;
 	}
 	return FALSE;
+}
+
+/* whether a name is (or, prefix, starts with) the text typed, in any case */
+static boolean name_matches(
+	char const *name,
+	char const *typed,
+	boolean prefix)
+{
+	for (; *typed; name++, typed++)
+	{
+		char a = *name >= 'A' && *name <= 'Z' ? (char)(*name - 'A' + 'a') : *name;
+		char b = *typed >= 'A' && *typed <= 'Z' ? (char)(*typed - 'A' + 'a') : *typed;
+
+		if (!*name || a != b)
+			return FALSE;
+	}
+	return prefix || !*name;
+}
+
+/* a person of the list by name: exactly (any case), else the one whose
+name starts so (several: -1) */
+static short person_by_name(
+	struct social_menu_person const *people,
+	short count,
+	char const *name,
+	char *code,
+	long code_size,
+	char *found,
+	long found_size)
+{
+	short starts = NONE;
+	short starts_count = 0;
+	short index;
+
+	if (!name[0])
+		return 0;
+	for (index = 0; index < count; index++)
+	{
+		if (!people[index].code[0])
+			continue;
+		if (name_matches(people[index].name, name, FALSE))
+		{
+			snprintf(code, (size_t)code_size, "%s", people[index].code);
+			snprintf(found, (size_t)found_size, "%s", people[index].name);
+			return 1;
+		}
+		if (name_matches(people[index].name, name, TRUE))
+		{
+			starts = index;
+			starts_count++;
+		}
+	}
+	if (starts_count > 1)
+		return -1;
+	if (starts == NONE)
+		return 0;
+	snprintf(code, (size_t)code_size, "%s", people[starts].code);
+	snprintf(found, (size_t)found_size, "%s", people[starts].name);
+	return 1;
+}
+
+short social_menu_friend_by_name(
+	char const *name,
+	char *code,
+	long code_size,
+	char *found,
+	long found_size)
+{
+	return person_by_name(social_menu.friends, social_menu.friend_count, name, code, code_size, found, found_size);
+}
+
+short social_menu_moderated_by_name(
+	char const *name,
+	char *code,
+	long code_size,
+	char *found,
+	long found_size)
+{
+	return person_by_name(social_menu.moderated, social_menu.moderated_count, name, code, code_size, found,
+		found_size);
+}
+
+/* the chat's JOIN: taken the next frame by menu_functions.c */
+static short social_menu_invite_pending = 0;
+
+void social_menu_invite_join(
+	char const *name,
+	char const *link,
+	char const *host_key)
+{
+	social_menu.join_invite[0] = social_menu.join_host_key[0] = 0;
+	snprintf(social_menu.join_name, sizeof(social_menu.join_name), "%s", name && name[0] ? name : "that player");
+	social_menu_invite_pending = _social_menu_stays;
+	if (link && link[0])
+	{
+		snprintf(social_menu.join_invite, sizeof(social_menu.join_invite), "%s", link);
+		social_menu_invite_pending = _social_menu_join;
+	}
+	else if (host_key && host_key[0])
+	{
+		snprintf(social_menu.join_host_key, sizeof(social_menu.join_host_key), "%s", host_key);
+		social_menu_invite_pending = _social_menu_join_listed;
+	}
+}
+
+short social_menu_invite_join_take(
+	void)
+{
+	short kind = social_menu_invite_pending;
+
+	social_menu_invite_pending = _social_menu_stays;
+	return kind;
 }
 
 boolean social_menu_is_muted(
