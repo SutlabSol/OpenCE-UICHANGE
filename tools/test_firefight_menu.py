@@ -302,8 +302,12 @@ def test_vehicles_are_a_game_s_server_setup_row_not_the_variant_s():
     keys = [row[0] for row in port_settings.FIREFIGHT_SETUP_ROWS]
     base = int(re.search(r"#define FF_PLAYER_SCALE_HELP (\d+)", MENU_C).group(1))
     assert base + keys.index("ff_vehicles") == int(re.search(r"#define FF_VEHICLES_HELP (\d+)", MENU_C).group(1))
+    # (on Server Setup's hub, after GAME SETTINGS, with OBJECTIVE SETTINGS)
     members = dict((section[0], section[3]) for section in port_settings.SERVER_SETUP_SECTIONS)["game_settings"]
-    assert "ff_vehicles" in members
+    assert "ff_vehicles" not in members and "ff_round_objectives" not in members
+    assert port_settings.HUB_FIREFIGHT_ROWS == ["ff_vehicles", "objective_settings"]
+    assert port_settings.OBJECTIVE_SETUP_SECTION[3] == ["ff_round_objectives", "ff_set_objectives"]
+    assert "#define OBJECTIVE_SETTINGS_HELP 43" in MENU_C
     assert "_firefight_vehicle_spawns_all = 0," in (ROOT / "port/linux/include/halo_firefight.h").read_text()
     assert "byte firefight_vehicle_spawns;" in ENGINE_H
     profile = (ROOT / "source/saved games/playlist_profile.c").read_text()

@@ -474,6 +474,9 @@ variant's rate for a weapon of another kind held the trigger down without
 end (a fuel rod's 0 on a plasma pistol: overcharge after overcharge), or
 pulled it 6 times a second (an assault rifle's on a rocket launcher) */
 #define ACTOR_FOREIGN_WEAPON_AUTOMATIC_RATE 8.0f
+/* port: Firefight's enemies fire less often than their tags say
+(firefight.c's firefight_enemy_fire_pacing) */
+real firefight_enemy_fire_pacing(short team_index);
 static real actor_combat_rate_of_fire(
 	long actor_index,
 	struct actor_variant_definition const *firing_variant_definition)
@@ -656,6 +659,8 @@ static void actor_start_pause(
 	{
 		burst_separation *= 1.7f;
 	}
+	/* port: Firefight's enemies, longer between bursts */
+	burst_separation /= firefight_enemy_fire_pacing(actor->meta.team_index);
 
 	actor->control.fire_state_timer = (short)(burst_separation*TICKS_PER_SECOND);
 
@@ -1303,6 +1308,8 @@ static void actor_start_burst(
 			{
 				burst_duration *= 0.6f;
 			}
+			/* port: Firefight's enemies, shorter bursts */
+			burst_duration *= firefight_enemy_fire_pacing(actor->meta.team_index);
 		}
 		actor->control.fire_state_timer = (short)(burst_duration*TICKS_PER_SECOND);
 	}
@@ -2447,6 +2454,8 @@ void actor_combat_update(
 					{
 						rate_of_fire *= firing_pattern->rate_of_fire_modifier;
 					}
+					/* port: Firefight's enemies, more slowly */
+					rate_of_fire *= firefight_enemy_fire_pacing(actor->meta.team_index);
 					actor_debug_info->shooting_rof = rate_of_fire;
 					trigger_delay = (short)fast_ftol(TICKS_PER_SECOND/rate_of_fire);
 					actor->control.trigger_delay_timer = MAX(2, trigger_delay);

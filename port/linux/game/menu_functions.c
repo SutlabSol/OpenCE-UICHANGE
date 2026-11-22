@@ -15681,7 +15681,12 @@ ENEMY AI, MAP WEAPONS and MAP VEHICLES) */
 last: their helps; server_settings_objectives_update) */
 #define FF_ROUND_OBJECTIVES_HELP 41
 #define FF_SET_OBJECTIVES_HELP 42
+/* (the hub's OBJECTIVE SETTINGS, a Firefight game's, after GAME SETTINGS and
+VEHICLES: tools/port_settings.py's OBJECTIVE_SETUP_SECTION, its help the
+list's last) */
+#define OBJECTIVE_SETTINGS_HELP 43
 static void server_settings_objectives_update(struct widget_instance *list);
+static boolean server_settings_firefight(void);
 static char const *server_settings_map_name(void);
 static void firefight_skulls_summary(char *text, unsigned int size);
 static boolean gametype_setup_floodfection(void);
@@ -16039,6 +16044,32 @@ static void server_settings_sections_update(struct widget_instance *list)
 	text_field_show(named(list, "fork_settings_value", 0), value, FALSE);
 	visible_set(named(list, "op_map_content", 0), server_settings_map_content_summary(value, sizeof(value)));
 	text_field_show(named(list, "map_content_value", 0), value, FALSE);
+	/* (OBJECTIVE SETTINGS, a Firefight game's: which of the two are on,
+	"WAVE 50%, ROUND OFF") */
+	{
+		struct widget_instance *row = named(list, "op_objective_settings", 0);
+		boolean firefight = server_settings_firefight();
+
+		visible_set(row, firefight);
+		if (row && firefight)
+		{
+			char wave[16];
+			char round[16];
+
+			if (config_boolean("game.firefight_objectives_round"))
+				snprintf(wave, sizeof(wave), "%ld%%", (long)config_integer("game.firefight_objectives_round_chance"));
+			else
+				snprintf(wave, sizeof(wave), "OFF");
+			if (config_boolean("game.firefight_objectives_set"))
+				snprintf(round, sizeof(round), "%ld%%", (long)config_integer("game.firefight_objectives_set_chance"));
+			else
+				snprintf(round, sizeof(round), "OFF");
+			snprintf(value, sizeof(value), "WAVE %s, ROUND %s", wave, round);
+			text_field_show(named(list, "objective_settings_value", 0), value, FALSE);
+			if (help && list->focused_child == row)
+				help->parameters.text_box.string_list_index = OBJECTIVE_SETTINGS_HELP;
+		}
+	}
 }
 
 /* "server settings update" */

@@ -837,6 +837,9 @@ struct game_variant_options;
 extern struct game_variant global_variant;
 boolean firefight_active(void);
 real firefight_player_stun_scale(void);
+/* (actor_combat.c) Firefight's enemies' firing, of their tags': their rate
+and bursts by it, their pauses by its inverse (1: as they are) */
+real firefight_enemy_fire_pacing(short team_index);
 /* how far an actor walks a straight line on the level towards a point (at
 most most units, no drop over 1.2 units, no kill volume), where it stops into
 end; stopped at an edge with ground to land on beyond it, TRUE into edge and
@@ -1415,6 +1418,12 @@ enum
 
 #define FF_OBJECTIVE_NOTICE_LENGTH 62
 
+/* (the view's marks: firefight_objectives_view's round_marks, set_units and
+set_drops) */
+#define FF_OBJECTIVE_WEAPON_MARKS 8
+#define FF_OBJECTIVE_UNIT_MARKS 16
+#define FF_OBJECTIVE_DROP_MARKS 8
+
 /* what every machine shows of the objectives: the host's, sent in
 Firefight's state as it is (its layout is the state's: change it only at its
 end, with the mod version) */
@@ -1458,6 +1467,15 @@ struct firefight_objectives_view
 	char round_label[FF_OBJECTIVE_LABEL_LENGTH + 2];
 	/* (Collect's: what each player carries, by absolute index) */
 	byte carried[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
+	/* (mod version 112) the objectives' marks, absolute object indices
+	(NONE: none): Use X only's weapons lying about (a dead player's, a pod's),
+	the camp's enemies (Purge's, shown near), Collect's skulls a player
+	dropped, and its deposit's skull */
+	short round_marks[FF_OBJECTIVE_WEAPON_MARKS];
+	short set_units[FF_OBJECTIVE_UNIT_MARKS];
+	short set_drops[FF_OBJECTIVE_DROP_MARKS];
+	short deposit_object;
+	short marks_pad;
 };
 
 /* the objectives as this machine shows them, and an object of the view's
@@ -1528,6 +1546,14 @@ long firefight_objective_ground(real_point3d const *point, real_point3d *ground)
 boolean firefight_objective_reachable(real_point3d const *from, real_point3d const *to);
 long firefight_objective_reach_group(real_point3d const *point);
 void firefight_objective_direct_at(long actor_index, long target_unit_index);
+/* (an objective's camp's unit) held where it is put: never charging the
+players, fighting from its camp (FALSE: as any) */
+void firefight_objective_hold_ground(long actor_index, boolean hold);
+/* a harmless fire on this machine alone about a point (Collect's deposit) */
+void firefight_objective_fire_effect(real_point3d const *position);
+/* (Use X only's) a drop of one weapon, a pod of it for each of the players
+whose absolute indices `players` has */
+void firefight_spawn_ordnance_weapon_for(unsigned long const *players, short words, long weapon_tag);
 /* an ordnance drop for some players alone (their absolute indices' bits);
 one of a single weapon for every player, and that weapon chosen */
 void firefight_spawn_ordnance_drop_for(unsigned long const *players, short words);

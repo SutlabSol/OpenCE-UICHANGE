@@ -231,6 +231,11 @@ altis\scenery\capsule\capsule (a weapon spawner, a health pack in it), which a
 level plays in place of the props' of that name */
 #define FF_POD_TAG "firefight\\props\\drop_area_pod"
 #define FF_POD_FALLBACK_TAG "scenery\\c_storage\\c_storage"
+/* an ammo crate's pod: the game's resupply rack (the props', weapon_racks.c's),
+which any player by it refills at with action for as long as it stands; a
+drop has one at most, everyone's. Without the props, the pod as the others,
+the weapon in hand refilled by walking into it, once */
+#define FF_POD_RACK_TAG "firefight\\props\\weapon_rack_resupply"
 /* the capsule stands on its end: its model lies along its x axis, from its
 origin at its base (x 0.14) to its top (x -1.0), its open side +z */
 #define FF_POD_CAPSULE_BASE 0.141f
@@ -2650,6 +2655,10 @@ static void spawn_insertion_beacon_effect(
 	skulls_effect_harmless = FALSE;
 }
 
+/* Firefight's enemies' firing range (world units), of their variant's own */
+#define FF_ENEMY_FIRING_RANGE_MIN 12.0f
+#define FF_ENEMY_FIRING_RANGE_MAX 25.0f
+
 static void patch_actor_for_firefight_pursuit(
 	struct actor_definition *actor_def,
 	struct actor_variant_definition *variant_def)
@@ -2691,11 +2700,13 @@ static void patch_actor_for_firefight_pursuit(
 
 	if (variant_def)
 	{
-		if (variant_def->ranged_combat.maximum_firing_range < 25.0f ||
-			variant_def->ranged_combat.maximum_firing_range > 45.0f)
-		{
-			variant_def->ranged_combat.maximum_firing_range = 35.0f;
-		}
+		/* (their own range, within reason: 35 for all of them had the
+		grunts' pistols firing from across the map; a sniper's no farther
+		than a rifle's) */
+		if (variant_def->ranged_combat.maximum_firing_range <= 0.0f)
+			variant_def->ranged_combat.maximum_firing_range = 18.0f;
+		variant_def->ranged_combat.maximum_firing_range = PIN(variant_def->ranged_combat.maximum_firing_range,
+			FF_ENEMY_FIRING_RANGE_MIN, FF_ENEMY_FIRING_RANGE_MAX);
 		if (variant_def->ranged_combat.modified_vision_range < 350.0f)
 			variant_def->ranged_combat.modified_vision_range = 350.0f;
 		if (variant_def->ranged_combat.combat_range_lower_bound > 1.5f ||
@@ -5980,6 +5991,8 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 		struct data_iterator iterator;
 		struct player_datum *player;
 		short order = 0;
+		boolean rack = tag_loaded('scen', FF_POD_RACK_TAG) != NONE;
+		boolean ammo_crate_rolled = FALSE;
 
 		ordnance_pools_build(regular, &regular_count, heavy_pool, &heavy_count);
 		for (i = 0; i < ff_custom_weapon_count; i++)
@@ -6033,8 +6046,12 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 					ordnance_roll(FF_ORDNANCE_HEAVY_PERCENT),
 					regular, regular_count, heavy_pool, heavy_count, custom, custom_count));
 			}
-			if (ordnance_roll(odds->ammo_crate))
-				ordnance_roll_add(&roll, _ff_pod_kind_ammo_crate, owner, NONE);
+			/* (the rack: one a drop, for everyone) */
+			if (ordnance_roll(odds->ammo_crate) && !(rack && ammo_crate_rolled))
+			{
+				ordnance_roll_add(&roll, _ff_pod_kind_ammo_crate, rack ? (byte)FIREFIGHT_ORDNANCE_POD_ANYONE : owner, NONE);
+				ammo_crate_rolled = TRUE;
+			}
 			if (ordnance_roll(odds->overshield))
 				ordnance_roll_add(&roll, _ff_pod_kind_overshield, owner, shield_tag);
 			/* (Give & Take: a health pack is never taken, players.c) */
@@ -6053,8 +6070,8 @@ void firefight_spawn_ordnance_drop(boolean heavy_anti_armor)
 		for (i = 0; i < roll.count; i++)
 		{
 			g_pod_contents[i] = roll.tags[i];
-			g_pod_touch[i] = roll.kinds[i] == _ff_pod_kind_ammo_crate ||
-				(roll.kinds[i] != _ff_pod_kind_weapon && roll.tags[i] == NONE);
+			g_pod_touch[i] = (roll.kinds[i] == _ff_pod_kind_ammo_crate && !rack) ||
+				(roll.kinds[i] != _ff_pod_kind_weapon && roll.kinds[i] != _ff_pod_kind_ammo_crate && roll.tags[i] == NONE);
 			ff_state.ordnance_pod_kinds[i] = roll.kinds[i];
 			ff_state.ordnance_pod_owners[i] = roll.owners[i];
 		}
@@ -6164,6 +6181,24 @@ long firefight_objective_ordnance_weapon(long const *avoid, short avoid_count)
 			candidates[count++] = tag;
 	}
 	return count ? candidates[spawner_rand() % (unsigned long)count] : NONE;
+}
+
+/* (firefight_objectives.c's Use X only, a player without its weapon and none
+of it lying about) a pod of the weapon for each of the players alone */
+void firefight_spawn_ordnance_weapon_for(unsigned long const *players, short words, long weapon_tag)
+{
+	short word;
+
+	if (weapon_tag == NONE)
+		return;
+	csmemset(g_ordnance_players, 0, sizeof(g_ordnance_players));
+	for (word = 0; word < words && word < (short)NUMBEROF(g_ordnance_players); word++)
+		g_ordnance_players[word] = players[word];
+	g_ordnance_players_only = TRUE;
+	g_ordnance_forced_weapon = weapon_tag;
+	firefight_spawn_ordnance_drop(FALSE);
+	g_ordnance_forced_weapon = NONE;
+	g_ordnance_players_only = FALSE;
 }
 
 void firefight_spawn_ordnance_drop_for(unsigned long const *players, short words)
@@ -6789,6 +6824,14 @@ static real pod_yaw(short pod)
 faster from its height to the ground, turned as on every machine. The
 capsule stands on its base (its model's x down), its open side the way it
 is turned (its model's z); the crate lies as it is made */
+/* (an ammo crate's pod the rack, when the level has it: FF_POD_RACK_TAG) */
+static long pod_rack_tag(short pod)
+{
+	if (pod < 0 || pod >= FIREFIGHT_MAX_ORDNANCE_PODS || ff_state.ordnance_pod_kinds[pod] != _ff_pod_kind_ammo_crate)
+		return NONE;
+	return tag_loaded('scen', FF_POD_RACK_TAG);
+}
+
 static void pod_position_at(short pod, long elapsed, real_point3d *position, real_vector3d *forward, real_vector3d *up)
 {
 	real t = PIN((real)elapsed / (real)FF_POD_FALL_TICKS, 0.0f, 1.0f);
@@ -6796,7 +6839,8 @@ static void pod_position_at(short pod, long elapsed, real_point3d *position, rea
 
 	*position = ff_state.ordnance_pod_positions[pod];
 	position->z += g_pod_fall_heights[pod] * (1.0f - t * t);
-	if (g_pod_capsule)
+	/* (the rack stands as Forge places it) */
+	if (g_pod_capsule && pod_rack_tag(pod) == NONE)
 	{
 		position->z += FF_POD_CAPSULE_BASE;
 		forward->i = 0.0f;
@@ -6964,7 +7008,7 @@ void firefight_ordnance_pod_update(void)
 				g_pod_phase[pod] = _pod_phase_gone;
 				continue;
 			}
-			pod_let_go(pod, pod_elapsed, g_pod_shown_tag);
+			pod_let_go(pod, pod_elapsed, pod_rack_tag(pod) != NONE ? pod_rack_tag(pod) : g_pod_shown_tag);
 			g_pod_phase[pod] = _pod_phase_falling;
 		}
 		if (g_pod_phase[pod] == _pod_phase_falling)
@@ -10100,6 +10144,69 @@ enemy is */
 void firefight_objective_direct_at(long actor_index, long target_unit_index)
 {
 	direct_actor_toward_unit(actor_index, target_unit_index);
+}
+
+/* a camp's unit kept to it: defending (no charge at what it sees, whatever
+its actor's ALWAYS CHARGE, which Firefight's pursuit sets), its orders
+firefight_objectives.c's moves back into the camp */
+void firefight_objective_hold_ground(long actor_index, boolean hold)
+{
+	struct actor_datum *actor = actor_index != NONE ? actor_try_and_get(actor_index) : NULL;
+
+	if (!actor)
+		return;
+	actor->external_orders.defending = hold;
+	actor->external_orders.disable_charging = hold;
+	if (hold)
+		actor->emotions.forced_to_charge = FALSE;
+}
+
+/* Collect's deposit's fire: the first the map has of a burning effect (the
+game's names, else any effect named so), harmless as the pods' are; none
+found, the teleport's glow */
+static long g_objective_fire_tag = NONE;
+static long g_objective_fire_scenario = NONE;
+
+void firefight_objective_fire_effect(real_point3d const *position)
+{
+	static char const *const names[] =
+	{
+		"effects\\burning large", "effects\\burning medium", "effects\\burning small", "effects\\burning",
+		"weapons\\flamethrower\\effects\\flame", "scenery\\emitters\\burning_flame\\effects\\burning",
+	};
+
+	if (!position)
+		return;
+	if (g_objective_fire_scenario != global_scenario_index)
+	{
+		struct tag_iterator iterator;
+		long tag_index;
+		short i;
+
+		g_objective_fire_scenario = global_scenario_index;
+		g_objective_fire_tag = NONE;
+		for (i = 0; i < (short)NUMBEROF(names) && g_objective_fire_tag == NONE; i++)
+			g_objective_fire_tag = tag_loaded(EFFECT_DEFINITION_TAG, names[i]);
+		tag_iterator_new(&iterator, EFFECT_DEFINITION_TAG);
+		while (g_objective_fire_tag == NONE && (tag_index = tag_iterator_next(&iterator)) != NONE)
+		{
+			char lowered[256];
+
+			lowercase_copy(tag_get_name(tag_index), lowered, sizeof(lowered));
+			if ((strstr(lowered, "burning") || strstr(lowered, "flame")) && !strstr(lowered, "explo") &&
+				!strstr(lowered, "impact") && !strstr(lowered, "death"))
+			{
+				g_objective_fire_tag = tag_index;
+			}
+		}
+		if (g_objective_fire_tag == NONE)
+			g_objective_fire_tag = tag_loaded(EFFECT_DEFINITION_TAG, "effects\\coop teleport");
+		error(_error_silent, "firefight objectives: the deposit's fire is %s",
+			g_objective_fire_tag != NONE ? tag_get_name(g_objective_fire_tag) : "none");
+	}
+	if (g_objective_fire_tag == NONE)
+		return;
+	pod_effect(tag_get_name(g_objective_fire_tag), position);
 }
 
 /* the vehicle types the players could be given (drivable, the game's or

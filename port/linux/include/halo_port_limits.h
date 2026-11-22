@@ -204,9 +204,11 @@ VANILLA/LANDING/EXIT and REMOVE INERTIA (!FW:'s flags 1-2, 4), on any volume; 11
 AI PATROL volumes (!FW:'s effect 7, the number in its flags' top bits), AI route
 points ('airt' markers, all of a point in its !FH:/!FU: team) and an AI spawn's
 GOAL (!FJ:); 111 Firefight's objectives (firefight_objectives.c's view, at the
-end of Firefight's state). A Firefight game is always of this signature
+end of Firefight's state); 112 the objectives' marks in that view (Use X only's
+weapons, a camp's enemies, Collect's dropped skulls and its deposit's skull)
+and an ammo crate's pod the props' resupply rack. A Firefight game is always of this signature
 (network_server_message_handler.c) */
-#define HALO_PORT_MOD_NETWORK_VERSION 111
+#define HALO_PORT_MOD_NETWORK_VERSION 112
 #define HALO_PORT_MODDED_VERSION_MARK 0xFF00
 #define HALO_PORT_ADVERTISED_MODDED_VERSION (HALO_PORT_MODDED_VERSION_MARK | HALO_PORT_MOD_NETWORK_VERSION)
 

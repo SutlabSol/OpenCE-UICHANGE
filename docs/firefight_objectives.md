@@ -396,6 +396,30 @@ Contribution by objective **(proposed)**:
   Firefight actor is set to); the camp sends them back once they are past
   1.1 times its radius, and the VIP back to its middle.
 
+## Playtest changes (2026-11-22, untested in game)
+
+- Use X only: its weapons lying about (a dead player's, a pod's) are kept
+  and marked with the weapon's name for a player without one; with none
+  about, a counted player alive without one gets a pod of it again (20 s
+  apart at most). Firing a vehicle's or a turret's gun, or throwing any
+  grenade, breaks it too.
+- Purge the base: each of the base's enemies within 30 units of the player
+  is marked PURGE.
+- High value target, Purge and Rescue take a flag's spot (a base, with its
+  cover) when the map has flags; the camp's units defend it: no charging,
+  sent back once past 0.8 of its radius, fighting or not.
+- Collect: skulls a player dropped dying are marked (and lie twice as long);
+  a skull that is never taken stands on the deposit, with a harmless fire
+  round it on every machine.
+- Travel's point and a round objective's are kept 8 units apart (and, should
+  they share a spot, GO HERE is drawn higher).
+- An ordnance ammo crate is the props' resupply rack (weapon_racks.c): one a
+  drop, everyone's, action by it refills every weapon, for as long as it
+  stands.
+- Server Setup: VEHICLES and OBJECTIVE SETTINGS (WAVE OBJECTIVES, ROUND
+  OBJECTIVES) are on the hub, after GAME SETTINGS.
+- The marks are at the view's end: mod version 112.
+
 ## Open
 
 - Default amounts (above) to be tuned in play.

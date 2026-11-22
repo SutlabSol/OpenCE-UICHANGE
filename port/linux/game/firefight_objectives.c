@@ -120,7 +120,13 @@ enum
 	/* (Bomb's: enemies at it unopposed this long disarm it; more of them so
 	often while it is planted) */
 	FFO_DISARM_TICKS = 5 * TICKS_PER_SECOND,
-	FFO_BOMB_RAID_TICKS = 15 * TICKS_PER_SECOND
+	FFO_BOMB_RAID_TICKS = 15 * TICKS_PER_SECOND,
+	/* (the marks looked for so often; Use X only's weapon dropped again for
+	a player with none of it about, no oftener than this) */
+	FFO_MARKS_TICKS = 10,
+	FFO_REDROP_TICKS = 20 * TICKS_PER_SECOND,
+	/* (Collect's deposit's fire, so often) */
+	FFO_FIRE_TICKS = 12
 };
 
 /* a camp's size (world units), how near a player must come to the marines,
@@ -136,6 +142,9 @@ blast) */
 #define FFO_BOMB_RADIUS 3.5f
 #define FFO_DISARM_RADIUS 3.0f
 #define FFO_BLAST_RADIUS 10.0f
+/* (two objectives' points no nearer than this: Travel's and a round
+objective's, so their markers never sit on each other) */
+#define FFO_POINT_APART 8.0f
 
 /* a unit of an objective's: what it does */
 enum ffo_role
@@ -205,8 +214,11 @@ static struct
 	long round_vehicle_tag;
 	long round_weapon_tag;
 	boolean round_armed;
-	/* (Use X only's rule from then: its pods down) */
+	/* (Use X only's rule from then: its pods down; and when its weapon may
+	be dropped again, for a player with none) */
 	long round_arm_time;
+	long round_redrop_time;
+	long marks_next;
 	/* (each player's unit and its shield, last tick) */
 	long shield_unit[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
 	real shield_last[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
@@ -236,7 +248,11 @@ static struct
 	long tokens[FFO_MAX_TOKENS];
 	short token_values[FFO_MAX_TOKENS];
 	long token_times[FFO_MAX_TOKENS];
+	/* (and whether a player dropped it, dying: marked) */
+	boolean token_dropped[FFO_MAX_TOKENS];
 	short token_count;
+	/* (its deposit's skull, never taken) */
+	long deposit_skull;
 	/* (Bomb's: where it waits, the one planted, how long enemies have been at it) */
 	real_point3d bomb_home;
 	long bomb_planted;
@@ -713,10 +729,28 @@ static boolean ffo_in_hill(struct ffo_hill const *hill, real_point3d const *poin
 	return inside;
 }
 
+/* whether a point is another objective's: for a round objective, Travel's
+(it is rolled first, as a wave starts); for Travel, the round objective's
+running (its place, its goal) */
+static boolean ffo_point_taken(real_point3d const *point, boolean for_set)
+{
+	if (for_set)
+	{
+		return g_view.round_state == _ff_objective_running && g_view.round_kind == _ff_round_objective_travel &&
+			distance3d(point, &g_view.round_point) < FFO_POINT_APART;
+	}
+	if (g_view.set_state != _ff_objective_running)
+		return FALSE;
+	if (distance3d(point, &g_view.set_site) < MAX(FFO_POINT_APART, g_view.set_radius + 3.0f))
+		return TRUE;
+	return (g_view.set_kind == _ff_set_objective_flag || g_view.set_kind == _ff_set_objective_bomb) &&
+		distance3d(point, &g_view.set_goal_point) < FFO_POINT_APART;
+}
+
 /* a site for a set objective, of the kinds `kinds` (1 << enum ffo_site_kind):
 one far from the players (of the farther half of those they can walk to), not
-one a player is at */
-static short ffo_pick_site(unsigned long kinds, real keep_away)
+one a player is at, nor another objective's (ffo_point_taken) */
+static short ffo_pick_site_of(unsigned long kinds, real keep_away, boolean for_set)
 {
 	short order[FFO_MAX_SITES];
 	real distance[FFO_MAX_SITES];
@@ -736,8 +770,11 @@ static short ffo_pick_site(unsigned long kinds, real keep_away)
 		boolean reachable = player_count == 0;
 		short place;
 
-		if (!(kinds & (1UL << g.sites[i].kind)) || (player_count > 0 && nearest < keep_away))
+		if (!(kinds & (1UL << g.sites[i].kind)) || (player_count > 0 && nearest < keep_away) ||
+			ffo_point_taken(&g.sites[i].point, for_set))
+		{
 			continue;
+		}
 		group = firefight_objective_reach_group(&g.sites[i].point);
 		for (p = 0; p < player_count && !reachable; p++)
 			reachable = group == NONE || groups[p] == NONE || group == groups[p];
@@ -754,8 +791,13 @@ static short ffo_pick_site(unsigned long kinds, real keep_away)
 	}
 	if (!count)
 	{
-		/* (none far: any of the kind) */
+		/* (none far: any of the kind not another's, else any of the kind) */
 		for (i = 0; i < g.site_count; i++)
+		{
+			if ((kinds & (1UL << g.sites[i].kind)) && !ffo_point_taken(&g.sites[i].point, for_set))
+				order[count++] = i;
+		}
+		for (i = 0; !count && i < g.site_count; i++)
 		{
 			if (kinds & (1UL << g.sites[i].kind))
 				order[count++] = i;
@@ -763,6 +805,22 @@ static short ffo_pick_site(unsigned long kinds, real keep_away)
 		return count ? order[ffo_rand() % (unsigned long)count] : NONE;
 	}
 	return order[ffo_rand() % (unsigned long)MAX(1, (count + 1) / 2)];
+}
+
+#define FFO_ANY_SITE ((1UL << _ffo_site_flag) | (1UL << _ffo_site_hill) | (1UL << _ffo_site_oddball))
+
+static short ffo_pick_site(unsigned long kinds, real keep_away)
+{
+	return ffo_pick_site_of(kinds, keep_away, TRUE);
+}
+
+/* (a VIP's camp, Purge's base, the marines': a flag's spot, the bases a map
+is built round, with their cover; any objective point on a map with none) */
+static short ffo_pick_base_site(real keep_away)
+{
+	short site = g.flag_count > 0 ? ffo_pick_site(1UL << _ffo_site_flag, keep_away) : NONE;
+
+	return site != NONE ? site : ffo_pick_site(FFO_ANY_SITE, keep_away);
 }
 
 /* ---------- the maps' file (what each map has, for Server Setup) */
@@ -1236,9 +1294,9 @@ static boolean ffo_round_setup(short kind)
 	}
 	case _ff_round_objective_travel:
 	{
-		short site = ffo_pick_site((1UL << _ffo_site_flag) | (1UL << _ffo_site_hill) | (1UL << _ffo_site_oddball), 15.0f);
+		short site = ffo_pick_site_of(FFO_ANY_SITE, 15.0f, FALSE);
 
-		if (site == NONE)
+		if (site == NONE || ffo_point_taken(&g.sites[site].point, FALSE))
 			return FALSE;
 		g_view.round_point = g.sites[site].point;
 		return TRUE;
@@ -1275,6 +1333,7 @@ static boolean ffo_round_setup(short kind)
 			return FALSE;
 		g.round_armed = FALSE;
 		g.round_arm_time = game_time_get() + FFO_USE_ONLY_GRACE_TICKS;
+		g.round_redrop_time = g.round_arm_time;
 		ffo_tag_label(g.round_weapon_tag, g_view.round_label, sizeof(g_view.round_label));
 		/* (a pod of it for each of them, as an ordnance drop's) */
 		firefight_spawn_ordnance_weapon_for_all(g.round_weapon_tag);
@@ -1435,6 +1494,14 @@ static short ffo_unit_add(long unit_index, byte role)
 	g.units[g.unit_count] = unit_index;
 	g.unit_roles[g.unit_count] = role;
 	g.unit_next_order[g.unit_count] = game_time_get() + (long)(ffo_rand() % (unsigned long)(3 * TICKS_PER_SECOND));
+	/* (a camp's, and the marines: kept to their place, fighting from it) */
+	if (role == _ffo_role_defender || role == _ffo_role_target || role == _ffo_role_marine)
+	{
+		struct unit_datum *unit = ffo_living_unit(unit_index);
+
+		if (unit && unit->unit.actor_index != NONE)
+			firefight_objective_hold_ground(unit->unit.actor_index, TRUE);
+	}
 	return g.unit_count++;
 }
 
@@ -1672,6 +1739,8 @@ static void ffo_set_clear_units(void)
 	g.item_object = NONE;
 	g.teleport_until = NONE;
 	g.token_count = 0;
+	g.deposit_skull = NONE;
+	g_view.deposit_object = NONE;
 	g.bomb_planted = NONE;
 	g.disarm_ticks = 0;
 }
@@ -1751,8 +1820,10 @@ static void ffo_set_end(byte state)
 it), and its target (a VIP, a generator, or none) */
 static boolean ffo_camp_start(short kind)
 {
-	short site = ffo_pick_site((1UL << _ffo_site_flag) | (1UL << _ffo_site_hill) | (1UL << _ffo_site_oddball),
-		FFO_CAMP_RADIUS * 1.3f);
+	/* (the VIP's and Purge's at a base, a flag's spot; the generator's
+	anywhere) */
+	short site = kind == _ff_set_objective_generator ? ffo_pick_site(FFO_ANY_SITE, FFO_CAMP_RADIUS * 1.3f) :
+		ffo_pick_base_site(FFO_CAMP_RADIUS * 1.3f);
 	real_point3d center;
 	real_point3d spots[FFO_MAX_VEHICLES];
 	real facings[FFO_MAX_VEHICLES];
@@ -1837,14 +1908,19 @@ static boolean ffo_data_link_start(void)
 
 	for (index = 0; index < g.hill_count; index++)
 	{
-		if (ffo_nearest_player_distance(&g.hills[index].center, NULL) > g.hills[index].radius + 6.0f)
+		if (ffo_nearest_player_distance(&g.hills[index].center, NULL) > g.hills[index].radius + 6.0f &&
+			!ffo_point_taken(&g.hills[index].center, TRUE))
+		{
 			candidates[count++] = index;
+		}
 	}
-	if (!count)
+	for (index = 0; !count && index < g.hill_count; index++)
 	{
-		for (index = 0; index < g.hill_count; index++)
+		if (!ffo_point_taken(&g.hills[index].center, TRUE))
 			candidates[count++] = index;
 	}
+	for (index = 0; !count && index < g.hill_count; index++)
+		candidates[count++] = index;
 	if (!count)
 		return FALSE;
 	g.hill_index = candidates[ffo_rand() % (unsigned long)count];
@@ -1914,8 +1990,7 @@ static boolean ffo_flag_start(void)
 
 static boolean ffo_rescue_start(void)
 {
-	short site = ffo_pick_site((1UL << _ffo_site_flag) | (1UL << _ffo_site_hill) | (1UL << _ffo_site_oddball),
-		FFO_RESCUE_ARRIVE * 2.0f);
+	short site = ffo_pick_base_site(FFO_RESCUE_ARRIVE * 2.0f);
 	real_point3d center;
 	short index;
 
@@ -2096,14 +2171,27 @@ static void ffo_units_update(void)
 			break;
 		case _ffo_role_defender:
 			if (carrier != NONE && unit->unit.actor_index != NONE)
-				firefight_objective_direct_at(unit->unit.actor_index, carrier);
-			else if (from_site > g_view.set_radius * 1.1f ||
-				(!ffo_actor_fighting(unit_index) && (ffo_rand() % 5UL) == 0))
 			{
-				real_point3d spot;
+				firefight_objective_hold_ground(unit->unit.actor_index, FALSE);
+				firefight_objective_direct_at(unit->unit.actor_index, carrier);
+			}
+			/* (kept to the camp: out of it, back, fighting or not; in it,
+			about it now and then while nothing is in sight) */
+			else
+			{
+				if (unit->unit.actor_index != NONE)
+					firefight_objective_hold_ground(unit->unit.actor_index, TRUE);
+				if (from_site > g_view.set_radius * 0.8f ||
+					(!ffo_actor_fighting(unit_index) && (ffo_rand() % 5UL) == 0))
+				{
+					real_point3d spot;
 
-				ffo_spot_near(&g_view.set_site, 2.0f, g_view.set_radius * 0.6f, &spot);
-				ffo_order_move(unit_index, &spot);
+					ffo_spot_near(&g_view.set_site, 2.0f, g_view.set_radius * 0.6f, &spot);
+					ffo_order_move(unit_index, &spot);
+					/* (sooner back while it is out) */
+					if (from_site > g_view.set_radius * 0.8f)
+						g.unit_next_order[index] = now + FFO_ORDER_TICKS / 2;
+				}
 			}
 			break;
 		case _ffo_role_attacker:
@@ -2512,8 +2600,9 @@ static boolean ffo_in_deposit(real_point3d const *point)
 		fabs(point->z - g_view.set_site.z) < 3.0f;
 }
 
-/* a skull on the ground worth `value` (the oldest gone for it, if too many) */
-static void ffo_token_spawn(real_point3d const *at, short value)
+/* a skull on the ground worth `value` (the oldest gone for it, if too many),
+`dropped` a player's who died, which is marked */
+static void ffo_token_spawn(real_point3d const *at, short value, boolean dropped)
 {
 	long definition = get_ball_definition_index();
 	struct object_placement_data placement;
@@ -2532,6 +2621,7 @@ static void ffo_token_spawn(real_point3d const *at, short value)
 			g.tokens[index - 1] = g.tokens[index];
 			g.token_values[index - 1] = g.token_values[index];
 			g.token_times[index - 1] = g.token_times[index];
+			g.token_dropped[index - 1] = g.token_dropped[index];
 		}
 		g.token_count--;
 	}
@@ -2545,6 +2635,7 @@ static void ffo_token_spawn(real_point3d const *at, short value)
 	g.tokens[g.token_count] = object_index;
 	g.token_values[g.token_count] = value;
 	g.token_times[g.token_count] = game_time_get();
+	g.token_dropped[g.token_count] = dropped;
 	g.token_count++;
 }
 
@@ -2559,27 +2650,77 @@ static void ffo_tokens_clear(void)
 	}
 	g.token_count = 0;
 	csmemset(g_view.carried, 0, sizeof(g_view.carried));
+	if (g.deposit_skull != NONE && object_try_and_get(g.deposit_skull))
+		object_delete(g.deposit_skull);
+	g.deposit_skull = NONE;
+	g_view.deposit_object = NONE;
+}
+
+/* (Collect's deposit: a skull on its spot, never taken, made again when
+gone, back on its spot when knocked off it; each machine's fire round it,
+firefight_objectives_update) */
+static void ffo_deposit_update(void)
+{
+	struct object_datum *skull = g.deposit_skull != NONE ? object_try_and_get(g.deposit_skull) : NULL;
+	real_point3d spot = g_view.set_site;
+
+	firefight_objective_ground(&spot, &spot);
+	if (!skull)
+	{
+		long definition = get_ball_definition_index();
+		struct object_placement_data placement;
+
+		g.deposit_skull = NONE;
+		if (definition == NONE)
+			return;
+		object_placement_data_new(&placement, definition, NONE);
+		placement.position = spot;
+		placement.position.z += 0.3f;
+		g.deposit_skull = object_new(&placement);
+		if (g.deposit_skull == NONE)
+			return;
+		SET_FLAG(object_get(g.deposit_skull)->object.flags, _object_cannot_be_garbage_bit, TRUE);
+	}
+	else if (skull->object.parent_object_index == NONE && distance3d(&skull->object.position, &spot) > 1.5f)
+	{
+		real_point3d at = spot;
+
+		at.z += 0.3f;
+		object_set_position(g.deposit_skull, &at, NULL, NULL);
+	}
+	g_view.deposit_object = ffo_absolute_of_object(g.deposit_skull);
 }
 
 static boolean ffo_collect_start(void)
 {
 	if (get_ball_definition_index() == NONE || (!g.hill_count && !g.flag_count))
 		return FALSE;
+	/* (a hill, else a flag's spot: not Travel's) */
 	if (g.hill_count)
 	{
+		short tries;
+
 		g.hill_index = (long)(ffo_rand() % (unsigned long)g.hill_count);
+		for (tries = 0; tries < g.hill_count && ffo_point_taken(&g.hills[g.hill_index].center, TRUE); tries++)
+			g.hill_index = (g.hill_index + 1) % g.hill_count;
 		g_view.set_site = g.hills[g.hill_index].center;
 		g_view.set_radius = g.hills[g.hill_index].radius;
 	}
 	else
 	{
+		short flag = (short)(ffo_rand() % (unsigned long)g.flag_count);
+		short tries;
+
+		for (tries = 0; tries < g.flag_count && ffo_point_taken(&g.flags[flag], TRUE); tries++)
+			flag = (short)((flag + 1) % g.flag_count);
 		g.hill_index = NONE;
-		g_view.set_site = g.flags[ffo_rand() % (unsigned long)g.flag_count];
+		g_view.set_site = g.flags[flag];
 		g_view.set_radius = FFO_CAPTURE_RADIUS;
 	}
 	g_view.set_goal = MIN(60L, 20L + 8L * MAX(0, g.counted_count - 1));
 	g_view.set_progress = 0;
 	ffo_tokens_clear();
+	ffo_deposit_update();
 	return TRUE;
 }
 
@@ -2594,6 +2735,7 @@ static void ffo_collect_update(void)
 
 	if (now % 3)
 		return;
+	ffo_deposit_update();
 	/* (skulls lying too long go; one walked into is taken) */
 	for (index = 0; index < g.token_count; index++)
 	{
@@ -2609,7 +2751,7 @@ static void ffo_collect_update(void)
 					taker = p;
 			}
 		}
-		if (token && taker == NONE && now - g.token_times[index] < FFO_TOKEN_TICKS)
+		if (token && taker == NONE && now - g.token_times[index] < (g.token_dropped[index] ? 2 : 1) * FFO_TOKEN_TICKS)
 			continue;
 		if (taker != NONE)
 		{
@@ -2623,6 +2765,7 @@ static void ffo_collect_update(void)
 		g.tokens[index] = g.tokens[--g.token_count];
 		g.token_values[index] = g.token_values[g.token_count];
 		g.token_times[index] = g.token_times[g.token_count];
+		g.token_dropped[index] = g.token_dropped[g.token_count];
 		index--;
 	}
 	/* (what a carrier brings to the deposit, banked) */
@@ -2674,7 +2817,7 @@ static boolean ffo_bomb_start(void)
 			nearest = distance;
 		}
 	}
-	to = ffo_pick_site((1UL << _ffo_site_flag) | (1UL << _ffo_site_hill) | (1UL << _ffo_site_oddball), 20.0f);
+	to = ffo_pick_site(FFO_ANY_SITE, 20.0f);
 	if (to == NONE || to == from || distance3d(&g.sites[to].point, &g.sites[from].point) < 10.0f)
 	{
 		real farthest = 0.0f;
@@ -2853,6 +2996,114 @@ static void ffo_bomb_update(void)
 	}
 }
 
+/* ---------- the marks (the view's, which every machine's HUD shows) */
+
+static void ffo_marks_clear(void)
+{
+	short index;
+
+	for (index = 0; index < FF_OBJECTIVE_WEAPON_MARKS; index++)
+		g_view.round_marks[index] = NONE;
+	for (index = 0; index < FF_OBJECTIVE_UNIT_MARKS; index++)
+		g_view.set_units[index] = NONE;
+	for (index = 0; index < FF_OBJECTIVE_DROP_MARKS; index++)
+		g_view.set_drops[index] = NONE;
+}
+
+/* (Use X only's) its weapons lying about, kept (never taken as garbage)
+while it plays: a dead player's, a pod's; and, with none about, a pod of it
+again for each counted player alive without one */
+static void ffo_use_only_marks_update(void)
+{
+	struct object_iterator iterator;
+	struct object_datum *object;
+	short marks = 0;
+	long now = game_time_get();
+
+	object_iterator_new(&iterator, _object_mask_weapon, 0);
+	while ((object = (struct object_datum *)object_iterator_next(&iterator)) != NULL)
+	{
+		if (object->definition_index != g.round_weapon_tag || object->object.parent_object_index != NONE)
+			continue;
+		SET_FLAG(object->object.flags, _object_cannot_be_garbage_bit, TRUE);
+		if (marks < FF_OBJECTIVE_WEAPON_MARKS)
+			g_view.round_marks[marks++] = ffo_absolute_of_object(iterator.index);
+	}
+	if (marks || !g.round_armed || now < g.round_redrop_time ||
+		firefight_globals_get()->ordnance_pod_drop_time > 0)
+	{
+		return;
+	}
+	{
+		unsigned long players[FFO_PLAYER_WORDS];
+		struct data_iterator players_iterator;
+		struct player_datum *player;
+		short wanting = 0;
+
+		csmemset(players, 0, sizeof(players));
+		data_iterator_new(&players_iterator, player_data);
+		while ((player = (struct player_datum *)data_iterator_next(&players_iterator)) != NULL)
+		{
+			short absolute = (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(players_iterator.datum_index);
+
+			if (player->quit_out_of_game || !ffo_bit(g.counted, absolute) || !ffo_living_unit(player->unit_index) ||
+				unit_has_weapon_definition_index(player->unit_index, g.round_weapon_tag))
+			{
+				continue;
+			}
+			ffo_bit_set(players, absolute);
+			wanting++;
+		}
+		if (!wanting)
+			return;
+		g.round_redrop_time = now + FFO_REDROP_TICKS;
+		error(_error_silent, "firefight objectives: USE ONLY's %s dropped again for %d players without one",
+			g_view.round_label, (int)wanting);
+		firefight_spawn_ordnance_weapon_for(players, FFO_PLAYER_WORDS, g.round_weapon_tag);
+	}
+}
+
+/* (the host's) the marks, so often */
+static void ffo_marks_update(void)
+{
+	long now = game_time_get();
+	short index;
+
+	if (now < g.marks_next && now >= g.marks_next - FFO_MARKS_TICKS)
+		return;
+	g.marks_next = now + FFO_MARKS_TICKS;
+	ffo_marks_clear();
+	if (g_view.round_state == _ff_objective_running && g_view.round_kind == _ff_round_objective_weapon_only &&
+		g.round_weapon_tag != NONE)
+	{
+		ffo_use_only_marks_update();
+	}
+	if (g_view.set_state != _ff_objective_running)
+		return;
+	/* (Purge's base's enemies, each) */
+	if (g_view.set_kind == _ff_set_objective_purge)
+	{
+		short marks = 0;
+
+		for (index = 0; index < g.unit_count && marks < FF_OBJECTIVE_UNIT_MARKS; index++)
+		{
+			if (g.unit_roles[index] != _ffo_role_marine && ffo_living_unit(g.units[index]))
+				g_view.set_units[marks++] = ffo_absolute_of_object(g.units[index]);
+		}
+	}
+	/* (Collect's skulls a player dropped) */
+	if (g_view.set_kind == _ff_set_objective_collect)
+	{
+		short marks = 0;
+
+		for (index = 0; index < g.token_count && marks < FF_OBJECTIVE_DROP_MARKS; index++)
+		{
+			if (g.token_dropped[index] && object_try_and_get(g.tokens[index]))
+				g_view.set_drops[marks++] = ffo_absolute_of_object(g.tokens[index]);
+		}
+	}
+}
+
 /* ---------- public code */
 
 /* (firefight.c's post_rasterize_objects, every machine's) Data Link's hill
@@ -2967,7 +3218,10 @@ static void ffo_reset(void)
 	g_view.set_target = NONE;
 	g_view.set_carrier = NONE;
 	g_view.set_ticks_left = NONE;
+	g_view.deposit_object = NONE;
+	ffo_marks_clear();
 	csmemset(&g, 0, sizeof(g));
+	g.deposit_skull = NONE;
 	ffo_set_clear_units();
 	g.round_target_unit = NONE;
 	g.generator_scenery = NONE;
@@ -3136,6 +3390,19 @@ void firefight_objectives_update(void)
 		return;
 	if (g_view.notice_ticks > 0)
 		g_view.notice_ticks--;
+	/* (Collect's deposit's fire, each machine's own, harmless) */
+	if (g_view.set_kind == _ff_set_objective_collect && g_view.set_state == _ff_objective_running &&
+		game_time_get() % FFO_FIRE_TICKS == 0)
+	{
+		real angle = ffo_rand_range(0.0f, 2.0f * _pi);
+		real distance = ffo_rand_range(0.5f, 1.3f);
+		real_point3d at = g_view.set_site;
+
+		firefight_objective_ground(&at, &at);
+		at.x += cosine(angle) * distance;
+		at.y += sine(angle) * distance;
+		firefight_objective_fire_effect(&at);
+	}
 	if (network_game_distributed_client())
 	{
 		static boolean was_planted;
@@ -3155,6 +3422,7 @@ void firefight_objectives_update(void)
 		g_view.set_result_ticks--;
 	if (ff->match_lost || ff->match_won)
 	{
+		ffo_marks_clear();
 		if (g_view.round_state == _ff_objective_running)
 			g_view.round_state = _ff_objective_failed;
 		if (g_view.set_state == _ff_objective_running)
@@ -3165,6 +3433,7 @@ void firefight_objectives_update(void)
 		return;
 	}
 	ffo_round_shields_update();
+	ffo_marks_update();
 	/* (Use X only's rule, once its pods are down) */
 	if (g_view.round_kind == _ff_round_objective_weapon_only && g_view.round_state == _ff_objective_running &&
 		!g.round_armed && game_time_get() >= g.round_arm_time)
@@ -3272,7 +3541,7 @@ void firefight_objectives_enemy_killed(long dead_unit_index, long killer_player_
 			real_point3d at;
 
 			object_get_origin(dead_unit_index, &at);
-			ffo_token_spawn(&at, 1);
+			ffo_token_spawn(&at, 1, FALSE);
 		}
 	}
 	for (index = 0; index < g.unit_count && g.units[index] != dead_unit_index; index++)
@@ -3314,7 +3583,7 @@ void firefight_objectives_player_died(long dead_player_index)
 			real_point3d at;
 
 			object_get_origin(player->unit_index, &at);
-			ffo_token_spawn(&at, g_view.carried[absolute]);
+			ffo_token_spawn(&at, g_view.carried[absolute], TRUE);
 		}
 		g_view.carried[absolute] = 0;
 	}
@@ -3343,6 +3612,24 @@ void firefight_objectives_weapon_fired(long weapon_index, long owner_unit_index)
 		{
 			ffo_round_fail(unit->unit.player_index, "FIRED ANOTHER WEAPON");
 		}
+		/* (a vehicle's or a turret's gun: the player in it) */
+		else if (unit && weapon && unit->unit.player_index == NONE)
+		{
+			struct object_iterator iterator;
+			struct object_datum *object;
+
+			object_iterator_new(&iterator, _object_mask_unit, 0);
+			while ((object = (struct object_datum *)object_iterator_next(&iterator)) != NULL)
+			{
+				long rider = ((struct unit_datum *)object)->unit.player_index;
+
+				if (object->object.parent_object_index == owner_unit_index && rider != NONE && ffo_counted(rider))
+				{
+					ffo_round_fail(rider, "FIRED A VEHICLE'S GUN");
+					break;
+				}
+			}
+		}
 		return;
 	}
 	if (g_view.round_kind != _ff_round_objective_dont_use || g_view.round_state != _ff_objective_running ||
@@ -3365,6 +3652,15 @@ void firefight_objectives_grenade_thrown(long unit_index, short grenade_type)
 {
 	struct unit_datum *unit;
 
+	/* (Use X only's: any grenade) */
+	if (g_view.round_kind == _ff_round_objective_weapon_only && g_view.round_state == _ff_objective_running &&
+		g.round_armed && unit_index != NONE && ffo_host())
+	{
+		unit = unit_try_and_get(unit_index);
+		if (unit && unit->unit.player_index != NONE && ffo_counted(unit->unit.player_index))
+			ffo_round_fail(unit->unit.player_index, "THREW A GRENADE");
+		return;
+	}
 	if (g_view.round_kind != _ff_round_objective_dont_use || g_view.round_state != _ff_objective_running ||
 		g_view.round_param != _ff_objective_use_grenade + grenade_type || !ffo_host() || unit_index == NONE)
 	{
@@ -3438,6 +3734,8 @@ boolean firefight_objectives_pickup_blocked(long weapon_index)
 	}
 	if (g_view.set_kind != _ff_set_objective_collect)
 		return FALSE;
+	if (weapon_index == g.deposit_skull)
+		return TRUE;
 	/* (a skull is taken by walking into it, never held: on a client, any of
 	the map's balls while Collect plays) */
 	if (network_game_distributed_client())

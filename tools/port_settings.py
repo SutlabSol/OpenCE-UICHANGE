@@ -3950,6 +3950,9 @@ def _server_settings() -> list:
     # (Firefight's rows', after them: FIREFIGHT_SETUP_ROWS)
     assert len(labels) == firefight_label
     labels += [f"{title}:" for _, title, _, _ in FIREFIGHT_SETUP_ROWS]
+    # (OBJECTIVE SETTINGS', the last: OBJECTIVE_SETUP_SECTION)
+    objective_label = len(labels)
+    labels.append(f"{OBJECTIVE_SETUP_SECTION[1]}:")
     extra += _strings(f"{base}/labels", labels)
     help_strings = [
         "",
@@ -3987,6 +3990,8 @@ def _server_settings() -> list:
         # (Firefight's rows': menu_functions.c's FF_PLAYER_SCALE_HELP and
         # SERVER_SCORING_HELP)
         *(help_text for _, _, _, help_text in FIREFIGHT_SETUP_ROWS),
+        # (OBJECTIVE SETTINGS': menu_functions.c's OBJECTIVE_SETTINGS_HELP)
+        OBJECTIVE_SETUP_SECTION[2],
     ]
     extra += _strings(f"{base}/help_strings", help_strings)
     # the sections (SERVER_SETUP_SECTIONS): Server Setup itself is a hub of
@@ -3997,7 +4002,7 @@ def _server_settings() -> list:
     by_key = {row[0].rsplit("/", 1)[1][3:]: row for row in rows}
     hub_rows = [(f"{base}/op_server_name", None, 0)]
     section_lines = []
-    for index, (key, title, _, members) in enumerate(SERVER_SETUP_SECTIONS):
+    for index, (key, title, _, members) in enumerate([*SERVER_SETUP_SECTIONS, OBJECTIVE_SETUP_SECTION]):
         target = f"{base}/{key}/{key}_screen"
         extra += _widget(f"{base}/op_{key}", [("width", 512), ("height", 28),
                                              ("flags", "pass_unhandled_to_focused_child"),
@@ -4006,16 +4011,24 @@ def _server_settings() -> list:
                           '<on event="left_mouse" run="mouse emit accept event"/>',
                           f'<child widget="{base}/{key}_label"/>', f'<child widget="{base}/{key}_value" x="230" y="1"/>'])
         extra += _widget(f"{base}/{key}_label", [("type", "text"), ("controller", 1), ("width", 230), ("height", 22),
-                                                 ("string_list", f"{base}/labels"), ("string_index", section_label + index),
+                                                 ("string_list", f"{base}/labels"),
+                                                 ("string_index", objective_label if key == OBJECTIVE_SETUP_SECTION[0]
+                                                  else section_label + index),
                                                  ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("text_x", 13),
                                                  ("text_y", 4)], [])
         extra += _widget(f"{base}/{key}_value", [("type", "text"), ("controller", 1), ("width", 280), ("height", 22),
                                                  ("font", "ui\\small_ui"), ("color", "#FF2896FF"), ("align", "center"),
                                                  ("text_y", 5), ("text_flags", "no_focus_test")], [])
-        hub_rows.append((f"{base}/op_{key}", None, len(hub_rows)))
+        # (OBJECTIVE SETTINGS' place on the hub: after GAME SETTINGS, with
+        # VEHICLES, HUB_FIREFIGHT_ROWS)
+        if key != OBJECTIVE_SETUP_SECTION[0]:
+            hub_rows.append((f"{base}/op_{key}", None, len(hub_rows)))
         # (BOTS after LOBBY SETTINGS, its own screen as before)
         if key == "lobby_settings":
             hub_rows.append((f"{base}/op_{BOTS_SETUP[0]}", None, len(hub_rows)))
+        if key == "game_settings":
+            for hub_key in HUB_FIREFIGHT_ROWS:
+                hub_rows.append((f"{base}/op_{hub_key}", None, len(hub_rows)))
         section = f"{base}/{key}"
         section_spec = {"screen": f"{key}_screen", "spacing": SERVER_SETTINGS_ROW_SPACING, "help_top": 366,
                         "header": (f"header_{key}", f"{section}/header_{key}")}
@@ -4301,8 +4314,7 @@ SERVER_SETUP_SECTIONS = [
      ["max_players", "invite", "listing", "password", "map_share_options"]),
     ("game_settings", "GAME SETTINGS", "The gametype and its rules for this game (co-op's\\noptions, for a co-op game).",
      ["game_type", "player_options", "item_options", "vehicle_options", "indicator_options", "team_options",
-      "coop_options", "voice_options", "ff_player_scale", "ff_start_skulls", "ff_vehicles", "scoring",
-      "ff_round_objectives", "ff_set_objectives"]),
+      "coop_options", "voice_options", "ff_player_scale", "ff_start_skulls", "scoring"]),
     # (a Firefight game's on a Custom Edition map with enemies, weapons or
     # vehicles of its own: menu_functions.c's server_settings_map_content_update)
     ("map_content", "MAP CONTENT", "Play the map's own enemies, weapons and vehicles\\nin this game, beside the game's or alone.",
@@ -4312,6 +4324,17 @@ SERVER_SETUP_SECTIONS = [
     ("fork_settings", "FORK SETTINGS", "This fork's own: game modes' settings, the tag\\nprofile, the randomizer and skulls.",
      ["floodfection_options", "tag_profile", "randomizer", "skulls"]),
 ]
+# Server Setup's OBJECTIVE SETTINGS, a Firefight game's, on the hub after its
+# VEHICLES (a map with vehicles for the players), both after GAME SETTINGS: a
+# section of the objectives' two rows, each opening its screen
+# (FF_OBJECTIVES_SETUP_SCREENS). Its label and help the lists' last, so no
+# other's moves (menu_functions.c's OBJECTIVE_SETTINGS_HELP)
+OBJECTIVE_SETUP_SECTION = ("objective_settings", "OBJECTIVE SETTINGS",
+                           "Optional challenges beside the waves: a wave's, and\\na round's set pieces.",
+                           ["ff_round_objectives", "ff_set_objectives"])
+# (the hub's rows after GAME SETTINGS', a Firefight game's: VEHICLES, then
+# OBJECTIVE SETTINGS)
+HUB_FIREFIGHT_ROWS = ["ff_vehicles", OBJECTIVE_SETUP_SECTION[0]]
 # MAP CONTENT's kinds' choices (ADVANCED's rows, the map's own of a kind)
 MAP_CONTENT_KIND_CHOICES = ["ALL ON", "CUSTOM", "OFF"]
 # CUSTOM's list of the map's own of a kind: its rows shown at once (the Tag
@@ -4405,7 +4428,7 @@ SETUP_OPTIONS_PLACE = 6
 # (their screens' titles)
 TITLES.update({f"{MT}/server_settings/{key}/header_{key}": title
                for key, title, _, _ in [*COOP_SETUP_SCREENS, MAP_SHARE_SETUP, BOTS_SETUP, *SERVER_SETUP_SECTIONS,
-                                        *FF_OBJECTIVES_SETUP_SCREENS]})
+                                        OBJECTIVE_SETUP_SECTION, *FF_OBJECTIVES_SETUP_SCREENS]})
 # (the rows of a co-op options screen in one place, the one shown: PER
 # PLAYER's and MULTIPLIER's, by EXTRA ENEMIES')
 SETUP_OPTION_SAME_PLACE = set()

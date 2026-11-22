@@ -262,6 +262,20 @@ real firefight_player_stun_scale(
 	return 0.25f * (real)PIN(flinch & ~FIREFIGHT_PLASMA_FLINCH_SET, 0, 4);
 }
 
+/* (actor_combat.c) how often Firefight's enemies fire, of what their tags
+have: their rate and their bursts this much, the pauses between bursts by
+its inverse. Firefight's waves see the players across the map and charge
+them (firefight_spawner.c's pursuit), so as the campaign's they fired too
+often; 1 for anyone else's, and outside Firefight */
+#define FIREFIGHT_ENEMY_FIRE_PACING 0.65f
+real firefight_enemy_fire_pacing(
+	short team_index)
+{
+	if (!firefight_active() || team_index == NONE || !firefight_team_is_hostile(team_index))
+		return 1.0f;
+	return FIREFIGHT_ENEMY_FIRE_PACING;
+}
+
 boolean firefight_active(
 	void)
 {

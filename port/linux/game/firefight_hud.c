@@ -1318,6 +1318,9 @@ static void format_banner_strings(
 /* ---------- Objectives (firefight_objectives.c): their cards, their notice
 and their markers, as the host's view has them */
 
+/* (Purge's enemies marked within this of this view's player) */
+#define FF_OBJECTIVE_UNIT_MARK_DISTANCE 30.0f
+
 static void draw_objective_card(
 	long font_index,
 	short line_height,
@@ -1367,6 +1370,35 @@ static boolean objective_local_carrier(short carrier)
 		return FALSE;
 	player_index = local_player_get_player_index(render.local_player_index);
 	return player_index != NONE && DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index) == carrier;
+}
+
+/* this view's player's unit, NONE for none */
+static long objective_local_unit(void)
+{
+	long player_index;
+	struct player_datum *player;
+
+	if (render.local_player_index == NONE)
+		return NONE;
+	player_index = local_player_get_player_index(render.local_player_index);
+	player = player_index != NONE ? (struct player_datum *)datum_try_and_get(player_data, player_index) : NULL;
+	return player && object_try_and_get(player->unit_index) ? player->unit_index : NONE;
+}
+
+/* (a mark of the view's: an object lying about, its absolute index) drawn
+over it, with its label */
+static void draw_objective_object_mark(long font_index, short line_height, real scale, short absolute, char const *label,
+	pixel32 box_color, real_argb_color const *text_color)
+{
+	long object_index = absolute != NONE ? firefight_objectives_object(absolute) : NONE;
+	struct object_datum *object = object_index != NONE ? object_try_and_get(object_index) : NULL;
+	real_point3d at;
+
+	if (!object || object->object.parent_object_index != NONE)
+		return;
+	object_get_origin(object_index, &at);
+	at.z += 0.6f;
+	draw_world_navpoint(font_index, line_height, scale, &at, label, box_color, text_color, FALSE);
 }
 
 static void draw_objectives(
@@ -1453,13 +1485,45 @@ static void draw_objectives(
 			draw_world_navpoint(font_index, line_height, scale, &at, view->round_label, FF_HUD_LOCK_BAR, &gold, FALSE);
 		}
 	}
-	/* (Travel's point) */
+	/* (Travel's point; over a round objective's marker, should they share
+	a spot, higher) */
 	if (view->round_state == _ff_objective_running && view->round_kind == _ff_round_objective_travel)
 	{
 		real_point3d at = view->round_point;
 
 		at.z += 1.0f;
+		if (view->set_state == _ff_objective_running &&
+			(distance3d(&view->round_point, &view->set_site) < 4.0f ||
+				distance3d(&view->round_point, &view->set_goal_point) < 4.0f))
+		{
+			at.z += 1.6f;
+		}
 		draw_world_navpoint(font_index, line_height, scale, &at, "GO HERE", FF_HUD_LOCK_BAR, &gold, FALSE);
+	}
+	/* (Use X only's weapons lying about, while this view's player has none
+	of it: one dropped dying, a pod's) */
+	if (view->round_state == _ff_objective_running && view->round_kind == _ff_round_objective_weapon_only)
+	{
+		long unit = objective_local_unit();
+		short index;
+		long tag = NONE;
+
+		for (index = 0; index < FF_OBJECTIVE_WEAPON_MARKS && tag == NONE; index++)
+		{
+			long weapon = view->round_marks[index] != NONE ? firefight_objectives_object(view->round_marks[index]) : NONE;
+			struct object_datum *object = weapon != NONE ? object_try_and_get_and_verify_type(weapon, _object_mask_weapon) : NULL;
+
+			if (object)
+				tag = object->definition_index;
+		}
+		if (tag != NONE && (unit == NONE || !unit_has_weapon_definition_index(unit, tag)))
+		{
+			for (index = 0; index < FF_OBJECTIVE_WEAPON_MARKS; index++)
+			{
+				draw_objective_object_mark(font_index, line_height, scale, view->round_marks[index], view->round_label,
+					FF_HUD_LOCK_BAR, &gold);
+			}
+		}
 	}
 	if (view->set_state != _ff_objective_running)
 		return;
@@ -1484,9 +1548,30 @@ static void draw_objectives(
 	case _ff_set_objective_purge:
 	{
 		real_point3d at = view->set_site;
+		long unit = objective_local_unit();
+		real_point3d from;
+		short index;
 
 		at.z += 1.0f;
 		draw_world_navpoint(font_index, line_height, scale, &at, "ENEMY BASE", FF_HUD_WARN_EDGE, &red, FALSE);
+		/* (its enemies, each, near enough) */
+		if (unit == NONE)
+			break;
+		object_get_origin(unit, &from);
+		for (index = 0; index < FF_OBJECTIVE_UNIT_MARKS; index++)
+		{
+			long enemy = view->set_units[index] != NONE ? firefight_objectives_object(view->set_units[index]) : NONE;
+			struct object_datum *object = enemy != NONE ? object_try_and_get_and_verify_type(enemy, _object_mask_unit) : NULL;
+			real_point3d head;
+
+			if (!object || TEST_FLAG(object->object.damage_flags, _object_dead_bit))
+				continue;
+			object_get_origin(enemy, &head);
+			if (distance3d(&head, &from) > FF_OBJECTIVE_UNIT_MARK_DISTANCE)
+				continue;
+			head.z += object->object.bounding_sphere_radius * 1.3f + 0.3f;
+			draw_world_navpoint(font_index, line_height, scale, &head, "PURGE", FF_HUD_WARN_EDGE, &red, FALSE);
+		}
 		break;
 	}
 	case _ff_set_objective_data_link:
@@ -1526,9 +1611,16 @@ static void draw_objectives(
 	case _ff_set_objective_collect:
 	{
 		real_point3d at = view->set_site;
+		short index;
 
-		at.z += 1.0f;
+		at.z += 1.6f;
 		draw_world_navpoint(font_index, line_height, scale, &at, "DEPOSIT", FF_HUD_LOCK_BAR, &gold, FALSE);
+		/* (the skulls a player dropped, dying) */
+		for (index = 0; index < FF_OBJECTIVE_DROP_MARKS; index++)
+		{
+			draw_objective_object_mark(font_index, line_height, scale, view->set_drops[index], "DROPPED SKULLS",
+				FF_HUD_LOCK_BAR, &gold);
+		}
 		break;
 	}
 	case _ff_set_objective_bomb:
