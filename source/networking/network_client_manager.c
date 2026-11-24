@@ -400,6 +400,7 @@ void network_game_client_reset_settings_staging(void); /* port: discard partial 
 #include "randomizer.h" /* port: port/linux/game/randomizer.c */
 #include "tag_pack.h" /* port: port/linux/game/tag_pack.c */
 #include "network_extensions.h" /* port: port/linux/game/network_extensions.c */
+#include "network_delta.h" /* port: port/linux/game/network_delta.c */
 
 /* ---------- constants */
 
@@ -964,6 +965,7 @@ void network_game_client_dispose(
 	{
 		network_game_client_reset_settings_staging(); /* port: discard partial old-host settings */
 		mcc_identity_disconnect(); /* port: discard the MCC session's local binding */
+		network_delta_stop(); /* port: BYE to a Delta host that welcomed this machine */
 		if (client->connection)
 			network_connection_delete(client->connection);
 
@@ -1319,6 +1321,9 @@ boolean network_game_client_idle(
 		"c:\\halo\\SOURCE\\networking\\network_client_manager.c",
 		0xC6,
 		client);
+
+	/* port: Delta Peer's handshake, never waited on (network_delta.c) */
+	network_delta_update();
 
 	switch (client->state)
 	{
@@ -2045,6 +2050,9 @@ void network_game_client_accepted_into_game(
 		network_event(
 			"successfully joined a net game; our machine is #%d",
 			message_packet->machine_index);
+		/* port: HELLO to a Delta host (network_delta.c) */
+		network_delta_accepted(message_packet->machine_index, source_address->address.long_words[0],
+			source_address->port);
 
 		network_game_generate_local_machine_name(settings_request.machine_name);
 		settings_request.machine_index = (char)message_packet->machine_index;
@@ -2250,6 +2258,8 @@ boolean network_game_client_initiate_join_game(
 		/* port: the host's randomizer setup, if this game is one
 		(port/linux/game/randomizer.c) */
 		network_game_client_randomizer_game = game_index;
+		/* port: a Delta host is said HELLO once joined (network_delta.c) */
+		network_delta_join_started(game_index);
 		if (game_index >= 0 && game_index < MAXIMUM_NETWORK_ADVERTISED_GAMES)
 		{
 			extern void randomizer_set_remote(int on, unsigned char const *setup, unsigned char crazy);
@@ -2849,6 +2859,11 @@ static boolean add_advertised_game(
 			}
 			network_game_client_advertised_versions[game_index].kind =
 				advertisement->__unknown5A[HALO_PORT_ADVERTISED_KIND_OFFSET];
+			/* (port: a Delta host's game, network_delta.c, whose kind byte is
+			the kind only in a Slayer game: in another its host's Delta major) */
+			network_delta_advertised(game_index, advertisement->__unknown5A, sizeof(advertisement->__unknown5A));
+			if (network_delta_speaks(game_index) && advertisement->engine_type != game_engine_slayer)
+				network_game_client_advertised_versions[game_index].kind = 0;
 		}
 
 		if (advertisement->game_name[0] != L'\0')
@@ -3182,6 +3197,8 @@ static boolean network_game_client_idle_joining(
 				csmemset(&join_game_request, 0, sizeof(join_game_request));
 				join_game_request.network_version = HALO_PORT_NETWORK_VERSION; /* port: explicit shared agreement */
 				network_game_generate_local_machine_name(join_game_request.machine_name);
+				/* port: marked for a Delta host, which then waits for this machine's HELLO */
+				network_delta_mark_join(join_game_request.machine_name, MAXIMUM_MACHINE_NAME_LENGTH);
 				csmemcpy(
 					join_game_request.join_token,
 					client->join_parameters.join_token,
