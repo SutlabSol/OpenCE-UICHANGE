@@ -814,6 +814,7 @@ over a profile's own `settings.toml`.
 | `network.broadcast` | `""` | `HALO_NET_BROADCAST` | IPv4 addresses, with commas between them, that get the broadcasts of the game. Empty: 255.255.255.255. |
 | `network.online` | `true` | `HALO_NET_ONLINE` | `true`: internet play. `false`: system link on the local network only. |
 | `network.join_from_clipboard` | `true` | `HALO_NET_JOIN_FROM_CLIPBOARD` | `true`: when the game comes to the front, it joins the game of an invite link on the clipboard. |
+| `network.delta` | `true` | `HALO_NET_DELTA` | Client: joining a host that speaks Delta Peer (Chupathingy's hosts, and others that follow the open network spec, github.com/ChupathingyCE/delta-spec), say HELLO with this machine's platform and network version, so the host keeps the game to its limits; with no WELCOME within 4 seconds the game plays plainly, as it does with `false` (`network_delta.c`). The game itself is the same either way: only hosts of this network version are joined. |
 | `network.tunnel_port` | `0` | `HALO_NET_TUNNEL_PORT` | The UDP port for internet play. `0`: the game selects a port. Refer to "Internet play". |
 | `network.allow_upnp` | `true` | `HALO_NET_ALLOW_UPNP` | `true`: internet play can ask the router to forward its port (UPnP). `false`: the game does not ask. Refer to "Internet play". |
 | `network.public_lobby` | `true` | `HALO_NET_PUBLIC_LOBBY` | `true`: the server browser. Public games are listed, and Join Game > Server Browser shows them. `false`: no games are listed or shown. Refer to "Server browser". |
