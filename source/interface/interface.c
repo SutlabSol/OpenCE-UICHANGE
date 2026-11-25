@@ -85,6 +85,7 @@ symbols in this file:
 #include "game/players.h"
 #include "interface/first_person_weapons.h"
 #include "interface/hud.h"
+#include "mcc_hud_draw.h" /* port: port/linux/game/mcc_hud_draw.c */
 #include "interface/hud_definitions.h"
 #include "interface/interface.h"
 #include "interface/hud_messaging.h"
@@ -112,6 +113,7 @@ symbols in this file:
 #include "stats_log.h" /* port: port/linux/game/stats_log.c */
 #include "frame_rate_display.h" /* port: port/linux/game/frame_rate_display.c */
 #include "social_chat.h" /* port: port/linux/game/social_chat.c */
+#include "touch_cinematic.h" /* port: port/linux/game/touch_cinematic.c */
 
 /* ---------- constants */
 
@@ -393,6 +395,9 @@ void interface_draw_fullscreen_overlays(
 	void)
 {
 	cinematic_render();
+	/* port: the touchscreen's skip button, in the letterbox's bar
+	(port/linux/game/touch_cinematic.c) */
+	touch_cinematic_draw();
 	interface_splitscreen_render();
 	hud_render_timer();
 	/* port: a map's download (port/linux/game/map_share.c) */
@@ -422,6 +427,9 @@ void interface_draw_fullscreen_overlays(
 			social_chat_draw();
 		tag_pack_draw();
 	}
+	/* port: the host's screen, hosting from the menus, in place of the game
+	(port/linux/game/host_dashboard.c) */
+	host_dashboard_draw();
 	/* port: the overlay menu, over everything (port/linux/game/overlay_menu.c) */
 	overlay_menu_draw();
 
@@ -612,7 +620,7 @@ void interface_draw_screen(
 	/* port: a replay's playback's window is local player 0's, who has no
 	player: no HUD, nor the game type's view of a player (its line is drawn
 	over the screen, network_replay_playback_draw) */
-	if (network_replay_playing())
+	if (network_replay_viewing())
 		return;
 
 	weapon_hud_index = interface_get_weapon_hud_index(&flashlight_power);
@@ -747,7 +755,9 @@ void interface_draw_screen(
 				}
 			}
 
+			mcc_hud_mask_begin(parameters.convolution_mask); /* port: MCC screen-effect bitmap units */
 			rasterizer_screen_effect(&parameters);
+			mcc_hud_mask_end(); /* port: release the current view's borrowed mask */
 		}
 		else
 		{

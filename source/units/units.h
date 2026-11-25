@@ -957,6 +957,8 @@ boolean unit_custom_animation_at_frame(
 	short frame_index);
 
 boolean unit_drop_current_weapon(long unit_index, boolean immediate);
+/* port: a weapon of the unit's dropped, in hand or not; whether it had it */
+boolean unit_drop_weapon_object(long unit_index, long weapon_index);
 /* port: a grenade of the type, dropped as a unit drops its own (skulls.c's Pinata) */
 void unit_port_drop_grenade(long unit_index, short grenade_type);
 /* port: an object of the definition dropped from the unit's hand (skulls.c's skull); the object, or NONE */

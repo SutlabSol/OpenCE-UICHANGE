@@ -18,6 +18,9 @@ clip-space position again.
 */
 
 #include "xgpu.h"
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+#include "plasma_model_shader.h"
+#endif
 
 #include <stdlib.h>
 #include <string.h>
@@ -469,10 +472,28 @@ static void reversed_depth_instruction(struct xgpu_text *text, const DWORD *inst
 char *nv2a_vertex_shader_to_glsl(const DWORD *instructions, unsigned long instruction_count,
 	unsigned long packed_attribute_mask, const struct nv2a_vertex_lighting *lighting)
 {
+	return nv2a_vertex_shader_to_glsl_variant(instructions, instruction_count, packed_attribute_mask, lighting, 0);
+}
+
+char *nv2a_vertex_shader_to_glsl_variant(const DWORD *instructions, unsigned long instruction_count,
+	unsigned long packed_attribute_mask, const struct nv2a_vertex_lighting *lighting, unsigned int plasma)
+{
 	struct xgpu_text text = { 0 };
 	unsigned long index;
 	struct reversed_depth_rows rows;
 	BOOL position_converted = FALSE, reversed_rows;
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	struct nv2a_vertex_lighting plasma_lighting;
+
+	/* (the dynamic lighting's model variant: only a program with both point
+	lights, lit for each vertex; the pixel shader lights the others, as
+	nv2a_vsh_vk.c) */
+	if (plasma && (lighting || !nv2a_vertex_shader_lighting(instructions, instruction_count, &plasma_lighting) ||
+		plasma_lighting.lights != 2))
+		plasma = 0;
+#else
+	plasma = 0;
+#endif
 
 	rows.z_row = rows.w_row = -1;
 	rows.other = FALSE;
@@ -481,6 +502,13 @@ char *nv2a_vertex_shader_to_glsl(const DWORD *instructions, unsigned long instru
 	xgpu_text_append(&text, "#version %s\n", xgpu_capabilities.shading_language);
 #endif
 	xgpu_text_append(&text, "%s", shader_prologue);
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	if (plasma)
+	{
+		xgpu_text_append(&text, "%s", xgpu_plasma_model_declarations);
+		plasma_model_emit_visibility(&text, plasma);
+	}
+#endif
 	/* (the pixel shader's model_lighting; the normal's length in w) */
 	if (lighting)
 		xgpu_text_append(&text, "out vec4 xWorldNormal;\n");
@@ -545,6 +573,10 @@ char *nv2a_vertex_shader_to_glsl(const DWORD *instructions, unsigned long instru
 		xgpu_text_append(&text, "\tA = "); operand(&text, instruction, 'A', relative); xgpu_text_append(&text, ";\n");
 		xgpu_text_append(&text, "\tB = "); operand(&text, instruction, 'B', relative); xgpu_text_append(&text, ";\n");
 		xgpu_text_append(&text, "\tC = "); operand(&text, instruction, 'C', relative); xgpu_text_append(&text, ";\n");
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+		if (plasma)
+			plasma_model_emit_vertex(&text, (const uint32_t *)instruction, index, &plasma_lighting);
+#endif
 
 		switch (mac)
 		{

@@ -17,6 +17,48 @@ Physical mice use the same control bindings. During play, F12 toggles mouse
 capture; captured mode hides Android's pointer and uses relative movement for
 continuous aiming, while releasing capture restores normal pointer behavior.
 
+## Importing maps
+
+The map lists' **IMPORT** (New Game's and the Map screen's button, or the north
+face button on either list) takes Custom Edition maps and MCC content alike.
+On Android it opens the system's file picker, which copies the files chosen
+into the import folder (`import`, in the game's data folder). The Switch and
+the PS5 have no file picker: there IMPORT opens a screen with an upload page's
+address and QR code, served by the game on the local network while the screen
+is up (`port/linux/game/map_import_page.c`).
+
+The game's host takes in what lands there (`port/android/host/host_mcc_import.c`, on a
+thread of its own, its files read natively):
+
+- a `.map`: a Custom Edition map, into `custom_maps`. An MCC map is refused on
+  its own: import its package's `.zip`.
+- a `.zip` of Custom Edition maps: its maps, and a `.txt` of a map's name, its
+  description; more than one map goes in a folder named like the `.zip`.
+- a `.zip` with MCC content, which is told apart by its files: a Halo 1 Workshop
+  package (a `ModInfo.json`; several in one `.zip` are several packages) goes to
+  `mcc_maps/<Workshop ID>`, with its JSON metadata and PNG previews; MCC's own
+  resource sets, zipped from an MCC installation so that their `halo1/maps`
+  folders are kept (`halo1/maps/bitmaps.map` for singleplayer,
+  `halo1/maps/custom_edition/bitmaps.map` and `sounds.map` for multiplayer), go
+  to `mcc_maps/_shared/singleplayer` or `multiplayer`; MCC maps with no
+  `ModInfo.json` become a package named like the `.zip`.
+
+Every package is checked and staged (in `mcc_staging`) before anything is
+installed: its maps' headers and names, and a campaign's metadata as the game
+reads it (hub and flashback missions are refused). Then, for each package
+already in `mcc_maps`, the game asks: **REPLACE** it, or **KEEP VERSION ON
+DISK** (B). A replacement keeps the old package until the new one is in place,
+and an import cut short is put right by the next. A Custom Edition map of a
+name already there is kept. The game says what was imported, and why anything
+was not (a toast on Android; the screen and the upload page on the consoles).
+
+Limits: 4,096 files and 16 GB a `.zip`, less than 2 GB a map, 256 KB a JSON file,
+64 campaign missions. Enable **CAMPAIGN MISSIONS** in Settings > Network Setup >
+Map Sharing > MCC Packages for mission ordering and progression; it is off by
+default. See [MCC packages](../../docs/mcc_maps.md) for resource rules and
+compatibility limits. `tools/test_mcc_import.py` runs the importer natively over
+`.map` and `.zip` files made for it.
+
 ## Requirements
 
 You do not need the Xbox SDK. You need the tools of the Linux build (Python,
@@ -55,9 +97,9 @@ Your own builds all have the same signature (the debug key of WSL,
 (`adb install -r`).
 
 To keep the saved games before you remove the app, enter
-`adb pull /sdcard/Android/data/com.halo.decomp/files/save/u` (the profiles).
+`adb pull /sdcard/Android/data/com.halo.contentevolved/files/save/u` (the profiles).
 After the new install, before the first start of the app, enter
-`adb push u /sdcard/Android/data/com.halo.decomp/files/save/u`. The app reads
+`adb push u /sdcard/Android/data/com.halo.contentevolved/files/save/u`. The app reads
 and overwrites what adb pushes. adb cannot add files to `save/u` or `save/z` once the app made them, or
 change files that the app wrote, so push before the first start. adb cannot read
 some files that the app writes (the `blam.lst` files of `save/z`), so `adb pull`
@@ -75,9 +117,22 @@ of the whole `save` folder stops there.
 
 ## Game data
 
+MCC maps need a fixed 64 MiB virtual address window for their linked tags.
+The Android host attempts to reserve the usual `0x50000000` window at app
+startup, before the guest and renderer allocate memory. This reserves address
+space, not 64 MiB of physical RAM. Unloading an MCC map discards its pages
+but retains the reservation for the next load; exiting the process releases it.
+Xbox and Custom Edition keep their existing memory paths.
+
+If another mapping already occupies the window, the app leaves it untouched
+and MCC loading fails safely. Logcat (`halo`) lists overlapping mappings;
+the load error in `debug.txt` identifies the requested address. This is an
+address-space conflict, not a duplicate map file. Early reservation cannot
+guarantee that every device makes this address available.
+
 The game needs the `maps/` folder from an Xbox disc image (`.xiso` or
 `.iso`) of any version of the game. The app extracts `maps/` from the disc
-image. The app keeps the data in `/sdcard/Android/data/com.halo.decomp/files`.
+image. The app keeps the data in `/sdcard/Android/data/com.halo.contentevolved/files`.
 
 To install the data with the app:
 
@@ -92,17 +147,17 @@ To install the data with the app:
 To install the data from a computer:
 
 1. Start the app one time. The app makes its folders.
-2. Enter `adb push <folder>/. /sdcard/Android/data/com.halo.decomp/files/`.
+2. Enter `adb push <folder>/. /sdcard/Android/data/com.halo.contentevolved/files/`.
 
-| Item | Location in `/sdcard/Android/data/com.halo.decomp/files` |
+| Item | Location in `/sdcard/Android/data/com.halo.contentevolved/files` |
 | --- | --- |
 | Saved games (`z:\` and `u:\`) | `save` |
-| Mods (`docs/mods.md`) | `mods`: `adb push <mod folder> /sdcard/Android/data/com.halo.decomp/files/mods/`; the main menu's Mods orders them and turns them off |
+| Mods (`docs/mods.md`) | `mods`: `adb push <mod folder> /sdcard/Android/data/com.halo.contentevolved/files/mods/`; the main menu's Mods orders them and turns them off |
 | Log | `debug.txt`, the log of the game, and `halo.log`, the log of the app (`log_files = false` and `halo_log = false` in `[debug]` turn them off) |
 | Settings | `config.toml` |
 
 To make a copy of the saved games, enter
-`adb pull /sdcard/Android/data/com.halo.decomp/files/save/u` (the profiles).
+`adb pull /sdcard/Android/data/com.halo.contentevolved/files/save/u` (the profiles).
 An `adb pull` of the whole `save` folder stops at the `blam.lst` files of
 `save/z`, which adb cannot read.
 
@@ -141,9 +196,18 @@ value. Touches that start in the edge-gesture zones of Android do not tap
 or scroll at the sides, and do not scroll at the top and bottom, because the
 first swipe from an edge in full screen only shows the system bars.
 
-A tap during a cinematic that can be skipped skips it, as A does. On the
-game's on-screen keyboard (a player profile's name), tap a key to press it,
-"B =BACK" to cancel and "A =ENTER" to accept the name.
+During a cinematic that can be skipped, a SKIP button shows at the top
+right, in the black bar: tap it to skip the cinematic, as A does. Taps
+elsewhere do nothing, so a stray tap does not skip it. In network co-op,
+SKIP votes to skip, the line at the bottom counts the votes, and the button
+reads VOTED once you have voted; the cinematic is skipped once more than
+half the players have voted. The button follows the touch controls
+(`input.touch_controls`): while a controller is connected, or with `off`,
+there is no button and any tap skips, or votes to skip, as A does
+(`port/linux/game/touch_cinematic.c`).
+
+On the game's on-screen keyboard (a player profile's name), tap a key to
+press it, "B =BACK" to cancel and "A =ENTER" to accept the name.
 
 While a name is typed, on the game's on-screen keyboard or in a menu's text
 field (Server Setup's server name and password, a game's password when
@@ -225,11 +289,18 @@ them, which each profile keeps in the `settings.toml` in its folder
 gyroscope aims while the touch controls show.
 - "Options" opens these items:
   - "General": the phone's vibration (on by default; it follows the
-    vibration setting of the game's profile), a floating move stick (off by default: the stick goes
+    vibration setting of the game's profile), "Split screen" (off by
+    default: the left half of the screen moves, with the stick where your
+    thumb lands, drawn only while it is held; the right half looks; a tap
+    on the right half fires, and a double tap held there fires as long as
+    the finger stays and still aims; the Fire buttons are hidden while it
+    is on, and the other buttons press as before), a floating move stick (off by default: the stick goes
     where your thumb lands in the lower left of the screen), the opacity of
     the controls, how many fingers tap together to open the cheat menu
     (three, the default, or four), "Held buttons don't aim" (off by
-    default: a finger that swipes from a button only holds it),
+    default: a finger that swipes from a button only holds it), "Show
+    during cutscenes" (off by default: the controls stay on screen while a
+    cutscene plays, where they otherwise hide and a tap skips it),
     "Hide or add buttons" (hide a button, add a copy of a
     button) and "Edit buttons size".
   - "Edit buttons layout": drag the controls, and the "Options" button
@@ -249,9 +320,9 @@ Removing the app's data or the app removes the layout.
 The settings are in `config.toml` in the data folder of the app. To change
 them:
 
-1. Enter `adb pull /sdcard/Android/data/com.halo.decomp/files/config.toml`.
+1. Enter `adb pull /sdcard/Android/data/com.halo.contentevolved/files/config.toml`.
 2. Change the file.
-3. Enter `adb push config.toml /sdcard/Android/data/com.halo.decomp/files/`.
+3. Enter `adb push config.toml /sdcard/Android/data/com.halo.contentevolved/files/`.
 
 At the first start, the game writes the file with the default values. To
 get the default values again, delete the file.
@@ -277,7 +348,7 @@ These settings are only for Android:
 | Setting | Function |
 | --- | --- |
 | `input.touch_aim_assist` | `true` (the default): the touch controls' swipe aiming gets the aim assist of a controller (the aim slows over a target and follows a moving one). `false`: none, as with a mouse; the bullets' own autoaim stays. |
-| `input.touch_controls` | The touch controls in a game. `"auto"` (the default): shown on a touchscreen while no controller is connected. `"on"`: also shown with a controller. `"off"`: never shown. A device without a touchscreen never shows them. The carnage report's CONTINUE and LEAVE buttons follow the same rule (otherwise it shows its A and B prompt). The menus take taps in any case. |
+| `input.touch_controls` | The touch controls in a game. `"auto"` (the default): shown on a touchscreen while no controller is connected. `"on"`: also shown with a controller. `"off"`: never shown. A device without a touchscreen never shows them. The carnage report's CONTINUE and LEAVE buttons follow the same rule (otherwise it shows its A and B prompt), and so does a cinematic's SKIP button (otherwise any tap skips it). The menus take taps in any case. |
 | `display.screen_width` | The number of columns of the 480-line picture. `0` (the default): the shape of the display (1068 on a 20:9 phone). `640`: the 4:3 shape of the Xbox. |
 | `display.stats_log` | `false` (the default): `true` writes a line a second to the log with the frame rate, the mode, the map, the renderer and the size of the 3D view, for a bug report or to compare two builds. |
 | `display.resolution_scaling` | Also Linux's, with another default on Android. `"original"` (the default): the game draws the 480 lines of the Xbox, which the display scales up. `"native"`: the game draws at the display's resolution (1080 lines on a 1080p phone). `"75%"`, `"50%"` or `"25%"`: that part of the display's resolution each way, scaled up: less for the GPU to draw, for more frames a second and less heat. Video Setup's Resolution Scaling sets it, from the next frame. |
@@ -349,19 +420,19 @@ refer to "Make sure that it operates").
 ### Get to the settings file
 
 The settings file (`config.toml`) and the driver archives are in the data
-folder: `/sdcard/Android/data/com.halo.decomp/files`. Start the game one
+folder: `/sdcard/Android/data/com.halo.contentevolved/files`. Start the game one
 time first; the game then writes `config.toml`.
 
 Since Android 11, most file manager apps on the phone cannot open
 `Android/data`. Use a computer:
 
 - With a USB cable: set the phone to "File transfer", and open
-  `Internal storage/Android/data/com.halo.decomp/files` on the computer.
+  `Internal storage/Android/data/com.halo.contentevolved/files` on the computer.
   Copy `config.toml` to the computer, change it with a text editor, and
   copy it back.
-- With adb: `adb pull /sdcard/Android/data/com.halo.decomp/files/config.toml`,
+- With adb: `adb pull /sdcard/Android/data/com.halo.contentevolved/files/config.toml`,
   change the file, then
-  `adb push config.toml /sdcard/Android/data/com.halo.decomp/files/`.
+  `adb push config.toml /sdcard/Android/data/com.halo.contentevolved/files/`.
 
 Close the game before you change `config.toml`: the game writes the file
 when it starts and when you change a setting in its menus. Change only the
@@ -444,7 +515,7 @@ To turn Turnip off, set **VULKAN DRIVER** to `STOCK` (or
    `meta.json` naming a library that is in the zip, 256 MB at most); a
    name the folder has already is left as it is. Leave Video Setup and open
    it again to see it listed. Or copy the `.zip` file into that folder
-   yourself (`/sdcard/Android/data/com.halo.decomp/files/freedreno_drivers/`;
+   yourself (`/sdcard/Android/data/com.halo.contentevolved/files/freedreno_drivers/`;
    the app makes the folder when it looks for its own download).
 3. In **VIDEO SETUP**, set **VULKAN DRIVER** to the archive: every `.zip`
    in `freedreno_drivers` is listed after `STOCK`, by its file
@@ -744,6 +815,25 @@ functions of OpenGL ES 3.2 if they are available:
   the query buffer of desktop OpenGL. A read of the counters themselves
   waits for the GPU, which halved the frame rate on Turnip (Zink).
 
+`host_gl_wait_frame` in [`host/host_gl.c`](host/host_gl.c) releases an upload
+ring slot only after GPU completion. A signaled fence takes the normal path;
+if the one-second wait times out or fails, `glFinish` completes queued work
+before the slot is reused. Failed fence creation uses the same fallback.
+This can stall longer than one second under GPU pressure, but cannot safely
+be replaced by treating a timeout as completion. The first fallback is logged.
+The contract applies to every Android chip policy and map family, including
+frames drawn during loading; it neither reads nor deletes saved games or maps.
+
+[`test_android_frame_fences.py`](../../tools/test_android_frame_fences.py)
+compiles the production host fence and upload functions with a delayed fake
+GPU. Timeout, wait failure and fence creation failure previously let queued
+draws read the next upload's bytes. The test covers those failures, successful
+waits and repeated slot reuse. This establishes a synchronization defect found
+while investigating [issue #80](https://github.com/chestahh/GulchCE/issues/80),
+not that it explains the reported save-folder workaround. An affected-device
+comparison across consecutive matches with the original saves retained is
+still needed to establish whether that issue is resolved.
+
 ### Calling conventions
 
 Some files of the game declare a function differently from its definition,
@@ -827,7 +917,7 @@ and fixed stream buffers, without registering static-cache entries or
 allocating per-draw pooled buffers. Desktop and web retain their existing
 geometry cache and upload paths. These geometry
 changes preserve shaders, texture caching and CPU write tracking.
-Xbox and Custom Edition maps keep their existing loaders and resource
+Xbox, Custom Edition and MCC maps keep their existing loaders and resource
 paths. `tools/test_android_mirror_uploads.py` checks the bypass with large
 and reused ranges, frame-counter rollover and desktop/web cache controls;
 it does not substitute for device gameplay validation. The chip and policy
@@ -924,8 +1014,40 @@ and reload, address reuse and allocation failure.
 - To install a debug build beside the app from GitHub Actions (another
   signing key stops it from replacing that app), set
   `HALO_APPLICATION_ID_SUFFIX=.vk` when you run `ninja android_apk`. The
-  package is then `com.halo.decomp.vk`, with a data folder of its own, which
-  needs a copy of `maps/`.
+  package is then `com.halo.contentevolved.vk`, with a data folder of its own,
+  which needs a copy of `maps/`.
+
+## The move from the old app (com.halo.decomp)
+
+The app was `com.halo.decomp`, OpenCE's id, up to build 141. It is now
+`com.halo.contentevolved`. Android treats the two as different apps, and no
+app can read another app's `Android/data` folder, whatever its key. The old
+app's last update is therefore the bridge (`port/android/bridge`), a small app
+of its own:
+
+- Every release carries the bridge under the old app's file names
+  (`halo-android-release.zip` and `halo-android-debug.zip`, what the old
+  updater asks for), and the game as `halo-contentevolved-release.apk` and
+  `.zip` (`tools/release.py`). The old apps look at the latest release only,
+  so the bridge stays in every release.
+- Installed over the old app, the bridge keeps its files. It downloads the
+  game from the latest release, checks that it is `com.halo.contentevolved`
+  signed with the same key, and opens the package installer. Once the game is
+  installed, the bridge only opens it (and passes `halo://join` links on).
+- On its first start, the game finds the old app. If the old app is signed
+  with the same key and is the bridge, the game copies its files through the
+  bridge's provider: the data folder, and the touch layout from
+  `shared_prefs`. Paths to the old data folder in small text files (a custom
+  maps folder in `config.toml`) are changed to the new one. Then the game
+  offers to uninstall the old app. `moved_from_old_app.txt` in the data folder
+  marks the move as done or declined.
+- An old app that is not the bridge yet (a player who downloaded the game by
+  hand) has no provider. The game asks the player to open the old app once, so
+  that it updates itself.
+- An old app signed with another key (OpenCE's own) is left alone.
+
+The bridge's version code (1000000) is above every old build's and stays the
+same from release to release. Raise it only for a bridge that changed.
 
 ## Limits
 

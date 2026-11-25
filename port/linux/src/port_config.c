@@ -40,6 +40,9 @@ void host_storage_commit(void);
 /* platform.h declares this. Repeated so the section check can be compiled
 without that header */
 void platform_log(const char *format, ...);
+/* (for the profile folder the check makes: the port's <sys/stat.h> is MSVC's
+and has no mkdir) */
+int mkdir(const char *path, unsigned int mode);
 #endif
 
 /* ---------- the settings */
@@ -85,15 +88,24 @@ enum
 	/* (the PS5's, port/ps5: a guest build, with the console's own rows and
 	the Vulkan renderer's debugging rows, which its host reads) */
 	_platform_ps5 = 64,
+#elif defined(HALO_MACOS)
+	/* (the macOS build's, port/macos: a guest build with the Vulkan
+	renderer, whose debugging rows it has) */
+	_platform_macos = 64,
 #endif
+	/* (those hosting from the menus has too, on Android, the Switch and the
+	PS5: port/linux/game/host_dashboard.c) */
+	_platform_host = 128,
 	/* (of the desktop builds, only Linux: MENDICANT AI's training bridge and
 	logs, which the other builds compile out) */
-	_platform_linux = 128,
+	_platform_linux = 256,
 };
 
 /* the Vulkan renderer's debugging rows: Android's, and the PS5's */
 #ifdef HALO_PS5
 #define PLATFORM_VULKAN (_platform_android | _platform_ps5)
+#elif defined(HALO_MACOS)
+#define PLATFORM_VULKAN (_platform_android | _platform_macos)
 #else
 #define PLATFORM_VULKAN _platform_android
 #endif
@@ -253,7 +265,14 @@ static const struct config_setting config_settings[] =
 		"Manual high-res gameplay button style, preserved while automatic detection\n"
 		"is on. Xbox: classic, gems, menu_gems (dark gems), xbox_modern.\n"
 		"PlayStation: ps_classic, ps_gems, ps_dark_gems, ps_modern.\n"
-		"Switch: switch_classic, switch_gems, switch_modern. Requires high_res_hud." },
+		"Switch: switch_classic, switch_gems, switch_modern. Controllers require high_res_hud.\n"
+		"keyboard selects binding-aware gameplay keycaps independently of high_res_hud." },
+	{ "display.menu_button_glyphs", _config_boolean, "false", "HALO_MENU_BUTTON_GLYPHS", _environment_value, _platform_all,
+		"Use the selected keyboard/controller style in PC-menu face-button legends." },
+	{ "display.keyboard_glyphs", _config_boolean, "false", "HALO_KEYBOARD_GLYPHS", _environment_value, _platform_all,
+		"With auto button detection on, show binding-aware gameplay keycaps after\n"
+		"keyboard/mouse activity. Off preserves existing prompts. Manual keyboard\n"
+		"style works with detection off. Menu legends require menu_button_glyphs." },
 	{ "display.hud_bumper_style", _config_string, "\"original\"", "HALO_HUD_BUMPER_STYLE", _environment_value, _platform_all,
 		"Xbox Classic, Gems and Dark Gems bumpers: original (black/white) or modern\n"
 		"(LB/RB). Shared by local players, including automatic button detection.\n"
@@ -282,6 +301,9 @@ static const struct config_setting config_settings[] =
 		"Draw the menus' and HUD's text with the fonts in port/assets/fonts\n"
 		"(Overpass) at the resolution the game draws at, and the menus' titles\n"
 		"from port/assets/titles; false draws the maps' bitmap fonts and titles." },
+	{ "display.widescreen_loading", _config_boolean, "true", "HALO_WIDESCREEN_LOADING", _environment_value, _platform_all,
+		"Widen the stock loading screen, keeping its original picture, sweep\n"
+		"and glow trails. False keeps the central 4:3 framing." },
 	{ "display.shadow_resolution", _config_integer, "128", "HALO_SHADOW_RESOLUTION", _environment_value,
 		_platform_all,
 		"The size the objects' shadows are drawn at, in pixels each way: 128 as\n"
@@ -368,6 +390,10 @@ static const struct config_setting config_settings[] =
 		"Keep the GPU programs the game links under the save root (shader_cache),\n"
 		"and load them from there next time instead of linking them again, which\n"
 		"stalls a frame on some drivers; false links each every run." },
+	{ "display.mcc_texture_prepare_mb", _config_integer, "0", "HALO_MCC_TEXTURE_PREPARE_MB", _environment_value, _platform_desktop,
+		"MCC only: prepare large non-paletted textures during loading, within\n"
+		"this estimated GPU memory budget in MiB (0 disables, maximum 512).\n"
+		"Does not change texture quality or the Xbox/Custom Edition caches." },
 	{ "display.stats_log", _config_boolean, "false", "HALO_STATS_LOG", _environment_value, _platform_all,
 		"A line a second in the log with the frame rate, the mode, the map, the\n"
 		"renderer and the size of the 3D view, so a graphics bug's report or two\n"
@@ -447,14 +473,25 @@ static const struct config_setting config_settings[] =
 	{ "audio.channels", _config_string, "\"stereo\"", "HALO_AUDIO_CHANNELS", _environment_value, _platform_desktop,
 		"\"stereo\", \"5.1\" (surround, as the Xbox's Dolby Digital), or \"auto\"\n"
 		"for 5.1 when the sound device has six or more channels." },
+	{ "audio.hrtf", _config_boolean, "true", "HALO_HRTF", _environment_value, _platform_all,
+		"Use the measured Xbox spatial filters for 3D sounds on stereo and surround outputs." },
 	{ "audio.reverb", _config_boolean, "true", "HALO_REVERB", _environment_value, _platform_all,
 		"Reverberate the world's sounds as the place the player is in does (the\n"
 		"maps' sound environments, as the Xbox's I3DL2 reverb did); false keeps\n"
 		"them dry." },
-	{ "audio.resampler", _config_string, "\"sinc\"", "HALO_AUDIO_RESAMPLER", _environment_value, _platform_all,
-		"How sounds are converted to the output's rate: \"sinc\" with a\n"
+	{ "audio.resampler", _config_string, "\"xbox\"", "HALO_AUDIO_RESAMPLER", _environment_value, _platform_all,
+		"How sounds are converted to the output's rate: \"xbox\" models the Xbox;\n"
+		"\"sinc\" uses a "
 		"band-limited low pass; \"linear\" between neighbouring samples,\n"
 		"brighter for the aliasing it lets through." },
+	{ "audio.realtime", _config_boolean, "true", "HALO_AUDIO_REALTIME", _environment_value, _platform_android,
+		"Play through AAudio's low latency path (on a phone that has it, straight to\n"
+		"the hardware, past the system's mixer); false goes through the mixer,\n"
+		"where screen recorders take the app's sound." },
+	{ "audio.stereo_doppler", _config_boolean, "false", "HALO_STEREO_DOPPLER", _environment_value, _platform_all,
+		"Shift the pitch of a stereo sound placed in the world (an engine, a\n"
+		"rocket's flight) as it comes towards or goes away from the player, as\n"
+		"3D sounds are; false plays them at their own pitch, as the Xbox did." },
 	{ "audio.voice_chat", _config_string, "\"push_to_talk\"", "HALO_VOICE_CHAT", _environment_value, _platform_all,
 		"Talking in network games' voice chat: \"push_to_talk\" (while\n"
 		"controls.push_to_talk is held; the microphone opens the first time),\n"
@@ -523,11 +560,17 @@ static const struct config_setting config_settings[] =
 		_platform_desktop,
 		"How far the view turns up and down for the mouse's movement; 0 for the\n"
 		"same as input.mouse_sensitivity." },
+	{ "input.stick_vertical_sensitivity", _config_real, "0", "HALO_STICK_VERTICAL_SENSITIVITY", _environment_value,
+		_platform_all,
+		"How fast the controller's right stick turns the view up and down, 1 to\n"
+		"15: 40 degrees a second and about 24.4 more a step (10 is 260, the top of\n"
+		"the Xbox's Look Sensitivity left and right; 15 about 382). 0 for the\n"
+		"game's own, half of Look Sensitivity's turn." },
 	{ "input.left_stick_dead_zone", _config_integer, "-1", "HALO_LEFT_STICK_DEAD_ZONE", _environment_value, _platform_all,
 		"How far the controller's left stick moves before it moves the player,\n"
 		"in percent of its travel (0 to 50): lower for finer control, higher for\n"
-		"a worn stick that drifts; -1 for the game's own (27%). On Android, the\n"
-		"touch controls' stick too." },
+		"a worn stick that drifts; -1 for the game's own (27%). Not the touch\n"
+		"controls' sticks, which have their own." },
 	{ "input.right_stick_dead_zone", _config_integer, "-1", "HALO_RIGHT_STICK_DEAD_ZONE", _environment_value, _platform_all,
 		"How far the controller's right stick moves before it turns the view, in\n"
 		"percent of its travel (0 to 50); -1 for the game's own (27%)." },
@@ -685,6 +728,92 @@ static const struct config_setting config_settings[] =
 	{ "game.third_person_distance", _config_string, "\"normal\"", "HALO_THIRD_PERSON_DISTANCE", _environment_value,
 		_platform_all,
 		"How far back the third-person view is: \"near\", \"normal\" or \"far\"." },
+	{ "game.firefight_enemy_fire_rate", _config_integer, "50", NULL, _environment_value, _platform_all,
+		"How often Firefight's enemies fire, in percent of what their tags say\n"
+		"(10 to 100): their rate and bursts that much, the pauses between bursts\n"
+		"longer by as much. Firefight's enemies see the players across the map\n"
+		"and charge them, so at 100 they fire far too often." },
+	{ "game.firefight_enemy_firing_range", _config_integer, "20", NULL, _environment_value, _platform_all,
+		"The farthest Firefight's enemies fire from, in world units (10 to 45):\n"
+		"each keeps its own range under it, and no less than 10." },
+	{ "game.firefight_enemy_aim_error", _config_integer, "150", NULL, _environment_value, _platform_all,
+		"Firefight's enemies' aim, in percent of their tags' error (100 to 300):\n"
+		"higher misses more." },
+	{ "game.firefight_objectives_round", _config_boolean, "false", NULL, _environment_value, _platform_all,
+		"Firefight's WAVE OBJECTIVES (Server Setup > OBJECTIVE SETTINGS): a challenge\n"
+		"for a wave, rolled as each wave starts (game.firefight_objectives_round_chance), of\n"
+		"those turned on below; done before the wave is cleared, it\n"
+		"gives the team points (port/linux/game/firefight_objectives.c). The\n"
+		"host's, the same on every map." },
+	{ "game.firefight_objectives_round_chance", _config_integer, "50", NULL, _environment_value, _platform_all,
+		"The chance, in percent (0 to 100), that a Firefight wave has a wave\n"
+		"objective." },
+	{ "game.firefight_objective_kills", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Wave objective KILLS: so many kills of a kind (headshots, melee,\n"
+		"grenades, splatters, or a weapon class the players carry)." },
+	{ "game.firefight_objective_no_deaths", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Wave objective NO DEATHS: the wave finished with no player dying." },
+	{ "game.firefight_objective_shields", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Wave objective SHIELDS INTACT: the wave finished with no more than half\n"
+		"the players' shields broken (falls, their own blasts and friendly fire\n"
+		"count)." },
+	{ "game.firefight_objective_kill_first", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Wave objective KILL THE MARKED ENEMY FIRST: one of the wave's,\n"
+		"marked, killed before any other." },
+	{ "game.firefight_objective_dont_use", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Wave objective DON'T USE: a weapon class (or a grenade) most players\n"
+		"carry, never fired (or thrown) all wave." },
+	{ "game.firefight_objective_vehicle_kills", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Wave objective VEHICLE KILLS: so many kills from a vehicle of a kind,\n"
+		"one given the players if the map has none of it there." },
+	{ "game.firefight_objective_travel", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Wave objective TRAVEL: a player reaches a marked point of the map, far\n"
+		"from them, before the wave is cleared." },
+	{ "game.firefight_objective_weapon_only", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Wave objective USE ONLY: a weapon dropped to every player in an\n"
+		"ordnance pod; once it lands, firing any other fails it (grenades\n"
+		"and melee are fine)." },
+	{ "game.firefight_objectives_set", _config_boolean, "false", NULL, _environment_value, _platform_all,
+		"Firefight's ROUND OBJECTIVES (Server Setup > GAME SETTINGS): a set piece on\n"
+		"the map, rolled once a round (game.firefight_objectives_set_chance) and starting at\n"
+		"its first or second wave, lasting until the round ends: those turned on\n"
+		"below that the map has the points for. Won, the team's points, an\n"
+		"ordnance pod for the better half of the players and more for the best." },
+	{ "game.firefight_objectives_set_chance", _config_integer, "80", NULL, _environment_value, _platform_all,
+		"The chance, in percent (0 to 100), that a Firefight round has a round\n"
+		"objective." },
+	{ "game.firefight_objective_target", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Round objective HIGH VALUE TARGET: an enemy camp round a map objective,\n"
+		"its VIP at the middle; killed before the camp teleports out." },
+	{ "game.firefight_objective_generator", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Round objective ENEMY GENERATOR: an enemy camp round a map objective, its\n"
+		"generator at the middle, destroyed before time runs out." },
+	{ "game.firefight_objective_purge", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Round objective CLEAR ENEMY BASE: an enemy camp round a map objective, every\n"
+		"one of them killed before the round ends." },
+	{ "game.firefight_objective_data_link", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Round objective DATA LINK: a King of the Hill hill turns on; held, with no\n"
+		"enemy in it, for a quarter of the round's time, before half of it has\n"
+		"passed. A map with hills." },
+	{ "game.firefight_objective_flag", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Round objective FLAG: a flag turns on, carried to the other base before the\n"
+		"round ends; every enemy goes for its carrier. A map with two flags." },
+	{ "game.firefight_objective_rescue", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Round objective RESCUE: marines under attack somewhere on the map, lost if\n"
+		"no one comes in a quarter of the round's time; saved, they follow the\n"
+		"players, each alive at the round's end worth more points." },
+	{ "game.firefight_objective_oddball", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Round objective ODDBALL: a boss carries a skull; killed, the skull is held\n"
+		"for a quarter of the round's time, every enemy going for its holder. A map\n"
+		"with an oddball spawn." },
+	{ "game.firefight_objective_collect", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Round objective COLLECT: enemies the players kill drop skulls, taken by\n"
+		"walking into them and banked at a hill or a flag's base; a carrier who\n"
+		"dies drops all of theirs for anyone. A map with a hill or a flag." },
+	{ "game.firefight_objective_bomb", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Round objective BOMB: a bomb (the oddball) carried to a far target and\n"
+		"planted; defended until it goes off, enemies at it unopposed disarm it\n"
+		"and it goes back. A map with two objective points." },
 	{ "game.campaign_score", _config_boolean, "false", "HALO_CAMPAIGN_SCORE", _environment_value, _platform_all,
 		"Settings > Gameplay > Scoring's SCORING. Score the campaign as Halo 3: a\n"
 		"kill is its enemy's points times its style (one shot one kill, headshot,\n"
@@ -1057,6 +1186,16 @@ static const struct config_setting config_settings[] =
 		"names begin with [BOT]. In a game, the console's add_bot and drop_bot\n"
 		"(add_bot_red, drop_bot_blue...) add or take one. 0: none, as in the\n"
 		"stock game." },
+	{ "bots.firefight_enabled", _config_boolean, "true", NULL, _environment_value, _platform_all,
+		"Firefight's bots.enabled: whether bots join a Firefight game hosted here\n"
+		"as the players' allies (Firefight's BOTS screen), kept apart from a\n"
+		"multiplayer game's." },
+	{ "bots.firefight_count", _config_integer, "0", NULL, _environment_value, _platform_all,
+		"Firefight's bots.count: the bots in a Firefight game hosted here (0 to 16),\n"
+		"kept apart from a multiplayer game's." },
+	{ "bots.firefight_skill", _config_string, "\"distributed\"", NULL, _environment_value, _platform_all,
+		"Firefight's bots.skill (the same words), kept apart from a multiplayer\n"
+		"game's." },
 	{ "bots.keep_min", _config_boolean, "true", "HALO_BOTS_KEEP_MIN", _environment_value, _platform_all,
 		"In a system link or internet game hosted here: a player who joins takes\n"
 		"a bot's place (20 bots, one joins: 19 bots and the player), and a bot\n"
@@ -1069,6 +1208,12 @@ static const struct config_setting config_settings[] =
 		"how far they see, and how they fight: blows, grenades, strafes, retreats),\n"
 		"or \"distributed\": each bot its own level, on a curve (most of them normal\n"
 		"and heroic, a few recruit and legendary), the same on both teams." },
+	{ "bots.kind", _config_string, "\"birchwood\"", "HALO_BOT_KIND", _environment_value, _platform_all,
+		"The kind of bot added from now on: \"birchwood\" (the bots as they\n"
+		"were) or \"provinggrounds\" (a second kind, with hidden personalities,\n"
+		"that also plays Oddball and Race). Each bot keeps the kind it joined as,\n"
+		"so one game can hold both; in Oddball and Race every bot plays as\n"
+		"Proving Grounds." },
 	{ "bots.teams", _config_string, "\"even\"", "HALO_BOT_TEAMS", _environment_value, _platform_all,
 		"In team games: \"even\" puts the bots on both teams, evening them with\n"
 		"the players; \"against\" puts them all on the team the players are not on." },
@@ -1148,21 +1293,69 @@ static const struct config_setting config_settings[] =
 	{ "display.overshield_effect", _config_boolean, "false", "HALO_OVERSHIELD_EFFECT", _environment_value, _platform_all,
 		"The overshield as this machine draws it: its flare rising up the body as\n"
 		"it charges (2 seconds, 3 from a shield that was down) and staying lit,\n"
-		"its energy slower, in its own color (the powerup's), on the first-person\n"
+		"its energy slower, green above 200% shield and pink through 200%; on the\n"
 		"arms too with viewmodel_shield; a hit on it plays what the projectile\n"
 		"plays on an Elite's shield. Only what is drawn and heard changes.\n"
 		"In a network game, the host's network.shield_effects decides, unless\n"
 		"it is \"players\" (each player's own) or the game is co-op." },
+	{ "display.plasma_occlusion", _config_boolean, "false", "HALO_PLASMA_OCCLUSION", _environment_value, _platform_all,
+		"Light Occlusion: dynamic lights stop at walls and vehicles, from rays\n"
+		"traced on the CPU. Projectile, muzzle, Covenant, vehicle and Shield Glow\n"
+		"lights all follow it; off, no rays are traced. At most eight occluded\n"
+		"lights. Not in Android's OpenGL renderer." },
+#if defined(HALO_ANDROID) && !defined(HALO_SWITCH)
+	/* (the phone's: lighting_config.c's lighting_budget. The Switch traces a
+	fixed count of rays, the PS5 eight lights) */
+	{ "display.occlusion_lights", _config_integer, "6", "HALO_OCCLUSION_LIGHTS", _environment_value, _platform_android,
+		"How many lights Light Occlusion traces rays for in a frame: 8, 6 or 4.\n"
+		"Fewer are faster on a slower phone; a light past them keeps its last\n"
+		"occlusion, or has none, until its turn. Changes at once. Vulkan only." },
+#endif
+	{ "display.plasma_lighting", _config_boolean, "false", "HALO_PLASMA_LIGHTING", _environment_value, _platform_all,
+		"Supported plasma, Covenant and rocket flight lights follow rendered poses\n"
+		"with soft world and model falloff and omni highlights. Off keeps stock\n"
+		"lighting. Not in Android's OpenGL renderer." },
+	{ "display.muzzle_lighting", _config_boolean, "false", "HALO_MUZZLE_LIGHTING", _environment_value, _platform_all,
+		"Soft muzzle illumination with a smooth render-time fade. Stock flash\n"
+		"effects remain intact. Off keeps stock lighting. Not in Android's OpenGL renderer." },
+	{ "display.weapon_glow", _config_boolean, "false", "HALO_WEAPON_GLOW", _environment_value, _platform_all,
+		"Held energy weapons cast soft light. Not in Android's OpenGL renderer." },
+	{ "display.fuel_rod_lighting", _config_boolean, "false", "HALO_FUEL_ROD_LIGHTING", _environment_value, _platform_all,
+		"Soft green illumination from exposed Grunt and Hunter fuel rods. Stock\n"
+		"weapon effects remain intact. Not in Android's OpenGL renderer." },
+	{ "display.ammo_counter_lighting", _config_boolean, "false", "HALO_AMMO_COUNTER_LIGHTING", _environment_value, _platform_all,
+		"Blue spill and screen emission from held Assault Rifle ammo counters.\n"
+		"Not in Android's OpenGL renderer." },
+	{ "display.needler_lighting", _config_boolean, "false", "HALO_NEEDLER_LIGHTING", _environment_value, _platform_all,
+		"Soft pink-purple spill and luminous crystals on held Needlers. Not in\n"
+		"Android's OpenGL renderer." },
+	{ "display.plasma_prong_lighting", _config_boolean, "false", "HALO_PLASMA_PRONG_LIGHTING", _environment_value, _platform_all,
+		"Short, soft forward spill from plasma-weapon prongs, apart from Weapon\n"
+		"Glow. Not in Android's OpenGL renderer." },
+	{ "display.jackal_shield_lighting", _config_boolean, "false", "HALO_JACKAL_SHIELD_LIGHTING", _environment_value, _platform_all,
+		"Soft illumination from visible Jackal shields, following their colour and\n"
+		"pose. Stock shield effects remain intact. Not in Android's OpenGL renderer." },
+	{ "display.covenant_shield_lighting", _config_boolean, "false", "HALO_COVENANT_SHIELD_LIGHTING", _environment_value, _platform_all,
+		"Soft illumination from active stationary Covenant shield emitters. Stock\n"
+		"shield effects remain intact. Not in Android's OpenGL renderer." },
+	{ "display.vehicle_lighting", _config_boolean, "false", "HALO_VEHICLE_LIGHTING", _environment_value, _platform_all,
+		"Vehicle engines and headlights illuminate nearby surfaces. Not in\n"
+		"Android's OpenGL renderer." },
+	{ "display.world_lighting", _config_boolean, "false", "HALO_WORLD_LIGHTING", _environment_value, _platform_all,
+		"Visible powerups and teleporters cast soft light. Not in Android's OpenGL renderer." },
 	{ "display.shield_glow", _config_boolean, "false", "HALO_SHIELD_GLOW", _environment_value, _platform_all,
 		"Energy shields light what is around them as they flare, as plasma\n"
 		"does, in the shield's own color. In a network game, the host's\n"
 		"network.shield_effects decides, unless it is \"players\" (each\n"
 		"player's own) or the game is co-op." },
-	{ "display.shield_glow_intensity", _config_string, "\"default\"", "HALO_SHIELD_GLOW_INTENSITY", _environment_value, _platform_all,
-		"How far the shield glow reaches: \"default\" or \"light_show\" (three\n"
-		"times as far, and at full strength from a third of the flare).\n"
-		"In a network game, the host's network.shield_effects decides, unless\n"
-		"it is \"players\" (each player's own) or the game is co-op." },
+	{ "display.shield_glow_intensity", _config_string, "\"stock\"", "HALO_SHIELD_GLOW_INTENSITY", _environment_value, _platform_all,
+		"Dynamic Lighting's LIGHTING: \"stock\" turns every added light off, as\n"
+		"the original Xbox drew the game, whatever their own settings. Else how\n"
+		"far every dynamic light reaches, and how bright it is: \"default\"\n"
+		"(as made), \"1.5x\", \"2x\" or \"light_show\" (three times: as far, and\n"
+		"at full strength from a third of its brightness). In a network game,\n"
+		"the shield glow's is the host's network.shield_effects, unless it is\n"
+		"\"players\" (each player's own) or the game is co-op." },
 	{ "display.shield_color", _config_string, "\"default\"", "HALO_SHIELD_COLOR", _environment_value, _platform_all,
 		"Your energy shield's color, as this machine draws it: \"default\" (the\n"
 		"shield's own) or a multiplayer armor color: white, black, red, blue,\n"
@@ -1187,12 +1380,22 @@ static const struct config_setting config_settings[] =
 		"The folder the game's maps are read from; empty for the maps folder in\n"
 		"the data folder. A relative path is under the data folder. Read once,\n"
 		"at the start. The disc's maps are only ever unpacked into the data\n"
-		"folder's maps, so a folder named here must hold them already." },
+		"folder's maps, so a folder named here must hold them already (on\n"
+		"Android, the launcher's \"Use another folder\" sets this and unpacks\n"
+		"them there)." },
 	{ "game.custom_maps.path", _config_string, "\"\"", "HALO_CUSTOM_MAPS_PATH", _environment_value, _platform_all,
 		"The folder Custom Edition maps are read from (and map sharing's\n"
 		"downloads go to); empty for the custom_maps folder in the data folder.\n"
 		"A relative path is under the data folder. On Android, Settings >\n"
 		"Gameplay > CUSTOM MAPS FOLDER chooses it; a change takes effect at once." },
+	{ "game.mods.path", _config_string, "\"\"", "HALO_MODS_PATH", _environment_value, _platform_all,
+		"The folder the mods are read from (and Android's IMPORT puts them in);\n"
+		"empty for the mods folder in the data folder. A relative path is under\n"
+		"the data folder." },
+	{ "game.mcc.path", _config_string, "\"\"", "HALO_MCC_PATH", _environment_value, _platform_all,
+		"The folder holding mcc_maps (the MCC maps, and Steam's downloads of them);\n"
+		"empty for the data folder. A relative path is under the data folder. Read\n"
+		"once, at the start. mcc_staging stays in the data folder." },
 
 	{ "paths.data", _config_string, "\"\"", "HALO_DATA_ROOT", _environment_value, _platform_desktop,
 		"The folder holding the game data's maps folder; empty looks in the\n"
@@ -1212,6 +1415,24 @@ static const struct config_setting config_settings[] =
 	{ "paths.custom_maps", _config_string, "\"\"", "HALO_CUSTOM_MAPS_ROOT", _environment_value, _platform_desktop,
 		"The custom_maps folder (Custom Edition maps, and their bitmaps.map,\n"
 		"sounds.map and loc.map); empty for the one in the data folder." },
+	{ "paths.steam", _config_string, "\"\"", "HALO_STEAM_ROOT", _environment_value, _platform_desktop,
+		"A Steam folder (or Steam library) to check first for subscribed Halo CE\n"
+		"Workshop items. Empty uses automatic discovery: Windows registry, Linux\n"
+		"Steam/XDG hints, usual folders and their libraries. Windows paths use single\n"
+		"quotes: 'D:\\Steam'." },
+	{ "game.mcc_campaigns", _config_boolean, "true", "HALO_MCC_CAMPAIGNS", _environment_value, _platform_all,
+		"Use explicit MCC campaign manifests for mission discovery, ordering and\n"
+		"progression. Reopen the map list after changing this." },
+	{ "game.mcc_host_conversion", _config_boolean, "true", "HALO_MCC_HOST_CONVERSION", _environment_value, _platform_all,
+		"Convert an MCC map's sounds and textures on the host's threads as it loads,\n"
+		"keeping its converted sounds in the host's memory. false converts them on the\n"
+		"game's own thread, one after another, as before." },
+	{ "game.workshop_maps", _config_boolean, "true", "HALO_WORKSHOP_MAPS", _environment_value, _platform_desktop,
+		"Discover installed Halo CE Steam Workshop maps. Read-only desktop\n"
+		"discovery; manually installed mcc_maps packages always remain available." },
+	{ "game.mcc_collections", _config_boolean, "true", "HALO_MCC_COLLECTIONS", _environment_value, _platform_all,
+		"Group identified MCC packages into the bundled Workshop collections.\n"
+		"Works with imported packages without Steam; reopen the map list after changing." },
 
 	{ "network.address", _config_string, "\"\"", "HALO_NET_ADDRESS", _environment_value, _platform_all,
 		"This machine's IPv4 address for system link, for a machine on several\n"
@@ -1229,6 +1450,10 @@ static const struct config_setting config_settings[] =
 		_platform_all,
 		"Join the game of an invite link found on the clipboard when the game\n"
 		"comes to the front." },
+	{ "network.delta", _config_boolean, "true", "HALO_NET_DELTA", _environment_value, _platform_all,
+		"Joining a host that speaks Delta (the open network spec's), tell it\n"
+		"this machine's platform, so it keeps the game to this machine's limits.\n"
+		"The game plays the same either way." },
 	{ "network.tunnel_port", _config_integer, "0", "HALO_NET_TUNNEL_PORT", _environment_value, _platform_all,
 		"The UDP port internet play uses; 0 picks one. A fixed one can be\n"
 		"forwarded on the router, for networks whose NAT stops connections." },
@@ -1326,14 +1551,16 @@ static const struct config_setting config_settings[] =
 		"Hosting: the minutes a player kicked by a vote cannot join again (1 to\n"
 		"1440)." },
 	{ "network.map_share", _config_boolean, "true", "HALO_NET_MAP_SHARE", _environment_value, _platform_all,
-		"Hosting: send a player who joins without the game's Custom Edition map\n"
+		"Hosting: share CE maps and MCC packages automatically. MCC base\n"
+		"resources are never sent; joiners need matching local copies.\n"
+		"For a player without the game's Custom Edition map, send\n"
 		"the map (from custom_maps), and the resource maps it needs that the\n"
 		"player lacks (bitmaps.map, sounds.map, loc.map). The game's other\n"
 		"players help (network.map_seed)." },
 	{ "network.map_share_upload", _config_integer, "1024", "HALO_NET_MAP_SHARE_UPLOAD", _environment_value,
 		_platform_all,
 		"Hosting: the most kilobytes a second the host sends of maps (16 to\n"
-		"20480: 20 MB/s), so that the game's own traffic keeps the rest of the\n"
+		"256000: 250 MB/s), so that the game's own traffic keeps the rest of the\n"
 		"upload." },
 	{ "network.map_seed", _config_boolean, "true", "HALO_NET_MAP_SEED", _environment_value, _platform_all,
 		"Playing in another's game: help send its map to players who join\n"
@@ -1342,12 +1569,26 @@ static const struct config_setting config_settings[] =
 	{ "network.map_seed_upload", _config_integer, "256", "HALO_NET_MAP_SEED_UPLOAD", _environment_value,
 		_platform_all,
 		"Playing in another's game: the most kilobytes a second this machine\n"
-		"sends of maps to other players (16 to 10240: 10 MB/s)." },
+		"sends of maps to other players (16 to 256000: 250 MB/s)." },
+	{ "network.map_upload_in_game", _config_integer, "25", "HALO_NET_MAP_UPLOAD_IN_GAME", _environment_value,
+		_platform_all,
+		"While a game is being played on this machine, the part of\n"
+		"network.map_share_upload and network.map_seed_upload that map uploads\n"
+		"take, in percent (10 to 100), so that the game's own traffic comes\n"
+		"first; in the lobby and after a game, the whole of it." },
 	{ "network.map_download", _config_boolean, "true", "HALO_NET_MAP_DOWNLOAD", _environment_value, _platform_all,
-		"Joining a game on a Custom Edition map this machine does not have:\n"
+		"Allow map downloads when joining. MCC asks before downloading from\n"
+		"the host; Custom Edition downloads from the game's players.\n"
+		"For a Custom Edition map this machine does not have:\n"
 		"download it (and the resource maps it needs) from the game's players\n"
 		"into custom_maps, if its host shares it (network.map_share); false\n"
 		"leaves the game, saying which map is missing." },
+	{ "network.map_archive", _config_boolean, "true", "HALO_NET_MAP_ARCHIVE", _environment_value, _platform_all,
+		"When joining a game on a Custom Edition map this machine does not\n"
+		"have (network.map_download on): look for the host's version of it in\n"
+		"FractumSeraph's map archive first and download it from there, asking\n"
+		"the host's players only if the archive has not got it\n"
+		"(port/linux/src/map_archive.c). Not in the browser build." },
 	{ "network.coop_public", _config_boolean, "false", "HALO_NET_COOP_PUBLIC", _environment_value, _platform_all,
 		"Whether an online co-op game (Create Game > Internet, a SINGLEPLAYER\n"
 		"map) starts as PUBLIC or, false, PRIVATE: Server Setup's LISTING in\n"
@@ -1393,6 +1634,13 @@ static const struct config_setting config_settings[] =
 		"score of their own, \"cooperative\" (TEAM) adds the players' scores\n"
 		"together. SCORING TYPE in co-op's Server Setup > Co-op Options and\n"
 		"Settings > Gameplay > Scoring's CO-OP SCORING write it; the host's counts." },
+	{ "network.vehicle_riding", _config_boolean, "false", "HALO_NET_VEHICLE_RIDING", _environment_value, _platform_all,
+		"Host: the base setting: players standing on a moving vehicle are\n"
+		"carried by it (co-op's options in Server Setup set it). In\n"
+		"multiplayer each gametype's VEHICLE RIDING rule overrides it (a\n"
+		"gametype without the rule is off), and a dedicated server's co-op\n"
+		"entry may with +riding. A map's own choice still wins. Changes count\n"
+		"from the next map." },
 	{ "network.coop_enemies_mode", _config_string, "\"per_player\"", "HALO_NET_COOP_ENEMIES_MODE", _environment_value,
 		_platform_all,
 		"Online co-op's extra enemies: \"none\", \"per_player\" (each squad of\n"
@@ -1444,7 +1692,7 @@ static const struct config_setting config_settings[] =
 		"The file of the master servers the server browser asks for dedicated\n"
 		"servers, beside this file unless a full path: an https:// URL and its\n"
 		"key (ed25519:<hex>) on each line, up to 4. None named (no file, or\n"
-		"comments alone): the official master, built in." },
+		"comments alone): the official masters, built in." },
 	{ "network.link_share", _config_string, "\"when_needed\"", "HALO_NET_LINK_SHARE", _environment_value,
 		_platform_all,
 		"When the game shows a server the Discord account linked to it\n"
@@ -1469,11 +1717,37 @@ static const struct config_setting config_settings[] =
 		_platform_all,
 		"The server browser lists games of one kind only: \"any\", \"ctf\",\n"
 		"\"slayer\", \"oddball\", \"king\" or \"race\" (its Filters screen)." },
+	{ "network.browser_vanilla_maps", _config_boolean, "true", "HALO_NET_BROWSER_VANILLA_MAPS", _environment_value,
+		_platform_all,
+		"The server browser lists games on the game's own maps (its Filters\n"
+		"screen's VANILLA MAPS)." },
+	{ "network.browser_custom_edition_maps", _config_boolean, "true", "HALO_NET_BROWSER_CUSTOM_EDITION_MAPS",
+		_environment_value, _platform_all,
+		"The server browser lists games on Custom Edition maps (its Filters\n"
+		"screen's CUSTOM EDITION MAPS)." },
+	{ "network.browser_mcc_maps", _config_boolean, "true", "HALO_NET_BROWSER_MCC_MAPS", _environment_value,
+		_platform_all,
+		"The server browser lists games on MCC maps (its Filters screen's MCC\n"
+		"MAPS)." },
+	{ "network.browser_mode", _config_string, "\"all\"", "HALO_NET_BROWSER_MODE", _environment_value, _platform_all,
+		"The server browser lists \"all\" games, \"multiplayer\" games or\n"
+		"\"campaign\" co-op games alone (its Filters screen's GAME MODE)." },
+	{ "network.browser_favorites_only", _config_boolean, "false", "HALO_NET_BROWSER_FAVORITES_ONLY",
+		_environment_value, _platform_all,
+		"The server browser lists your favorite servers alone (its Filters\n"
+		"screen's FAVORITES ONLY)." },
+	{ "network.browser_favorites", _config_string, "\"\"", "HALO_NET_BROWSER_FAVORITES", _environment_value,
+		_platform_all,
+		"The server browser's favorite servers, listed first with a star: their\n"
+		"names' letters and digits in lower case, between bars. The browser's\n"
+		"FAVORITE button (a controller's left trigger, F on a keyboard) adds\n"
+		"the chosen one, or takes it out." },
 	{ "network.browser_sort", _config_string, "\"players\"", "HALO_NET_BROWSER_SORT", _environment_value,
 		_platform_all,
 		"The server browser's order: \"players\" (the most players first),\n"
 		"\"servers\" (dedicated servers first, then by players), \"name\", \"map\",\n"
-		"\"type\" or \"locked\" (a password's first); \"-\" before one reverses it\n"
+		"\"type\", \"locked\" (a password's first) or \"ping\" (the lowest first,\n"
+		"those not timed yet last); \"-\" before one reverses it\n"
 		"(\"-players\"). A column title sorts by it, and again the other way." },
 	{ "network.stun_servers", _config_string, "\"stun.l.google.com:19302,stun.cloudflare.com:3478\"",
 		"HALO_NET_STUN", _environment_value, _platform_all,
@@ -1574,21 +1848,36 @@ static const struct config_setting config_settings[] =
 		"Run as a dedicated server (as halo --server does): host games with no\n"
 		"window, sound or player of its own, one after another from\n"
 		"server.rotation (docs/dedicated_server.md)." },
-	{ "server.name", _config_string, "\"OpenCE Server\"", "HALO_SERVER_NAME", _environment_value, _platform_server,
+#if defined(HALO_ANDROID) || defined(HALO_PS5)
+	/* (hosting from the menus: no name until the host gives one, which
+	Server Settings asks for before the first game: menu_functions.c) */
+	{ "server.name", _config_string, "\"\"", "HALO_SERVER_NAME", _environment_value, _platform_server | _platform_host,
+		"The server's name in the lobby and the server browser: 15 characters\n"
+		"of printable ASCII. Empty until it is set: Multiplayer > Host Server >\n"
+		"Server Settings, which hosting asks for first." },
+#else
+	{ "server.name", _config_string, "\"OpenCE Server\"", "HALO_SERVER_NAME", _environment_value, _platform_server | _platform_host,
 		"The game's name in the lobby and the server browser: 15 characters of\n"
 		"printable ASCII." },
-	{ "server.max_players", _config_integer, "16", "HALO_SERVER_MAX_PLAYERS", _environment_value, _platform_server,
+#endif
+	{ "server.max_players", _config_integer, "16", "HALO_SERVER_MAX_PLAYERS", _environment_value, _platform_server | _platform_host,
 		"The most players (2 to 127)." },
-	{ "server.min_players", _config_integer, "1", "HALO_SERVER_MIN_PLAYERS", _environment_value, _platform_server,
+	{ "server.min_players", _config_integer, "1", "HALO_SERVER_MIN_PLAYERS", _environment_value, _platform_server | _platform_host,
 		"Players in the lobby before it counts down to a game (1 to 16)." },
-	{ "server.password", _config_string, "\"\"", "HALO_SERVER_PASSWORD", _environment_value, _platform_server,
+	{ "server.password", _config_string, "\"\"", "HALO_SERVER_PASSWORD", _environment_value, _platform_server | _platform_host,
 		"The password the server browser asks for (the invite link still joins);\n"
 		"empty for none. Never logged." },
-	{ "server.public", _config_boolean, "true", "HALO_SERVER_PUBLIC", _environment_value, _platform_server,
+	{ "server.public", _config_boolean, "true", "HALO_SERVER_PUBLIC", _environment_value, _platform_server | _platform_host,
 		"List the server in everyone's server browser (on the master servers,\n"
 		"with network.online); false: joined by its invite link and on the LAN." },
+	{ "server.listing", _config_string, "\"internet_public\"", "HALO_SERVER_LISTING", _environment_value, _platform_host,
+		"Hosting from the menus (Host Server's Server Settings, LISTING): where the\n"
+		"server is found, as Create Game's INTERNET and LAN choose. \"internet_public\":\n"
+		"in everyone's server browser; \"internet_private\": by its invite link and\n"
+		"on the LAN; \"lan\": on the LAN only. The internet's need network.online.\n"
+		"(A dedicated server goes by server.public and network.online instead.)" },
 	{ "server.rotation", _config_string, "\"bloodgulch:ctf, sidewinder:team_slayer, prisoner:slayer\"",
-		"HALO_SERVER_ROTATION", _environment_value, _platform_server,
+		"HALO_SERVER_ROTATION", _environment_value, _platform_server | _platform_host,
 		"The games played one after another: map[:gametype[+rule=value...]],\n"
 		"separated by commas, 64 at most. A map is a multiplayer map's name\n"
 		"(bloodgulch), custom_maps\\<name> or a level's path; a gametype a\n"
@@ -1599,23 +1888,31 @@ static const struct config_setting config_settings[] =
 		"With no playable rotation entry, play bloodgulch:slayer rather than\n"
 		"stop (exit code 3)." },
 	{ "server.lobby_seconds", _config_integer, "15", "HALO_SERVER_LOBBY_SECONDS", _environment_value,
-		_platform_server,
+		_platform_server | _platform_host,
 		"Seconds the lobby counts down once min_players are in (0 to 300; 0\n"
 		"starts at once)." },
 	{ "server.postgame_seconds", _config_integer, "12", "HALO_SERVER_POSTGAME_SECONDS", _environment_value,
-		_platform_server,
+		_platform_server | _platform_host,
 		"Seconds the scores show after a game (0 to 300)." },
 	{ "server.empty_seconds", _config_integer, "30", "HALO_SERVER_EMPTY_SECONDS", _environment_value,
-		_platform_server,
+		_platform_server | _platform_host,
 		"Seconds a game nobody is in goes on before it ends (0: never). A game\n"
 		"whose last player leaves ends at once, as the game ends it." },
-	{ "server.idle_minutes", _config_integer, "0", "HALO_SERVER_IDLE_MINUTES", _environment_value, _platform_server,
+	{ "server.idle_minutes", _config_integer, "0", "HALO_SERVER_IDLE_MINUTES", _environment_value, _platform_server | _platform_host,
 		"Minutes a game goes on with no score before it ends (0: never)." },
-	{ "server.team_start", _config_string, "\"one\"", "HALO_SERVER_TEAM_START", _environment_value, _platform_server,
+	{ "server.team_start", _config_string, "\"one\"", "HALO_SERVER_TEAM_START", _environment_value, _platform_server | _platform_host,
 		"A team game: \"one\" starts with one team's players (the next joiners\n"
 		"balance), \"both\" waits for a player on each team, \"skip\" skips team\n"
 		"games while one player waits." },
-	{ "server.motd", _config_string, "\"\"", "HALO_SERVER_MOTD", _environment_value, _platform_server,
+	{ "server.team_switch", _config_boolean, "true", "HALO_SERVER_TEAM_SWITCH", _environment_value,
+		_platform_server | _platform_host,
+		"A player in a team game may say \"!switch\" (or \"!team\") in the chat to\n"
+		"change teams: not in Infection, and with the gametype's auto team\n"
+		"balance only to the smaller team." },
+	{ "server.team_switch_cooldown_seconds", _config_integer, "30", "HALO_SERVER_TEAM_SWITCH_COOLDOWN_SECONDS",
+		_environment_value, _platform_server | _platform_host,
+		"Seconds a player waits after a !switch before another (0 to 3600)." },
+	{ "server.motd", _config_string, "\"\"", "HALO_SERVER_MOTD", _environment_value, _platform_server | _platform_host,
 		"A notice each machine is shown as it joins (127 characters); empty for\n"
 		"none." },
 	{ "server.frame_rate", _config_integer, "60", "HALO_SERVER_FRAME_RATE", _environment_value, _platform_server,
@@ -1714,7 +2011,7 @@ static const struct config_setting config_settings[] =
 		_platform_server,
 		"The master servers published to, beside this file unless a full path:\n"
 		"an https:// URL and its key (ed25519:<hex>) on each line. None named:\n"
-		"the official master, built in." },
+		"the official masters, built in." },
 	{ "server.publisher_key_file", _config_string, "\"publisher.key\"", "HALO_SERVER_PUBLISHER_KEY_FILE",
 		_environment_value, _platform_server,
 		"The operator's Ed25519 key for the master servers (halo --server\n"
@@ -1726,22 +2023,22 @@ static const struct config_setting config_settings[] =
 	{ "server.region", _config_string, "\"\"", "HALO_SERVER_REGION", _environment_value, _platform_server,
 		"A region shown in the server browser (eu, na-east...): 16 characters;\n"
 		"empty for none." },
-	{ "server.chat_filter", _config_string, "\"off\"", "HALO_SERVER_CHAT_FILTER", _environment_value, _platform_server,
+	{ "server.chat_filter", _config_string, "\"off\"", "HALO_SERVER_CHAT_FILTER", _environment_value, _platform_server | _platform_host,
 		"The words the server keeps out of its chat and its players' names\n"
 		"(streamer mode's list, by chat_filter_slurs, _swearing and _insults):\n"
 		"\"off\"; \"censor\", a line's words shown as stars; \"block\", a line\n"
 		"with them refused (its sender is told why) and a player whose name has\n"
 		"them refused at the door. Links are network.text_chat's." },
 	{ "server.chat_filter_slurs", _config_string, "\"mild\"", "HALO_SERVER_CHAT_FILTER_SLURS", _environment_value,
-		_platform_server,
+		_platform_server | _platform_host,
 		"With server.chat_filter, the slurs (race, sexuality, gender, disability)\n"
 		"kept out: \"off\", \"severe\" (the worst), \"strong\" or \"mild\" (all)." },
 	{ "server.chat_filter_swearing", _config_string, "\"off\"", "HALO_SERVER_CHAT_FILTER_SWEARING",
-		_environment_value, _platform_server,
+		_environment_value, _platform_server | _platform_host,
 		"With server.chat_filter, the swearing and sexual words kept out: \"off\",\n"
 		"\"severe\", \"strong\" or \"mild\" (all)." },
 	{ "server.chat_filter_insults", _config_string, "\"off\"", "HALO_SERVER_CHAT_FILTER_INSULTS",
-		_environment_value, _platform_server,
+		_environment_value, _platform_server | _platform_host,
 		"With server.chat_filter, the insults that are not slurs kept out: \"off\",\n"
 		"\"severe\", \"strong\" or \"mild\" (all)." },
 	{ "server.master_publish_address", _config_boolean, "false", "HALO_SERVER_MASTER_PUBLISH_ADDRESS",
@@ -1771,21 +2068,21 @@ static const struct config_setting config_settings[] =
 		_platform_server,
 		"Refuse a second machine of a linked Discord account already in the game." },
 	{ "server.max_machines_per_address", _config_integer, "0", "HALO_SERVER_MAX_MACHINES_PER_ADDRESS",
-		_environment_value, _platform_server,
+		_environment_value, _platform_server | _platform_host,
 		"The most machines that play from one address (an internet play peer's\n"
 		"real one); one more is refused (0: no limit). Households, LAN cafes\n"
 		"and mobile carriers share one address among many players." },
 	{ "server.afk_kick_minutes", _config_integer, "5", "HALO_SERVER_AFK_KICK_MINUTES", _environment_value,
-		_platform_server,
+		_platform_server | _platform_host,
 		"Minutes a player may stand idle in a game (no move, look or button)\n"
 		"before the server kicks them, told a minute before (0: never). The\n"
 		"lobby, the postgame, cutscenes and waiting to respawn do not count." },
 	{ "server.afk_kick_when_full", _config_boolean, "false", "HALO_SERVER_AFK_KICK_WHEN_FULL", _environment_value,
-		_platform_server,
+		_platform_server | _platform_host,
 		"Kick idle players only when the server is full, after\n"
 		"server.afk_kick_full_minutes (server.afk_kick_minutes is not used)." },
 	{ "server.afk_kick_full_minutes", _config_integer, "3", "HALO_SERVER_AFK_KICK_FULL_MINUTES", _environment_value,
-		_platform_server,
+		_platform_server | _platform_host,
 		"With server.afk_kick_when_full, the minutes a player may stand idle while\n"
 		"the server is full (told a minute before)." },
 	{ "server.coop_bsp_switch", _config_string, "\"majority\"", "HALO_SERVER_COOP_BSP_SWITCH", _environment_value,
@@ -1799,15 +2096,20 @@ static const struct config_setting config_settings[] =
 		_environment_value, _platform_server,
 		"Seconds after a co-op loading zone switched the level's part before\n"
 		"another may (0 to 300)." },
-	{ "server.map_vote", _config_boolean, "false", "HALO_SERVER_MAP_VOTE", _environment_value, _platform_server,
+	{ "server.vehicle_riding_override_gametype", _config_boolean, "false", "HALO_SERVER_VEHICLE_RIDING_OVERRIDE_GAMETYPE",
+		_environment_value, _platform_server | _platform_host,
+		"True: on a dedicated server, turns the gametype's riding override\n"
+		"off, so multiplayer uses network.vehicle_riding. A map's own choice\n"
+		"still wins. Changes count from the next map." },
+	{ "server.map_vote", _config_boolean, "false", "HALO_SERVER_MAP_VOTE", _environment_value, _platform_server | _platform_host,
 		"As the lobby opens after a game, the players vote for the next among\n"
 		"server.map_vote_choices entries of the rotation picked at random (not\n"
 		"the one just played); the rotation goes on after the winner." },
 	{ "server.map_vote_choices", _config_integer, "4", "HALO_SERVER_MAP_VOTE_CHOICES", _environment_value,
-		_platform_server,
+		_platform_server | _platform_host,
 		"The entries a map vote offers (2 to 8)." },
 	{ "server.map_vote_seconds", _config_integer, "20", "HALO_SERVER_MAP_VOTE_SECONDS", _environment_value,
-		_platform_server,
+		_platform_server | _platform_host,
 		"How long a map vote runs (5 to 120 seconds); it ends sooner once every\n"
 		"player has voted." },
 	{ "streamer.enabled", _config_boolean, "false", "HALO_STREAMER_MODE", _environment_value, _platform_all,
@@ -1858,6 +2160,11 @@ static const struct config_setting config_settings[] =
 		_platform_all,
 		"The benchmark leaves the player's view to the player rather than turning\n"
 		"it, to measure the game as it is played (the player still cannot be hurt)." },
+	{ "debug.benchmark_weapon", _config_string, "\"\"", "HALO_BENCHMARK_WEAPON", _environment_value, _platform_all,
+		"Everyone in the benchmark's multiplayer games starts with this weapon, with\n"
+		"no others on the map, playing to 1000 kills: \"assault_rifle\", \"pistol\",\n"
+		"\"shotgun\", \"sniper_rifle\", \"rocket_launcher\", \"plasma_pistol\",\n"
+		"\"plasma_rifle\" or \"needler\". Empty: the map's weapons, as usual." },
 	{ "debug.benchmark_quit", _config_boolean, "true", "HALO_BENCHMARK_QUIT", _environment_value, _platform_all,
 		"Quit the game once the benchmark is done; false goes back to the main\n"
 		"menu." },
@@ -1956,6 +2263,36 @@ static const struct config_setting config_settings[] =
 		"Seconds after the start before anything is damaged, so that a game can\n"
 		"be set up and started first (a host's messages to its own client are\n"
 		"damaged too)." },
+	{ "debug.riding_damage_speed", _config_real, "0.0", "HALO_RIDING_DAMAGE_SPEED", _environment_value, _platform_all,
+		"Riding: the closing speed (world units a tick) above which a vehicle\n"
+		"still hurts a player who just left it; 0 takes twice the player's own\n"
+		"run and jump speed." },
+	{ "debug.riding_teleport_step", _config_real, "4.0", "HALO_RIDING_TELEPORT_STEP", _environment_value, _platform_all,
+		"Riding: a vehicle that moves further in one update is teleported; its\n"
+		"riders are not carried along but put in the air from it, keeping\n"
+		"their motion, as if they had jumped." },
+	{ "debug.riding_moved_alone", _config_real, "0.25", "HALO_RIDING_MOVED_ALONE", _environment_value, _platform_all,
+		"Riding: a rider this far from where it ended its last tick was moved\n"
+		"by something else, and is put in the air from the vehicle, keeping\n"
+		"its motion, as if it had jumped." },
+	{ "debug.riding_transition_leash", _config_real, "0.25", "HALO_RIDING_TRANSITION_LEASH", _environment_value, _platform_all,
+		"Riding: the host's position allowance in world units during takeoff\n"
+		"and landing disagreement; never a velocity or accumulated movement\n"
+		"allowance. Non-finite or negative values mean none." },
+	{ "debug.riding_look_carry", _config_boolean, "true", "HALO_RIDING_LOOK_CARRY", _environment_value, _platform_all,
+		"Riding: the vehicle's turn turns the rider's view; false keeps the\n"
+		"view where the player put it (a test aid)." },
+	{ "debug.riding_air_grip", _config_real, "0.045", "HALO_RIDING_AIR_GRIP", _environment_value, _platform_all,
+		"Riding: how much, each tick, the motion of a player in the air over\n"
+		"the vehicle they left may change to follow its turns and its speed\n"
+		"back up to the speed they jumped with, or inside a vehicle that\n"
+		"encloses them any speeding up (world units a tick); a slowing\n"
+		"vehicle is followed at once, never ahead of it." },
+	{ "debug.riding_enclosure_grace_ticks", _config_real, "4", "HALO_RIDING_ENCLOSURE_GRACE_TICKS", _environment_value,
+		_platform_all,
+		"Riding: how many player ticks in a row a rider standing in an enclosed\n"
+		"vehicle may miss its cabin test (sliding about) before the cabin counts\n"
+		"as open (0 to 30)." },
 	{ "debug.test_input", _config_string, "\"\"", "HALO_TEST_INPUT", _environment_value, _platform_all,
 		"\"bot:<seed>\" plays controller 1 with a scripted pattern (automated\n"
 		"network tests); \"look:<seed>\" stands still, only turning and looking\n"
@@ -1998,12 +2335,21 @@ static const struct config_setting config_settings[] =
 	{ "debug.menu_open", _config_string, "\"\"", "HALO_MENU_OPEN", _environment_value, _platform_all,
 		"Start on this screen of the menus (port/assets/menus) instead of the main\n"
 		"menu, a player profile being edited; empty for the main menu." },
+	{ "debug.network_extensions_require", _config_string, "\"\"", "HALO_NETWORK_EXTENSIONS_REQUIRE", _environment_value,
+		_platform_all,
+		"Capabilities (docs/network_extensions.md) this machine's games require when it\n"
+		"hosts, separated by commas, whatever the game is: a machine without them is\n"
+		"told and removed (for testing the handshake); empty for none." },
+	{ "debug.custom_campaign", _config_string, "\"\"", "HALO_CUSTOM_CAMPAIGN", _environment_value, _platform_all,
+		"Mount this folder of custom_campaigns as the game starts, its own menus\n"
+		"and maps played instead of the stock ones (docs/custom_campaigns.md);\n"
+		"empty for none." },
 	{ "debug.gpu_flush_draws", _config_integer, "-1", "HALO_GPU_FLUSH_DRAWS", _environment_value, _platform_desktop,
 		"Flush the GPU's pipeline every this many draws: -1 for every 3 on Intel\n"
 		"graphics with Mesa's driver (which can hang without), 0 never." },
 	{ "debug.gpu_stats", _config_boolean, "false", "HALO_GPU_STATS", _environment_set_is_true, _platform_all,
 		"Log the renderer's draw counts once a second (otherwise, on Android's Vulkan,\n"
-		"only a second whose draws were skipped)." },
+		"only a second whose draws were skipped), and what dynamic lighting's fields did." },
 	{ "debug.gpu_trace_frame", _config_integer, "-1", "HALO_GPU_TRACE", _environment_value, _platform_all,
 		"Log every draw of this frame; -1 none." },
 	{ "debug.gpu_trace_constants", _config_boolean, "false", "HALO_GPU_TRACE_CONSTANTS", _environment_set_is_true, _platform_all,
@@ -2142,7 +2488,7 @@ static const struct config_setting config_settings[] =
 		"log and the phone's details (run.txt). Android 9 and 10 ask for storage\n"
 		"once. Costs a little speed. Takes effect the next start." },
 #endif
-#if (defined(HALO_ANDROID) || defined(HALO_PS5)) && !defined(HALO_SWITCH)
+#if (defined(HALO_ANDROID) || defined(HALO_PS5) || defined(HALO_MACOS)) && !defined(HALO_SWITCH)
 	/* the Vulkan renderer's (port/android/guest/d3d8_vk.c), Android's and the PS5's: the GPU's savings the Switch's
 	renderer made first, which the Switch's own rows below name for it. Declared only there, these were not settings
 	here, and the draw scissor, false when a setting is not one, was off */
@@ -2286,6 +2632,11 @@ static const struct config_setting config_settings[] =
 		"Put Custom Edition's tag cache somewhere other than 0x40440000 even where\n"
 		"that address is free, and move its maps' addresses there, as on a phone\n"
 		"whose Java runtime holds 0x40440000. For testing that move." },
+	{ "debug.mcc_elsewhere", _config_boolean, "false", "HALO_MCC_ELSEWHERE", _environment_set_is_true,
+		PLATFORM_HOST,
+		"Put an MCC map's tags somewhere other than the address they were written for\n"
+		"(0x50000000) even where it is free, and move their addresses there, as when\n"
+		"the launcher has put something there first. For testing that move." },
 	{ "debug.vk_static_check", _config_boolean, "false", "HALO_VK_STATIC_CHECK", _environment_set_is_true, PLATFORM_VULKAN,
 		"Under the Vulkan renderer, compare the game's static geometry with what was\n"
 		"copied every 60 frames and log a range that changed (it would be drawn stale)." },
@@ -2314,13 +2665,15 @@ static const struct config_setting config_settings[] =
 #define NUMBER_OF_CONFIG_SETTINGS (sizeof(config_settings) / sizeof(config_settings[0]))
 
 #ifdef HALO_ANDROID
-#define CONFIG_BUILD_PLATFORM _platform_android
+#define CONFIG_BUILD_PLATFORM (_platform_android | _platform_host)
 #elif defined(HALO_WEB)
 #define CONFIG_BUILD_PLATFORM (_platform_desktop | _platform_web)
 #elif defined(_WIN32)
 #define CONFIG_BUILD_PLATFORM (_platform_desktop | _platform_windows)
 #elif defined(HALO_PS5)
-#define CONFIG_BUILD_PLATFORM (_platform_desktop | _platform_guest | _platform_ps5)
+#define CONFIG_BUILD_PLATFORM (_platform_desktop | _platform_guest | _platform_ps5 | _platform_host)
+#elif defined(HALO_MACOS)
+#define CONFIG_BUILD_PLATFORM (_platform_desktop | _platform_guest | _platform_macos)
 #elif defined(HALO_GUEST)
 #define CONFIG_BUILD_PLATFORM (_platform_desktop | _platform_guest)
 #else
@@ -2465,6 +2818,14 @@ static char *config_read_file(const char *path, size_t *size)
 #endif
 }
 
+#ifdef HALO_GUEST
+/* (msvc_crt.c's: the file made 0666; by its host path, if it is there) */
+void platform_share_file(FILE *file);
+void platform_share_path(const char *path);
+/* (platform.h's: a d:\ path's file on the host) */
+void platform_translate_path(const char *xbox_path, char *host_path, unsigned long host_path_size);
+#endif
+
 static int config_write_file(const char *path, const char *text)
 {
 #ifdef HALO_GUEST
@@ -2473,6 +2834,8 @@ static int config_write_file(const char *path, const char *text)
 
 	if (!file)
 		return 0;
+	/* (0666: the player edits it from outside the game too) */
+	platform_share_file(file);
 	written = fwrite(text, 1, strlen(text), file) == strlen(text);
 	if (written)
 		fflush(file);
@@ -3182,28 +3545,30 @@ static const struct
 	{ "display.resolution_scaling", { "native", "75%", "50%", "25%", "original", NULL }, NULL },
 	{ "display.anti_aliasing", { "off", "fxaa", "smaa", "ssaa2x", "msaa2x", "msaa4x", "msaa8x", NULL }, NULL },
 	{ "display.hud_button_style", { "classic", "gems", "menu_gems", "dark_gems", "xbox_modern",
-		"ps_classic", "ps_gems", "ps_dark_gems", "ps_modern", "switch_classic", "switch_gems", "switch_modern", NULL }, NULL },
+		"ps_classic", "ps_gems", "ps_dark_gems", "ps_modern", "switch_classic", "switch_gems", "switch_modern", "keyboard", NULL }, NULL },
 	{ "display.hud_button_style_xbox", { "classic", "gems", "menu_gems", "dark_gems", "xbox_modern", NULL }, NULL },
 	{ "display.hud_bumper_style", { "original", "modern", NULL }, NULL },
 	{ "display.hud_button_style_ps", { "ps_classic", "ps_gems", "ps_dark_gems", "ps_modern", NULL }, NULL },
 	{ "display.hud_button_style_switch", { "switch_classic", "switch_gems", "switch_modern", NULL }, NULL },
+	{ "server.listing", { "internet_public", "internet_private", "lan", NULL }, NULL },
 	{ "display.menus", { "pc", "xbox", NULL }, NULL },
 	{ "display.player_names", { "all", "allies", "enemies", "none", NULL }, NULL },
 	{ "display.scoreboard_team_layout", { "teams", "score", NULL }, NULL },
 	{ "display.chat_style", { "colors", "white", NULL }, NULL },
-	{ "display.shield_glow_intensity", { "default", "light_show", NULL }, NULL },
+	{ "display.shield_glow_intensity", { "stock", "default", "1.5x", "2x", "light_show", NULL }, NULL },
 	{ "display.shield_color", { "default", "white", "black", "red", "blue", "gray", "yellow", "green", "pink",
 		"purple", "cyan", "cobalt", "orange", "teal", "sage", "brown", "tan", "maroon", "salmon", NULL }, NULL },
 	{ "game.score_hud_color", { "default", "spartan", "custom", NULL }, NULL },
 	{ "game.score_hud_custom_color", { "white", "black", "red", "blue", "gray", "yellow", "green", "pink",
 		"purple", "cyan", "cobalt", "orange", "teal", "sage", "brown", "tan", "maroon", "salmon", NULL }, NULL },
-	{ "audio.resampler", { "sinc", "linear", NULL }, NULL },
+	{ "audio.resampler", { "xbox", "sinc", "linear", NULL }, NULL },
 	{ "audio.voice_chat", { "push_to_talk", "open_mic", "off", NULL }, NULL },
 	{ "input.touch_controls", { "auto", "on", "off", NULL }, NULL },
 	{ "game.console_log", { "important", "all", "none", NULL }, NULL },
 	{ "game.language", { "", "ja", "de", "fr", "es", "it", NULL }, NULL },
 	{ "network.text_chat", { "on", "links", "off", NULL }, NULL },
 	{ "bots.routes", { "direct", "lanes", "mixed", NULL }, "\"direct\"'s" },
+	{ "bots.kind", { "birchwood", "provinggrounds", NULL }, "\"birchwood\"'s" },
 	{ "server.chat_filter", { "off", "censor", "block", NULL }, NULL },
 	{ "server.chat_filter_slurs", { "off", "severe", "strong", "mild", NULL }, NULL },
 	{ "server.chat_filter_swearing", { "off", "severe", "strong", "mild", NULL }, NULL },
@@ -3416,6 +3781,7 @@ static void config_apply_server_mode(void)
 		{ "debug.network_test", "" },
 		{ "debug.test_input", "" },
 		{ "debug.menu_open", "" },
+		{ "debug.custom_campaign", "" },
 	};
 	const char *tunnel_port = getenv("HALO_NET_TUNNEL_PORT");
 	size_t index;
@@ -3612,6 +3978,20 @@ the GPU) is the phone's own driver now, and the downloaded archive a driver
 of the list like any other (Video Setup) */
 static void config_retire_values(void)
 {
+#if defined(HALO_ANDROID) || defined(HALO_PS5)
+	/* (server.name's old default, which the builds that host from the menus
+	wrote before they had a name of their own to ask for: no name set,
+	which Server Settings asks for before the first game) */
+	{
+		long name = config_setting_index("server.name");
+
+		if (name >= 0 && config_values[name].string && !strcmp(config_values[name].string, "OpenCE Server"))
+		{
+			platform_log("settings: server.name \"OpenCE Server\" was the old default; \"\" (Server Settings sets it)");
+			config_write("server.name", "");
+		}
+	}
+#endif
 #if defined(HALO_ANDROID) && !defined(HALO_SWITCH) && !defined(HALO_PS5)
 	long index = config_setting_index("display.vk_driver");
 
@@ -3624,6 +4004,27 @@ static void config_retire_values(void)
 }
 
 /* the file read, the first time a setting is asked for */
+#ifdef HALO_GUEST
+/* the files the player reads, edits or deletes from outside the game made
+0666 at each launch, whatever made them or with what mode (an older build, a
+umask): config.toml, debug.txt, gamestate.txt and halo.log. After the file is
+read, as d:\'s folder may be paths.data's */
+static void config_share_files(void)
+{
+	static char const *const files[] = { "d:\\debug.txt", "d:\\gamestate.txt", "d:\\halo.log" };
+	char path[1024];
+	size_t index;
+
+	config_path(path, sizeof(path));
+	platform_share_path(path);
+	for (index = 0; index < sizeof(files) / sizeof(files[0]); index++)
+	{
+		platform_translate_path(files[index], path, sizeof(path));
+		platform_share_path(path);
+	}
+}
+#endif
+
 static void config_ensure_loaded(void)
 {
 	int first = 0;
@@ -3639,6 +4040,10 @@ static void config_ensure_loaded(void)
 	/* (config_write takes the lock itself) */
 	if (first)
 		config_retire_values();
+#ifdef HALO_GUEST
+	if (first)
+		config_share_files();
+#endif
 }
 
 static const struct config_value *config_profile_value(int player, long index);
@@ -4098,6 +4503,7 @@ static const char *const config_profile_names[] =
 	"controls.flashlight", "controls.scoreboard", "controls.pause", "controls.screenshot",
 	"controls.push_to_talk", "controls.chat", "controls.team_chat", "controls.vote_yes", "controls.vote_no",
 	"input.mouse_sensitivity", "input.mouse_vertical_sensitivity", "input.invert_mouse", "input.mouse_aim_assist",
+	"input.stick_vertical_sensitivity",
 	"input.gyro_aim", "input.gyro_zoom_only", "input.gyro_sensitivity_horizontal", "input.gyro_sensitivity_vertical",
 	"input.gyro_invert_horizontal", "input.gyro_invert_vertical",
 };

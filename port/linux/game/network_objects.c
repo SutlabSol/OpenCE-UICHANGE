@@ -43,18 +43,22 @@ same datum index (identifier and all), so that any message can name one:
 */
 
 #include "cseries.h"
+#include "cseries/errors.h"
 #include "game/game.h"
 #include "game/game_engine.h"
 #include "game/players.h"
 #include "networking/network_game_globals.h"
 #include "objects/objects.h"
+#include "vehicle_riding.h"
 #include "objects/damage.h"
 #include "halo_firefight.h"
 #include "objects/object_definitions.h"
+#include "effects/effects.h"
 #include "models/model_animation_definitions.h"
 #include "models/model_definitions.h"
 #include "units/units.h"
 #include "units/bipeds.h"
+#include "mcc_seats.h"
 #include "units/biped_definitions.h"
 #include "units/vehicle_definitions.h"
 #include "units/vehicle_datum.h"
@@ -66,6 +70,7 @@ same datum index (identifier and all), so that any message can name one:
 #include "cutscene/cinematics.h"
 #include "network_coop.h"
 #include "network_distributed.h"
+#include "mcc_network.h"
 #include "profile_sections.h"
 #include "biped_ragdoll.h"
 
@@ -437,9 +442,29 @@ static struct
 	real_point3d rest_position;
 	real ground_height;
 	real ground_rise_speed;
+	/* the vehicle last pulled by a Forge GRAVITY volume (NONE: none), and
+	when: no ceiling for it till it has been out of them a while */
+	long gravity_vehicle_index;
+	long gravity_time;
 } objects_host_vehicle_predictions[MAXIMUM_TRACKED_PLAYERS];
+
+/* Forge's GRAVITY volumes (port/forge/src/forge_volumes.c) */
+extern int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
+/* (the ticks a vehicle out of GRAVITY volumes still has no ceiling: as long
+as a throw out of one may still carry it up) */
+#define VEHICLE_GRAVITY_CEILING_GRACE_TICKS (8 * TICKS_PER_SECOND)
 /* a client: the host's objects it has, by absolute index */
 static long objects_client_has[MAXIMUM_TRACKED_OBJECTS];
+/* a client: the vehicle (its datum index) whose pose the netcode last wrote,
+and at which tick, by absolute index (network_objects_vehicle_corrected) */
+static struct
+{
+	long vehicle_index;
+	long time;
+} objects_client_vehicle_written[MAXIMUM_TRACKED_OBJECTS];
+/* Only the first validated description in a checkpoint world may replace a
+same-handle corpse. A later snapshot can precede a death already received. */
+static boolean objects_client_checkpoint_pending[MAXIMUM_TRACKED_OBJECTS];
 /* ... the bipeds, no player's, the host said were dead while they lived
 here, and when it first did (DEAD_BIPED_FALLBACK_TICKS) */
 static struct
@@ -547,6 +572,8 @@ static struct
 	long create_failures;
 	long own_objects_removed;
 } objects_statistics;
+/* (how many of the level's refused objects were logged: distributed_client_create) */
+static long objects_client_refusals_logged;
 
 void network_distributed_item_statistics(
 	long *creates,
@@ -651,6 +678,7 @@ void network_objects_placed(
 	void)
 {
 	objects_client_local_allocation = network_game_distributed_client();
+	objects_client_refusals_logged = 0;
 }
 
 /* ---------- common */
@@ -748,6 +776,15 @@ static boolean distributed_vehicle_unsteered(
 		unit_get(vehicle->unit.driver_object_index)->unit.player_index == NONE;
 }
 
+/* whether a client keeps the vehicle only where the host has it (the riding
+code measures its rider by elapsed time, not by its updates). Not the host's
+copy of a co-op vehicle, which is simulated there as in any game */
+boolean network_objects_vehicle_followed(
+	long vehicle_index)
+{
+	return game_connection() == _game_connection_network_client && distributed_vehicle_unsteered(vehicle_index);
+}
+
 /* the object if it is a body (a dead biped), else NULL */
 static struct biped_datum *distributed_body_get(
 	long object_index)
@@ -811,6 +848,28 @@ static boolean distributed_object_follows_host(
 	return (network_coop_active() && cinematic_in_progress()) || distributed_vehicle_unsteered(object_index);
 }
 
+/* whether a write of a vehicle copy is a host state correction a client makes of a copy it does not follow
+(the host's own copy, its driving prediction, an own, co-op or changed vehicle and a carry are other writes). A
+correction is no motion of the vehicle: what the written hull newly touches moves with it, as a rider is carried,
+rather than being pushed or crushed as if the vehicle had driven into it */
+static boolean network_objects_vehicle_carries(
+	long object_index,
+	short kind)
+{
+	return kind == _network_vehicle_write_state && game_connection() == _game_connection_network_client &&
+		!network_objects_vehicle_followed(object_index) && vehicle_riding_enabled() &&
+		object_get(object_index)->object.type == _object_type_vehicle;
+}
+
+/* before the write, while the hull is still where it was (what it touches is measured against that) */
+static void network_objects_vehicle_writing(
+	long object_index,
+	short kind)
+{
+	if (network_objects_vehicle_carries(object_index, kind))
+		biped_riding_vehicle_writing(object_index);
+}
+
 /* (the transform checked) */
 static void distributed_object_move(
 	long object_index,
@@ -818,9 +877,13 @@ static void distributed_object_move(
 	real_vector3d const *forward,
 	real_vector3d const *up,
 	real_vector3d const *velocity,
-	real_vector3d const *angular_velocity)
+	real_vector3d const *angular_velocity,
+	short kind)
 {
 	struct object_datum *object = object_get(object_index);
+	real_point3d before = object->object.position;
+	real_vector3d before_forward = object->object.forward;
+	real_vector3d before_up = object->object.up;
 	real_vector3d offset;
 
 	/* (drawn from where it was, the difference fading over a few ticks) */
@@ -828,7 +891,9 @@ static void distributed_object_move(
 	offset.j = object->object.position.y - position->y;
 	offset.k = object->object.position.z - position->z;
 	distributed_body_unfix_pose(object_index);
+	network_objects_vehicle_writing(object_index, kind);
 	object_set_position(object_index, position, forward, up);
+	network_objects_vehicle_written(object_index, &before, &before_forward, &before_up, kind);
 	if (velocity)
 		object->object.translational_velocity = *velocity;
 	if (angular_velocity)
@@ -845,13 +910,14 @@ void network_objects_correct(
 	real_vector3d const *forward,
 	real_vector3d const *up,
 	real_vector3d const *velocity,
-	real_vector3d const *angular_velocity)
+	real_vector3d const *angular_velocity,
+	short kind)
 {
 	real_vector3d valid_forward, valid_up;
 
 	/* (what cannot be, from a message: not taken) */
 	if (distributed_transform_valid(position, forward, up, velocity, angular_velocity, &valid_forward, &valid_up))
-		distributed_object_move(object_index, position, &valid_forward, &valid_up, velocity, angular_velocity);
+		distributed_object_move(object_index, position, &valid_forward, &valid_up, velocity, angular_velocity, kind);
 }
 
 boolean network_objects_reconcile(
@@ -861,7 +927,8 @@ boolean network_objects_reconcile(
 	real_vector3d const *up,
 	real_vector3d const *velocity,
 	real_vector3d const *angular_velocity,
-	real blend_distance)
+	real blend_distance,
+	short kind)
 {
 	struct object_datum *object = object_get(object_index);
 	real_vector3d valid_forward, valid_up;
@@ -878,7 +945,7 @@ boolean network_objects_reconcile(
 	right) */
 	if (!(dx * dx + dy * dy + dz * dz <= blend_distance * blend_distance))
 	{
-		distributed_object_move(object_index, position, &valid_forward, &valid_up, velocity, angular_velocity);
+		distributed_object_move(object_index, position, &valid_forward, &valid_up, velocity, angular_velocity, kind);
 		return TRUE;
 	}
 	/* Move halfway, and draw the move as a glide over the next few frames,
@@ -893,13 +960,18 @@ boolean network_objects_reconcile(
 		blended.z = object->object.position.z + dz * 0.5f;
 	}
 	{
+		real_point3d before = object->object.position;
+		real_vector3d before_forward = object->object.forward;
+		real_vector3d before_up = object->object.up;
 		real_vector3d offset;
 
 		offset.i = object->object.position.x - blended.x;
 		offset.j = object->object.position.y - blended.y;
 		offset.k = object->object.position.z - blended.z;
 		distributed_body_unfix_pose(object_index);
+		network_objects_vehicle_writing(object_index, kind);
 		object_set_position(object_index, &blended, &valid_forward, &valid_up);
+		network_objects_vehicle_written(object_index, &before, &before_forward, &before_up, kind);
 		if (!distributed_object_follows_host(object_index))
 			render_interpolation_correct_object(object_index, &offset);
 	}
@@ -910,6 +982,57 @@ boolean network_objects_reconcile(
 	if (distributed_vehicle_unsteered(object_index))
 		SET_FLAG(object->object.flags, _object_at_rest_bit, TRUE);
 	return FALSE;
+}
+
+void network_objects_vehicle_written(
+	long object_index,
+	real_point3d const *before_position,
+	real_vector3d const *before_forward,
+	real_vector3d const *before_up,
+	short kind)
+{
+	struct object_datum *object = object_get(object_index);
+
+	if (object->object.type == _object_type_vehicle)
+	{
+		long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+
+		if (game_connection() == _game_connection_network_client && absolute_index >= 0 &&
+			absolute_index < MAXIMUM_TRACKED_OBJECTS)
+		{
+			objects_client_vehicle_written[absolute_index].vehicle_index = object_index;
+			objects_client_vehicle_written[absolute_index].time = game_time_get();
+		}
+		if (!network_objects_vehicle_followed(object_index))
+			vehicle_riding_vehicle_corrected(object_index, before_position, before_forward, before_up,
+				&object->object.position, &object->object.forward, &object->object.up);
+		if (network_objects_vehicle_carries(object_index, kind))
+			biped_riding_vehicle_written(object_index, before_position, before_forward, before_up);
+	}
+}
+
+/* vehicles.c: whether a client's netcode wrote the vehicle's pose this
+tick or the last (the host's correction of it, a seat's carry). Its physics
+then pushes it out of the ground it was put a little into, or turns its
+velocity to the host's: no crash of its own, but the game took it for one
+and played its crash and suspension sounds at full strength, a vehicle far
+off corrected every few ticks clattering over all else (a replay's most of
+all, whose recording has the vehicles further off corrected less often and
+further). FALSE on the host and in a game of one machine */
+boolean network_objects_vehicle_corrected(
+	long vehicle_index)
+{
+	long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(vehicle_index);
+	long elapsed;
+
+	if (game_connection() != _game_connection_network_client || absolute_index < 0 ||
+		absolute_index >= MAXIMUM_TRACKED_OBJECTS ||
+		objects_client_vehicle_written[absolute_index].vehicle_index != vehicle_index)
+	{
+		return FALSE;
+	}
+	elapsed = game_time_get() - objects_client_vehicle_written[absolute_index].time;
+	return elapsed >= 0 && elapsed <= 1;
 }
 
 /* an object's state as the host sent it, in full */
@@ -1262,6 +1385,8 @@ enum
 	NUMBER_OF_SEND_RANKS
 };
 
+static void distributed_host_send_inventories_to_machine(long machine_index);
+
 static short distributed_object_send_rank(
 	long object_index)
 {
@@ -1291,6 +1416,7 @@ void network_objects_client_asked(
 
 	if (machine_index < 0 || machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES)
 		return;
+	distributed_checkpoint_to_machine(machine_index);
 	player_list = machine_get_player_list(machine_index);
 	/* (another machine in its place has other players) */
 	if ((again && game_time_get() - objects_host_machines[machine_index].time >= HOST_OBJECTS_RESEND_TICKS) ||
@@ -1337,8 +1463,34 @@ void network_objects_client_asked(
 		distributed_send_to_machine_reliably(machine_index, &message, _distributed_message_object_changes, count,
 			(word)(sizeof(message.header) + count * sizeof(struct distributed_object_change)));
 	}
+	distributed_host_send_inventories_to_machine(machine_index);
 	distributed_send_to_machine_reliably(machine_index, &message, _distributed_message_objects_synchronized, 0,
 		(word)sizeof(message.header));
+}
+
+/* A checkpoint can restore a deleted object, or revive one under the same
+handle. Neither is a new object to the host's change tracker. Send fresh
+descriptions immediately: waiting for a client's rate-limited recovery can
+leave its player dead for eleven seconds. Only the host's own revert bypasses
+that limit; ordinary client requests retain it. */
+void network_objects_host_reverted(void)
+{
+	long machines[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
+	short count, index;
+
+	if (game_connection() != _game_connection_network_server || !network_coop_active())
+		return;
+	count = distributed_client_machines(machines, NUMBEROF(machines));
+	for (index = 0; index < count; index++)
+	{
+		long machine = machines[index];
+
+		if (machine < 0 || machine >= HALO_PORT_MAXIMUM_NETWORK_MACHINES ||
+			objects_host_machines[machine].time == NONE)
+			continue;
+		objects_host_machines[machine].time = NONE;
+		network_objects_client_asked(machine, TRUE);
+	}
 }
 
 /* the host's object at an absolute index whose state goes to its clients
@@ -1563,6 +1715,7 @@ static void distributed_host_send_states(
 	short limit = MIN(MAXIMUM_ENTRIES_PER_MESSAGE, DATAGRAM_ENTRIES(struct distributed_object_state));
 	short resting = 0;
 	long told_count = objects_host_told_count;
+	long resting_start = objects_host_resting_cursor;
 	long state_count = 0;
 	long absolute_index;
 	long step;
@@ -1593,7 +1746,9 @@ static void distributed_host_send_states(
 	{
 		long object_index;
 
-		absolute_index = (objects_host_resting_cursor + step) % told_count;
+		/* (the scan counts steps from where it began: from the cursor it moves, it skips rested objects, and a
+		rested hull a rider stands on goes unrefreshed; riding off keeps the original scan) */
+		absolute_index = ((vehicle_riding_enabled() ? resting_start : objects_host_resting_cursor) + step) % told_count;
 		object_index = distributed_host_placed_object(absolute_index);
 		if (object_index == NONE || !TEST_FLAG(object_get(object_index)->object.flags, _object_at_rest_bit))
 			continue;
@@ -1714,6 +1869,39 @@ static void distributed_inventory_from_unit(
 	}
 }
 
+/* Complete the ordered snapshot, including empty inventories. The periodic
+sender stops repeating empty units; a retained checkpoint replica can still
+carry equipment from the discarded world after that window has elapsed. */
+static void distributed_host_send_inventories_to_machine(long machine_index)
+{
+	struct distributed_inventory_message message;
+	short count = 0;
+	short limit = MIN(MAXIMUM_ENTRIES_PER_MESSAGE, RELIABLE_ENTRIES(struct distributed_inventory));
+	long absolute_index;
+
+	for (absolute_index = 0; absolute_index < objects_host_told_count; absolute_index++)
+	{
+		long object_index = objects_host_told[absolute_index];
+		struct unit_datum *unit = object_index != NONE ?
+			(struct unit_datum *)object_try_and_get_and_verify_type(object_index, _object_mask_unit) : NULL;
+
+		if (!unit || TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
+			continue;
+		distributed_inventory_from_unit(object_index, &message.inventories[count]);
+		if (++count == limit)
+		{
+			distributed_send_to_machine_reliably(machine_index, &message, _distributed_message_inventories, count,
+				(word)(sizeof(message.header) + count * sizeof(struct distributed_inventory)));
+			count = 0;
+		}
+	}
+	if (count)
+	{
+		distributed_send_to_machine_reliably(machine_index, &message, _distributed_message_inventories, count,
+			(word)(sizeof(message.header) + count * sizeof(struct distributed_inventory)));
+	}
+}
+
 /* the bytes' checksum (FNV-1a) */
 static unsigned long distributed_checksum(
 	void const *data,
@@ -1749,9 +1937,17 @@ see its shots less) */
 static void distributed_host_send_inventories(
 	void)
 {
-	static struct distributed_inventory inventories[MAXIMUM_TRACKED_OBJECTS];
-	static byte kinds[MAXIMUM_TRACKED_OBJECTS];
-	static real_point3d origins[MAXIMUM_TRACKED_OBJECTS];
+	/* (on the heap at the first use: at some 600 KB they do not fit in the
+	guest images, whose code and data have to fit in their 64 MB) */
+	static struct
+	{
+		struct distributed_inventory inventories[MAXIMUM_TRACKED_OBJECTS];
+		byte kinds[MAXIMUM_TRACKED_OBJECTS];
+		real_point3d origins[MAXIMUM_TRACKED_OBJECTS];
+	} *gathered;
+	struct distributed_inventory *inventories;
+	byte *kinds;
+	real_point3d *origins;
 	struct distributed_inventory_message message;
 	short limit = MIN(MAXIMUM_ENTRIES_PER_MESSAGE, DATAGRAM_ENTRIES(struct distributed_inventory));
 	long inventory_count = 0;
@@ -1759,6 +1955,11 @@ static void distributed_host_send_inventories(
 	struct object_iterator iterator;
 	short machine_number;
 
+	if (!gathered && !(gathered = calloc(1, sizeof(*gathered))))
+		abort();
+	inventories = gathered->inventories;
+	kinds = gathered->kinds;
+	origins = gathered->origins;
 	object_iterator_new(&iterator, _object_mask_unit, 0);
 	while (object_iterator_next(&iterator) && inventory_count < MAXIMUM_TRACKED_OBJECTS)
 	{
@@ -1952,6 +2153,23 @@ static boolean network_objects_vehicle_below_ceiling(
 	short type = vehicle_specific_definition_get(vehicle->definition_index)->vehicle_type;
 	real ticks;
 	real ceiling;
+	float pull[3];
+
+	/* (a Forge GRAVITY volume's pull, or its throw lately: the volumes are
+	the map's, and the host's copy is pulled as the client's is) */
+	if (forge_volumes_gravity_at(vehicle->object.bounding_sphere_center.x, vehicle->object.bounding_sphere_center.y,
+		vehicle->object.bounding_sphere_center.z, pull))
+	{
+		objects_host_vehicle_predictions[player_index].gravity_vehicle_index = vehicle_index;
+		objects_host_vehicle_predictions[player_index].gravity_time = game_time_get();
+		return TRUE;
+	}
+	if (objects_host_vehicle_predictions[player_index].gravity_vehicle_index == vehicle_index &&
+		game_time_get() - objects_host_vehicle_predictions[player_index].gravity_time >= 0 &&
+		game_time_get() - objects_host_vehicle_predictions[player_index].gravity_time < VEHICLE_GRAVITY_CEILING_GRACE_TICKS)
+	{
+		return TRUE;
+	}
 
 	if (type == _vehicle_type_human_boat || type == _vehicle_type_human_plane ||
 		type == _vehicle_type_alien_fighter || type == _vehicle_type_turret ||
@@ -2119,7 +2337,7 @@ void network_objects_apply_vehicle_predictions(
 			real_point3d previous_position = vehicle->object.position;
 
 			network_objects_reconcile(state->object_index, &state->position, &forward, &up, &velocity,
-				&angular_velocity, HOST_VEHICLE_BLEND_DISTANCE);
+				&angular_velocity, HOST_VEHICLE_BLEND_DISTANCE, _network_vehicle_write_prediction);
 			/* (a copy at rest runs no physics, and so neither falls nor
 			counts its ticks in the air: one the client moved from where it
 			came to rest (a little at a time too), or says moves, wakes, and
@@ -2179,6 +2397,7 @@ void network_objects_host_tick(
 	if (game_time_get() % INVENTORY_INTERVAL_TICKS == 0)
 		profile_scope(objects_host_tick_send_inventories_section, distributed_host_send_inventories();)
 	profile_scope(objects_host_tick_send_damage_animations_section, distributed_host_send_damage_animations();)
+	mcc_network_host_tick();
 }
 
 /* ---------- a client */
@@ -2288,10 +2507,9 @@ static void distributed_client_delete(
 them again from the host, a while after (asked again, flagged: the host
 tells them all only then, not on each asking while they are on their way),
 longer each time it fails again */
-static void distributed_client_create_failed(
+static void distributed_client_request_objects(
 	void)
 {
-	objects_statistics.create_failures++;
 	/* (not asked since the last: that asking covers this one) */
 	if (objects_client_failed_time != NONE && objects_client_ready_time <= objects_client_failed_time)
 		return;
@@ -2301,6 +2519,27 @@ static void distributed_client_create_failed(
 	objects_client_ready_time = game_time_get();
 	objects_client_ready_interval = objects_client_retry_ticks;
 	objects_client_retry_ticks = MIN(2 * objects_client_retry_ticks, CLIENT_RETRY_MAXIMUM_TICKS);
+}
+
+static void distributed_client_create_failed(void)
+{
+	objects_statistics.create_failures++;
+	distributed_client_request_objects();
+}
+
+/* A co-op checkpoint may restore a unit under the same object handle after
+this client's copy died. Request a full, validated host description; merely
+clearing its dead bit would leave death animations and inventory state behind. */
+void network_objects_expect_live_unit(long object_index)
+{
+	struct object_datum *object;
+
+	if (!network_game_distributed_client() || !network_coop_active() ||
+		!network_objects_client_has(object_index))
+		return;
+	object = object_try_and_get_and_verify_type(object_index, _object_mask_unit);
+	if (object && TEST_FLAG(object->object.damage_flags, _object_dead_bit))
+		distributed_client_request_objects();
 }
 
 /* whether the object is this machine's own player's unit or the vehicle it
@@ -2347,17 +2586,21 @@ static boolean distributed_client_change_valid(
 	if (!TEST_FLAG(NETWORKED_OBJECT_TYPES, type) || !tag_index_is_group(change->definition_index, group_tag))
 		return FALSE;
 	/* (a flag's or ball's team names the game type's flag or ball: an index
-	of its arrays; weapon_is_flag's bit) */
-	if (type == _object_type_weapon && ((weapon_definition_get(change->definition_index)->weapon.flags >> 3) & 1))
+	of its arrays; weapon_is_flag's bit, which is "must be readied". Firefight
+	has no objectives (its engine reads no flag nor ball): a map's or a Tag
+	Injector profile's weapon with that bit is any weapon there, of the
+	enemies' team or of none, which was otherwise never made on a client nor
+	in a replay, its carriers seen holding nothing) */
+	if (type == _object_type_weapon && ((weapon_definition_get(change->definition_index)->weapon.flags >> 3) & 1) &&
+		game_engine_get_variant()->game_engine_index != game_engine_firefight)
+	{
 		team_count = game_engine_get_variant()->game_engine_index == game_engine_ctf ? CTF_FLAG_TEAMS : ODDBALL_TEAMS;
+		/* (a flag or ball of no team would index the game type's arrays at -1) */
+		if (change->owner_team_index == NONE)
+			return FALSE;
+	}
 	if (change->owner_team_index != NONE && (change->owner_team_index < 0 || change->owner_team_index >= team_count))
 		return FALSE;
-	/* (a flag or ball of no team would index the game type's arrays at -1) */
-	if (type == _object_type_weapon && ((weapon_definition_get(change->definition_index)->weapon.flags >> 3) & 1) &&
-		change->owner_team_index == NONE)
-	{
-		return FALSE;
-	}
 	/* (its colors numbers) */
 	{
 		short color_index;
@@ -2438,6 +2681,17 @@ as it is) */
 	}
 }
 
+static boolean distributed_client_reuses_object(long existing_index,
+	struct object_datum const *existing, struct distributed_object_change const *change,
+	boolean checkpoint_pending)
+{
+	return existing_index == change->object_index && existing &&
+		existing->definition_index == change->definition_index &&
+		!(checkpoint_pending && network_coop_active() && TEST_FLAG(_object_mask_unit, existing->object.type) &&
+			TEST_FLAG(existing->object.damage_flags, _object_dead_bit) &&
+			!TEST_FLAG(change->flags, _distributed_object_dead_bit));
+}
+
 static void distributed_client_create(
 	struct distributed_object_change const *change)
 {
@@ -2446,14 +2700,27 @@ static void distributed_client_create(
 	struct object_placement_data placement;
 	real_vector3d forward, up;
 	long object_index;
+	boolean checkpoint_pending;
 
 	if (absolute_index < 0 || absolute_index >= MAXIMUM_TRACKED_OBJECTS ||
 		absolute_index >= object_header_data->maximum_count ||
 		!distributed_client_change_valid(change, &forward, &up))
 	{
 		objects_statistics.create_failures++;
+		/* (a game's first few said: an object the host has and this machine
+		never makes is one its players are seen without) */
+		if (objects_client_refusals_logged++ < 8)
+		{
+			error(_error_silent, "network objects: the host's object %08lx (%s, team %d) is refused here",
+				(unsigned long)change->object_index,
+				tag_index_is_group(change->definition_index, OBJECT_DEFINITION_TAG) ?
+					tag_get_name(change->definition_index) : "not an object's tag",
+				(int)change->owner_team_index);
+		}
 		return;
 	}
+	checkpoint_pending = objects_client_checkpoint_pending[absolute_index];
+	objects_client_checkpoint_pending[absolute_index] = FALSE;
 	header = (struct datum_header const *)((byte const *)object_header_data->data +
 		absolute_index * object_header_data->size);
 	if (header->identifier)
@@ -2464,8 +2731,7 @@ static void distributed_client_create(
 		/* placed here when the map loaded, as on the host, or told of
 		before: the same object, where the host has it (unless carried, or
 		this machine's own) */
-		if (existing_index == change->object_index && existing &&
-			existing->definition_index == change->definition_index)
+		if (distributed_client_reuses_object(existing_index, existing, change, checkpoint_pending))
 		{
 			objects_client_has[absolute_index] = existing_index;
 			if (!TEST_FLAG(change->flags, _distributed_object_carried_bit) &&
@@ -2475,7 +2741,7 @@ static void distributed_client_create(
 				!biped_ragdoll_active(existing_index))
 			{
 				distributed_object_move(existing_index, &change->position, &forward, &up,
-					&change->translational_velocity, &change->angular_velocity);
+					&change->translational_velocity, &change->angular_velocity, _network_vehicle_write_change);
 			}
 			distributed_client_apply_change(existing_index, change);
 			return;
@@ -2620,7 +2886,7 @@ static boolean distributed_client_correct_own_vehicle(
 	position.z = before.z + error.k;
 	forward = object->object.forward;
 	up = object->object.up;
-	network_objects_correct(vehicle_index, &position, &forward, &up, NULL, NULL);
+	network_objects_correct(vehicle_index, &position, &forward, &up, NULL, NULL, _network_vehicle_write_own);
 	distributed_count_correction();
 	/* (the ticks noted since moved as it was, not corrected again) */
 	error.i = object->object.position.x - before.x;
@@ -2785,7 +3051,14 @@ static void distributed_client_note_unsteered_path(
 		objects_client_unsteered_path[absolute_index].latest_up = *host_up;
 		object->object.translational_velocity = *global_zero_vector3d;
 		object->object.angular_velocity = *global_zero_vector3d;
-		object_set_position(object_index, host_position, host_forward, host_up);
+		{
+			real_point3d before = object->object.position;
+			real_vector3d before_forward = object->object.forward;
+			real_vector3d before_up = object->object.up;
+
+			object_set_position(object_index, host_position, host_forward, host_up);
+			network_objects_vehicle_written(object_index, &before, &before_forward, &before_up, _network_vehicle_write_state);
+		}
 		return;
 	}
 	/* the path's velocity, sample to sample on the host's clock */
@@ -2862,6 +3135,8 @@ void network_objects_handle_states(
 			if (!object_try_and_get_and_verify_type(state->object_index, _object_mask_all))
 				continue;
 		}
+		else
+			network_objects_expect_live_unit(state->object_index);
 		/* (an item made carried whose unit never had it here, placed on the
 		host: in the world, seen) */
 		if (TEST_FLAG(_object_mask_item, object->object.type) && object->object.parent_object_index == NONE &&
@@ -2937,10 +3212,18 @@ void network_objects_handle_states(
 				forward.k * object->object.forward.k >= angle_tolerance &&
 			up.i * object->object.up.i + up.j * object->object.up.j + up.k * object->object.up.k >= angle_tolerance)
 		{
+			/* (a copy kept where it is still takes the host's velocities: left to its own physics they decay
+			between corrections, and a rider's frame, the vehicle's motion, goes wrong with them) */
+			if (vehicle_riding_enabled() && object->object.type == _object_type_vehicle && !own_vehicle &&
+				!distributed_vehicle_unsteered(state->object_index))
+			{
+				object->object.translational_velocity = velocity;
+				object->object.angular_velocity = angular_velocity;
+			}
 			continue;
 		}
 		if (network_objects_reconcile(state->object_index, &state->position, &forward, &up, &velocity,
-			&angular_velocity, blend_distance))
+			&angular_velocity, blend_distance, _network_vehicle_write_state))
 		{
 			distributed_count_correction();
 		}
@@ -3367,6 +3650,15 @@ void network_objects_set_seat(
 			return;
 		}
 		vehicle = (struct unit_datum *)object_try_and_get_and_verify_type(vehicle_index, _object_mask_vehicle);
+		/* MCC biped seats use the host's existing seat state and all the
+		same identity, capacity and attachment-cycle checks below. */
+		if (!vehicle)
+		{
+			vehicle = mcc_seat_parent(vehicle_index);
+			if (vehicle && (TEST_FLAG(vehicle->object.damage_flags, _object_dead_bit) ||
+				!unit_has_animation_to_enter_seat(unit_index, vehicle_index, seat_index)))
+				return;
+		}
 		if (!vehicle || seat_index < 0 ||
 			seat_index >= unit_definition_get(vehicle->definition_index)->unit.seats.count)
 		{
@@ -3607,7 +3899,14 @@ static void distributed_client_carry_unsteered_vehicles(
 		else
 			object->object.translational_velocity = *global_zero_vector3d;
 		object->object.angular_velocity = *global_zero_vector3d;
-		object_set_position(iterator.index, &position, &forward, &up);
+		{
+			real_point3d before = object->object.position;
+			real_vector3d before_forward = object->object.forward;
+			real_vector3d before_up = object->object.up;
+
+			object_set_position(iterator.index, &position, &forward, &up);
+			network_objects_vehicle_written(iterator.index, &before, &before_forward, &before_up, _network_vehicle_write_carry);
+		}
 	}
 }
 
@@ -3665,8 +3964,14 @@ void network_objects_client_tick(
 	/* (too many to look at one by one later: all of them) */
 	else if (objects_client_new_object_count >= MAXIMUM_CLIENT_NEW_OBJECTS)
 		objects_client_check_all = TRUE;
+	/* Do not record predictions from retained old replicas while the
+	ordered checkpoint inventory is still arriving. Its empty state must
+	not be mistaken for an acknowledgement of a new local throw or shot. */
+	if (!distributed_checkpoint_ready())
+		return;
 	distributed_client_ready_picked_up_weapons();
 	distributed_client_note_own_inventories();
+	mcc_network_client_tick();
 	distributed_client_send_vehicles();
 	distributed_client_carry_unsteered_vehicles();
 	/* (who it is, as its Discord told it, and its build: once its ready went, which makes
@@ -3680,42 +3985,42 @@ void network_objects_client_tick(
 
 /* ---------- the game */
 
-void network_objects_new_game(
+/* A checkpoint starts new prediction, inventory and animation histories even
+when it restores the same object handles. Keep ownership and the host's last
+object list: its next comparison still needs to send deletions. */
+void network_objects_reverted(
 	void)
 {
 	long absolute_index;
-	short machine_index;
 	short local_player_index;
 	short index;
 
+	mcc_network_new_game();
 	csmemset(objects_host_inventories, 0, sizeof(objects_host_inventories));
 	host_damage_animation_count = 0;
 	csmemset(client_damage_animations, 0, sizeof(client_damage_animations));
 	for (absolute_index = 0; absolute_index < MAXIMUM_TRACKED_OBJECTS; absolute_index++)
 	{
-		objects_host_told[absolute_index] = NONE;
 		objects_host_state_moving[absolute_index] = FALSE;
 		objects_host_rest_times[absolute_index] = NONE;
 		objects_recorder_states[absolute_index] = 0;
 		objects_host_inventories[absolute_index].carried_time = NONE;
 		objects_host_inventories[absolute_index].ammunition_time = NONE;
-		objects_client_has[absolute_index] = NONE;
 		objects_client_dead[absolute_index].object_index = NONE;
+		objects_client_checkpoint_pending[absolute_index] = TRUE;
 		objects_client_unsteered_path[absolute_index].object_index = NONE;
 		objects_client_unsteered_path[absolute_index].time = NONE;
 		objects_client_unsteered_path[absolute_index].interval = 0;
 	}
-	objects_host_told_count = 0;
 	objects_host_resting_cursor = 0;
 	objects_host_viewers.count = 0;
-	for (machine_index = 0; machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES; machine_index++)
-		objects_host_machines[machine_index].time = NONE;
 	csmemset(objects_host_vehicle_predictions, 0, sizeof(objects_host_vehicle_predictions));
 	for (index = 0; index < MAXIMUM_TRACKED_PLAYERS; index++)
 	{
 		objects_host_vehicle_predictions[index].accepted_vehicle_index = NONE;
 		objects_host_vehicle_predictions[index].ground_vehicle_index = NONE;
 		objects_host_vehicle_predictions[index].rest_vehicle_index = NONE;
+		objects_host_vehicle_predictions[index].gravity_vehicle_index = NONE;
 	}
 	objects_client_synchronized = FALSE;
 	objects_client_ready_time = NONE;
@@ -3723,10 +4028,6 @@ void network_objects_new_game(
 	objects_client_failed_time = NONE;
 	objects_client_retry_ticks = CLIENT_RETRY_TICKS;
 	objects_client_ask_again = FALSE;
-	objects_client_local_allocation = FALSE;
-	objects_client_creating_index = NONE;
-	objects_client_creating = FALSE;
-	objects_client_deleting = FALSE;
 	objects_client_new_object_count = 0;
 	objects_client_retried_inventory_count = 0;
 	objects_client_check_all = TRUE;
@@ -3742,4 +4043,39 @@ void network_objects_new_game(
 			objects_client_own_vehicles[local_player_index][index].vehicle_index = NONE;
 		}
 	}
+}
+
+/* Client projectiles and their lingering effects belong to the discarded
+prediction. They must not produce new-epoch hits or objects from an old shot. */
+void network_objects_discard_client_effects(void)
+{
+	struct object_iterator iterator;
+
+	if (!network_game_distributed_client())
+		return;
+	object_iterator_new(&iterator, _object_mask_projectile, 0);
+	while (object_iterator_next(&iterator))
+		object_delete_immediately(iterator.index);
+	effects_discard_gameplay();
+}
+
+void network_objects_new_game(
+	void)
+{
+	long absolute_index;
+	short machine_index;
+
+	network_objects_reverted();
+	for (absolute_index = 0; absolute_index < MAXIMUM_TRACKED_OBJECTS; absolute_index++)
+	{
+		objects_host_told[absolute_index] = NONE;
+		objects_client_has[absolute_index] = NONE;
+	}
+	objects_host_told_count = 0;
+	for (machine_index = 0; machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES; machine_index++)
+		objects_host_machines[machine_index].time = NONE;
+	objects_client_local_allocation = FALSE;
+	objects_client_creating_index = NONE;
+	objects_client_creating = FALSE;
+	objects_client_deleting = FALSE;
 }

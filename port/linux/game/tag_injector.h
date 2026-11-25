@@ -23,6 +23,16 @@ enum tag_injector_category
 	_tag_injector_bipeds,
 	_tag_injector_scenery,
 	_tag_injector_devices,
+	/* (a map's skies, and its first-person hands: those of its globals; a
+	biped added takes its map's hands with it. Forge's map settings play
+	them, port/forge/src/forge_map_settings.c) */
+	_tag_injector_skies,
+	_tag_injector_hands,
+	/* (a map's effects and decals, for Forge's EFFECTS and DECALS tabs: an
+	effect spot replays it, a decal is laid on the ground looked at;
+	port/forge/src/forge_runtime_tags.c's forge_profile_catalog_add) */
+	_tag_injector_effects,
+	_tag_injector_decals,
 
 	NUMBER_OF_TAG_INJECTOR_CATEGORIES
 };
@@ -34,10 +44,19 @@ enum tag_injector_category
 
 /* ---------- the menu's (menu_functions.c) */
 
-/* Whether tags can be taken out of maps: Custom Edition maps can run
-(game.custom_edition) and none is being played. When not, `reason` says
-why, for the menu. */
+/* Whether tags can be taken out of maps: of Custom Edition maps, or of MCC
+maps (none is being played). When not, `reason` says why, for the menu. */
 boolean tag_injector_maps_available(
+	char *reason,
+	long reason_size);
+/* ... of Custom Edition maps: they can run (game.custom_edition) and none
+is being played */
+boolean tag_injector_custom_edition_maps_available(
+	char *reason,
+	long reason_size);
+/* ... of MCC maps (mcc_maps/): none is being played, whose tag window
+they are opened in (mcc_tag_bundle.c) */
+boolean tag_injector_mcc_maps_available(
 	char *reason,
 	long reason_size);
 
@@ -61,6 +80,13 @@ short tag_injector_map_of(
 /* whether a map is a campaign map */
 boolean tag_injector_map_campaign(
 	short map);
+/* (port) the map of the list that is the MCC map of mcc_maps.c's catalog
+index `catalog_index`, or NONE; and whether a map is an MCC map, whose tags
+are taken out by mcc_tag_bundle.c */
+short tag_injector_map_of_mcc(
+	short catalog_index);
+boolean tag_injector_map_mcc(
+	short map);
 
 /* Loads a map's tags, as the game would play them, to list them and take
 them out; FALSE after logging why. Opening another, or
@@ -71,6 +97,10 @@ void tag_injector_map_close(
 	void);
 short tag_injector_map_opened(
 	void);
+/* the map of the list whose file a level name's is (Server Setup's map: MAP
+CONTENT's CUSTOM list previews its tags), or NONE */
+short tag_injector_map_named(
+	char const *level_name);
 
 /* the name of a category ("WEAPONS"), and whether its tags can be added to
 a profile (each can: the randomizer plays weapons and AI, Forge places them
@@ -161,6 +191,45 @@ struct tag_injector_mesh_texture
 	unsigned char *pixels;
 };
 
+/* the most particle emitters an effect's preview plays, and animation
+frames of each */
+#define TAG_INJECTOR_MESH_MAXIMUM_EMITTERS 16
+#define TAG_INJECTOR_MESH_MAXIMUM_FRAMES 16
+
+/* An effect's particles, as the preview plays them (tag_preview.c): the
+material their sprites are drawn with (its texture and blend), the frames
+of their sprite's sequence (each u0, u1, v0, v1 of its texture) played at
+frames_per_second (0: a frame each, at random), a frame's width over its
+height; when they come (seconds after the effect starts, of their event's
+delay and duration, by distribution: effect particles' distribution
+function), where (offset, and distribution_radius about it) and how they
+go (speed along direction, in a cone of that angle, radians), turning
+(radians a second), how large (radius), how long they live and fade in and
+out, and their tint (alpha, red, green, blue), each between bounds. */
+struct tag_injector_mesh_emitter
+{
+	short material;
+	short frame_count;
+	float frames[TAG_INJECTOR_MESH_MAXIMUM_FRAMES][4];
+	float aspect;
+	float frames_per_second[2];
+	float delay[2];
+	float duration[2];
+	short distribution;
+	short count[2];
+	float offset[3];
+	float direction[3];
+	float cone;
+	float distribution_radius[2];
+	float velocity[2];
+	float angular_velocity[2];
+	float radius[2];
+	float life[2];
+	float fade_in;
+	float fade_out;
+	float tint[2][4];
+};
+
 /* A tag's model, for the menu's preview of it (tag_preview.c): the triangles
 of the most detailed geometry of the first permutation of each of its
 regions, in the model's space (its default pose), opaque parts alone (all
@@ -174,12 +243,52 @@ environment's): its base map's texture, and for a model's shader that names
 a change color the object has, the color (0 to 1) its multipurpose map's
 texture tints the base map by, where its color change mask (Halo PC's
 alpha) says (textures NONE for none). */
+/* how a material is drawn over what is behind it: opaque (a model's or an
+environment's shader), else as a transparent shader's framebuffer blend
+function says (shader_transparent_generic's, in its order) */
+enum tag_injector_blend
+{
+	_tag_injector_blend_opaque,
+	_tag_injector_blend_alpha,
+	_tag_injector_blend_multiply,
+	_tag_injector_blend_double_multiply,
+	_tag_injector_blend_add,
+	_tag_injector_blend_subtract,
+	_tag_injector_blend_minimum,
+	_tag_injector_blend_maximum,
+	_tag_injector_blend_alpha_multiply_add,
+	_tag_injector_blend_count
+};
+
+/* the maps of a chicago shader a material draws at most */
+#define TAG_INJECTOR_MESH_MAXIMUM_LAYERS 4
+
+/* A map of a chicago shader's material: its texture (NONE: white), how
+what the maps before it made is folded with it (the color and alpha
+functions of the map before it: shader_transparent_chicago_preprocessor.c's
+thirteen, current first), whether its color is its alpha, and how many
+times it repeats across the part's texture coordinates. */
+struct tag_injector_mesh_layer
+{
+	short texture;
+	short color_function;
+	short alpha_function;
+	boolean alpha_replicate;
+	float scale[2];
+};
+
+/* (a sky's transparent shaders' too, by their blend: a generic's map
+repeated least, a chicago's maps as layers, its parts' texture coordinates
+then unscaled by the shader) */
 struct tag_injector_mesh_material
 {
 	short base_texture;
 	short mask_texture;
 	boolean tinted;
 	float tint[3];
+	short blend;
+	short layer_count;
+	struct tag_injector_mesh_layer layers[TAG_INJECTOR_MESH_MAXIMUM_LAYERS];
 };
 
 struct tag_injector_mesh
@@ -195,6 +304,17 @@ struct tag_injector_mesh
 	struct tag_injector_mesh_texture textures[TAG_INJECTOR_MESH_MAXIMUM_TEXTURES];
 	short material_count;
 	struct tag_injector_mesh_material materials[TAG_INJECTOR_MESH_MAXIMUM_MATERIALS];
+	/* a sky's model: seen from inside, from its origin (where the game
+	draws it about the eye), every part of it */
+	boolean sky;
+	/* an effect's or a decal's: a sprite of its bitmap (its four corners,
+	the first its top left, and its one material, by its blend), drawn flat
+	facing the eye */
+	boolean card;
+	/* an effect's particles: played, the eye turning about them (no
+	triangles of its own) */
+	short emitter_count;
+	struct tag_injector_mesh_emitter emitters[TAG_INJECTOR_MESH_MAXIMUM_EMITTERS];
 };
 
 /* whether a tag has a tag it needs to work: it has it, it has not (it
@@ -255,6 +375,11 @@ boolean tag_injector_map_tag_preview(
 	long index,
 	struct tag_injector_mesh *mesh,
 	struct tag_injector_needs *needs);
+/* whether the open map's tag of a category, by its name, has everything it
+needs (its needs list: none missing); TRUE for one not found */
+boolean tag_injector_map_tag_usable(
+	short category,
+	char const *tag_name);
 boolean tag_injector_profile_tag_preview(
 	long profile,
 	long tag,
@@ -378,6 +503,13 @@ path in it; the bake the level plays (NONE: none) */
 void tag_injector_tags_baked_set(
 	long profile);
 long tag_injector_level_baked_profile(
+	void);
+/* the game's own props (port_tag_profiles_props_open), read after the bake
+and before the profile of the next tag_injector_tags_read, never the pools'
+(no root of theirs); the props the level plays (NONE: none) */
+void tag_injector_tags_props_set(
+	long profile);
+long tag_injector_level_props_profile(
 	void);
 /* The Tag Editor's (tag_editor.c), as a level adds a profile's tags: a copy
 of a tag of the level (its root, and with `blocks` its blocks and theirs,

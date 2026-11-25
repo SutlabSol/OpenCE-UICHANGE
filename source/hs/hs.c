@@ -2784,6 +2784,7 @@ symbols in this file:
 #include "hs_library_internal.h"
 #include "object_lists.h"
 #include "hs_scenario_definitions.h"
+#include "hs_console_state.h" /* port: port/linux/game/hs_console_state.inl */
 #include "ai/ai.h"
 #include "ai/ai_debug.h"
 #include "cache/cache_files.h"
@@ -2848,6 +2849,10 @@ symbols in this file:
 #include "profile_console.h" /* port: port/linux/game/profile_console.c */
 #endif
 #include "structure_culling.h" /* port: port/linux/game/structure_culling.c */
+#include "mcc_script_parameters.h" /* port: port/linux/game/mcc_script_parameters.h */
+#include "mcc_syntax.h" /* port: port/linux/game/mcc_syntax.h */
+#include "mcc_scripts.h" /* port: port/linux/game/mcc_scripts.c */
+#include "custom_campaigns.h" /* port: port/linux/game/custom_campaigns.c */
 
 /* ---------- constants */
 
@@ -3386,7 +3391,7 @@ typedef void (*hs_token_enumerator)(
 
 struct hs_function_table_storage
 {
-	struct hs_function_definition const *functions[418 + 7];
+	struct hs_function_definition const *functions[418 + 8]; /* port: append the map's riding call */
 	struct profile_section profile;
 	hs_token_enumerator token_enumerators[18];
 };
@@ -11794,7 +11799,27 @@ static struct hs_function_definition_with_1_parameter const debug_structure_cull
 	},
 };
 
-long const hs_function_table_count= 418 + 7;
+/* port: a map's own riding choice (port/linux/game/vehicle_riding.c), at the end of the table as the port's others are */
+void vehicle_riding_map_script(boolean on);
+
+HS_EVALUATE_VOID_BOOLEAN(hs_vehicle_riding_evaluate, vehicle_riding_map_script)
+
+static struct hs_function_definition_with_1_parameter const vehicle_riding_definition=
+{
+	{
+		_hs_type_void,
+		0,
+		"vehicle_riding",
+		hs_macro_function_parse,
+		hs_vehicle_riding_evaluate,
+		"sets whether players standing on a moving vehicle are carried by it for this map, over the players' and host's setting; only a startup script's call, on the map's first tick, counts.",
+		NULL,
+		1,
+		{ _hs_type_boolean },
+	},
+};
+
+long const hs_function_table_count= 418 + 8; /* port: append the map's riding call */
 
 struct hs_enum_definition const hs_enum_table[]=
 {
@@ -12233,6 +12258,8 @@ struct hs_function_table_storage hs_function_table=
 		&mods_list_definition,
 		&structure_culling_definition.definition, /* port: local structure culling switch */
 		&debug_structure_culling_definition.definition, /* port: local culling debug view */
+		/* port: the map's riding call follows all existing indices */
+		&vehicle_riding_definition.definition,
 	},
 	{
 		"hs_update",
@@ -12743,6 +12770,9 @@ static boolean const hs_function_allowed_in_maps[]=
 	/* port: local structure rendering */
 	FALSE, /* structure_culling: this machine's rendering */
 	FALSE, /* debug_structure_culling: this machine's rendering */
+
+	/* port: the map's vehicle riding */
+	TRUE, /* vehicle_riding */
 };
 typedef char verify_hs_function_allowed_in_maps_size[
 	NUMBEROF(hs_function_allowed_in_maps) == NUMBEROF(hs_function_table.functions) ? 1 : -1];
@@ -12860,6 +12890,14 @@ static boolean hs_scenario_syntax_data_valid(
 	byte const *address = (byte const *)TAG_DATA_ADDRESS(scenario->hs_syntax_data);
 	struct data_array const *data = (struct data_array const *)address;
 
+	/* port: an MCC map's syntax has its own layout and limits (mcc_syntax.c) */
+	{
+		int mcc_valid = mcc_syntax_scenario_valid(scenario);
+
+		if (mcc_valid >= 0)
+			return mcc_valid != 0;
+	}
+
 	/* (in the loaded map's tag cache: this build's, or a Custom Edition
 	map's, cache_file_tag_cache_contains) */
 	if (scenario->hs_syntax_data.size != syntax_data_size ||
@@ -12883,9 +12921,8 @@ static boolean hs_scenario_syntax_data_valid(
 }
 
 /* port: the scenario's script strings as the map holds them (the names
-and strings its nodes point into): inside the tag cache, with the 0x400
-bytes at their end that the console's expressions are written to
-(hs_compile_expression). The shipped maps' all are */
+and strings its nodes point into): inside the tag cache, including the
+format's reserved 0x400-byte tail. Console text has separate saved storage. */
 static boolean hs_scenario_string_constants_valid(
 	struct scenario const *scenario)
 {
@@ -12968,6 +13005,12 @@ static char const *const hs_globals_denied_to_downloaded_maps[]=
 (hs_scenario_functions_check) */
 static boolean hs_scenario_downloaded = FALSE;
 
+/* port: whether the map whose scripts are checked is a campaign level
+(hs_scenario_functions_check): its scripts may call map_name, which names the
+campaign's next level (main_script_map_name: H1A and Custom Edition campaigns
+move on so), though no other map's may (hs_function_allowed_in_maps) */
+static boolean hs_scenario_campaign = FALSE;
+
 static boolean hs_name_listed(
 	char const *name,
 	char const *const *list)
@@ -12995,9 +13038,12 @@ from the node as it is), or names an external global a map may not set
 Only a node with a value's type that is neither a constant nor a script's
 call is a function's call (hs_evaluate, hs_thread_main); its function's and
 its globals' indices are the ones hs_compile_postprocess found by name */
-static short hs_syntax_node_refusal(
+/* port: the same structural checks apply to saved console expressions;
+only maps have permanent-node and command-permission restrictions. */
+static short hs_syntax_node_check(
 	struct hs_syntax_node const *expression,
-	char const **name)
+	char const **name,
+	boolean from_map)
 {
 	struct hs_syntax_node const *predicate;
 	struct hs_syntax_node const *first_argument = NULL;
@@ -13009,7 +13055,7 @@ static short hs_syntax_node_refusal(
 	*name = NULL;
 	/* (a node that isn't permanent is a console expression's, which
 	hs_node_gc deletes from under the script) */
-	if (!TEST_FLAG(expression->flags, _hs_syntax_node_permanent_bit))
+	if (from_map && !TEST_FLAG(expression->flags, _hs_syntax_node_permanent_bit))
 		return _hs_node_refusal_damaged;
 	if (expression->next_node_index != NONE && !hs_syntax_try_get(expression->next_node_index))
 		return _hs_node_refusal_damaged;
@@ -13022,20 +13068,36 @@ static short hs_syntax_node_refusal(
 		return _hs_node_refusal_none;
 
 	function_index = expression->function_index;
+	{
+		struct hs_function_definition *mcc_function = mcc_script_function(function_index);
+		if (mcc_function)
+		{
+			*name = mcc_function->name;
+			/* port: saved console calls share MCC's grammar, not map ownership. */
+			return (from_map ? mcc_script_call_valid(expression, hs_syntax_data) :
+				mcc_script_call_arguments_valid(expression, hs_syntax_data)) ?
+				_hs_node_refusal_none : _hs_node_refusal_damaged;
+		}
+	}
 	if (function_index<0 || function_index>=(short)NUMBEROF(hs_function_allowed_in_maps))
 		return _hs_node_refusal_damaged;
 	function = hs_function_get(function_index);
 	*name = function->name;
-	/* port: map_name too in a Custom Edition map's (not a downloaded one's),
-	which goes on only to a map in its own folder (main_script_set_map_name):
-	a campaign of several maps, Lumoria's, goes from each to the next */
-	if (!hs_function_allowed_in_maps[function_index] &&
-		!(function->evaluate == main_set_map_name_evaluate && !hs_scenario_downloaded && custom_edition_cache_tags_loaded()))
+	/* port: map_name in a campaign level's scripts (hs_scenario_campaign), and
+	in a Custom Edition map's (not a downloaded one's), which goes on only to a
+	map in its own folder (main_script_set_map_name): a campaign of several
+	maps, Lumoria's, goes from each to the next; a mounted custom campaign's
+	maps also change the level and difficulty as the game's own campaign does
+	(port/linux/game/custom_campaigns.c) */
+	if (from_map && !hs_function_allowed_in_maps[function_index] &&
+		!(hs_scenario_campaign && !csstrcmp(function->name, "map_name")) &&
+		!(function->evaluate == main_set_map_name_evaluate && !hs_scenario_downloaded && custom_edition_cache_tags_loaded()) &&
+		!custom_campaign_script_may_call(cache_file_loaded_map_name(), function->name))
 	{
 		return _hs_node_refusal_function;
 	}
 	/* port: a downloaded map's (hs_functions_denied_to_downloaded_maps) */
-	if (hs_scenario_downloaded && hs_name_listed(function->name, hs_functions_denied_to_downloaded_maps))
+	if (from_map && hs_scenario_downloaded && hs_name_listed(function->name, hs_functions_denied_to_downloaded_maps))
 		return _hs_node_refusal_downloaded_function;
 
 	if (function->parse == hs_macro_function_parse)
@@ -13086,6 +13148,14 @@ static short hs_syntax_node_refusal(
 	{
 		short designator = (short)first_argument->data;
 
+		/* port: a set of an MCC script's parameter (mcc_script_parameters.c) */
+		{
+			int mcc_parameter = mcc_parameter_set_valid(first_argument,
+				hs_syntax_try_get(first_argument->next_node_index));
+			if (mcc_parameter >= 0)
+				return mcc_parameter ? _hs_node_refusal_none : _hs_node_refusal_damaged;
+		}
+
 		if (!TEST_FLAG(first_argument->flags, _hs_syntax_node_primitive_bit) ||
 			!TEST_FLAG(first_argument->flags, _hs_syntax_node_variable_bit) ||
 			hs_global_get_type(designator) == _hs_unparsed)
@@ -13100,13 +13170,13 @@ static short hs_syntax_node_refusal(
 			if (!value || value->type != hs_global_get_type(designator))
 				return _hs_node_refusal_damaged;
 		}
-		if ((designator & 0x8000) && !hs_external_global_settable_by_maps(designator & 0x7FFF))
+		if (from_map && (designator & 0x8000) && !hs_external_global_settable_by_maps(designator & 0x7FFF))
 		{
 			*name = hs_global_external_get(designator & 0x7FFF)->name;
 			return _hs_node_refusal_global;
 		}
 		/* port: a downloaded map's (hs_globals_denied_to_downloaded_maps) */
-		if ((designator & 0x8000) && hs_scenario_downloaded &&
+		if (from_map && (designator & 0x8000) && hs_scenario_downloaded &&
 			hs_name_listed(hs_global_external_get(designator & 0x7FFF)->name, hs_globals_denied_to_downloaded_maps))
 		{
 			*name = hs_global_external_get(designator & 0x7FFF)->name;
@@ -13123,6 +13193,63 @@ static short hs_syntax_node_refusal(
 	}
 
 	return _hs_node_refusal_none;
+}
+
+/* port: preserve map admission while checking saved console call arity. */
+static short hs_syntax_node_refusal(
+	struct hs_syntax_node const *expression,
+	char const **name)
+{
+	return hs_syntax_node_check(expression, name, TRUE);
+}
+
+boolean hs_console_syntax_node_valid(
+	struct hs_syntax_node const *node)
+{
+	char const *name;
+	short actual_type;
+	if (TEST_FLAG(node->flags, _hs_syntax_node_primitive_bit))
+	{
+		if (TEST_FLAG(node->flags, _hs_syntax_node_script_bit))
+			return FALSE;
+		if (node->type == _hs_function_name)
+			return !TEST_FLAG(node->flags, _hs_syntax_node_variable_bit);
+		if (TEST_FLAG(node->flags, _hs_syntax_node_variable_bit))
+		{
+			if (global_scenario_index == NONE && !((short)node->data & 0x8000))
+				return FALSE;
+			actual_type = hs_global_get_type((short)node->data);
+		}
+		else
+			actual_type = node->constant_type;
+	}
+	else
+	{
+		struct hs_syntax_node const *predicate = hs_syntax_try_get(node->data);
+		if (!hs_type_valid(node->type) || TEST_FLAG(node->flags, _hs_syntax_node_variable_bit) ||
+			!predicate || !TEST_FLAG(predicate->flags, _hs_syntax_node_primitive_bit) ||
+			predicate->type != _hs_function_name ||
+			hs_syntax_node_check(node, &name, FALSE) != _hs_node_refusal_none)
+			return FALSE;
+		if (TEST_FLAG(node->flags, _hs_syntax_node_script_bit))
+		{
+			struct hs_script const *script;
+			if (global_scenario_index == NONE || node->script_index < 0 ||
+				node->script_index >= global_scenario_get()->hs_scripts.count)
+				return FALSE;
+			script = TAG_BLOCK_GET_ELEMENT(&global_scenario_get()->hs_scripts, node->script_index, struct hs_script);
+			if (script->script_type != _hs_script_static && script->script_type != _hs_script_stub)
+				return FALSE;
+			actual_type = script->return_type;
+		}
+		else
+			actual_type = hs_function_get(node->function_index)->return_type;
+	}
+	/* port: a saved expression must satisfy the compiler's cast contract
+	before the interpreter can use its value or return through its frame. */
+	return hs_type_valid(node->type) &&
+		(actual_type == _hs_passthrough || hs_type_valid(actual_type)) &&
+		hs_can_cast(actual_type, node->type);
 }
 
 /* port: whether a script's or global's root node is of the type the
@@ -13221,6 +13348,13 @@ static void hs_scenario_functions_check(
 	short disabled_global_count = 0;
 	char reason[128];
 
+	/* port: a campaign level's scripts may name its next level
+	(hs_scenario_campaign), an MCC map's too */
+	hs_scenario_campaign = scenario->type == _scenario_type_solo;
+	/* port: an MCC map's functions are checked by mcc_syntax.c */
+	if (mcc_syntax_functions_check(scenario, hs_syntax_data, hs_syntax_node_refusal,
+		hs_scenario_disabled_scripts, hs_scenario_disabled_globals))
+		return;
 	/* port: a downloaded map's are held to tighter rules (map_share.c's
 	map_share_map_downloaded) */
 	hs_scenario_downloaded = map_share_map_downloaded(cache_file_loaded_map_name());
@@ -13380,6 +13514,11 @@ static void hs_allocate(
 	struct scenario *scenario;
 
 	scenario = global_scenario_index != NONE ? global_scenario_get() : NULL;
+	{
+
+		if (mcc_syntax_scenario_valid(scenario) > 0)
+			return;
+	}
 	/* port: as the map holds it only when it is sound */
 	if (scenario &&
 		scenario->hs_syntax_data.size ==
@@ -13396,14 +13535,13 @@ static void hs_allocate(
 	if (scenario)
 	{
 		hs_scenario_scripts_disable(scenario);
-		/* port: strings that aren't sound aren't gone by either, the
-		console's expressions included (hs_compile_expression refuses a
-		scenario without room for them) */
+		/* port: damaged map strings are not used by scenario compilation.
+		Console expressions own separate text in hs_console_state.inl. */
 		if (!hs_scenario_string_constants_valid(scenario))
 			scenario->hs_string_constants.size = 0;
 		if (hs_syntax_data && hs_syntax_data_allocated)
 			return;
-		error(0, "the scenario's script data is missing or damaged; its scripts won't run");
+		error(_error_silent, "the scenario's script data is missing or damaged; its scripts won't run");
 	}
 
 	hs_syntax_data = data_new(
@@ -13747,6 +13885,13 @@ void hs_recompile(
 struct hs_function_definition *hs_function_get(
 	short function_index)
 {
+	/* port: MCC's additional functions (mcc_scripts.c) */
+	{
+		struct hs_function_definition *mcc_function = mcc_script_function(function_index);
+
+		if (mcc_function)
+			return mcc_function;
+	}
 	match_assert(
 		"c:\\halo\\SOURCE\\hs\\hs.c",
 		522,
@@ -13881,6 +14026,14 @@ short hs_find_function_by_name(
 	char const *name)
 {
 	short function_index;
+
+	/* port: MCC's additional functions (mcc_scripts.c) */
+	{
+		short mcc_index = mcc_script_find(name);
+
+		if (mcc_index != NONE)
+			return mcc_index;
+	}
 
 	for (function_index = 0; function_index<hs_function_table_count; function_index++)
 	{
@@ -15096,8 +15249,28 @@ HS_EVALUATE_RETURN_BOOLEAN_NO_ARGUMENTS(player_control_action_test_move_relative
 /* port: in network co-op, also for the players the scripts can't name (coop_scripts.c) */
 HS_EVALUATE_VOID_FROM_ARGUMENTS(player_add_equipment_evaluate, struct hs_arguments_long_word_boolean, (coop_scripts_player_add_equipment(arguments->value0, arguments->value1, arguments->value2)))
 HS_EVALUATE_VOID_FROM_ARGUMENTS(debug_player_teleport_evaluate, struct hs_arguments_short_word, (debug_player_teleport(arguments->value0, arguments->value1)))
-/* port: a Custom Edition map's goes on only to a map in its own folder (main.c) */
-HS_EVALUATE_VOID_STRING(main_set_map_name_evaluate, main_script_set_map_name)
+/* port: a campaign map's own script names its campaign's next level, which
+ends this one as game_won does (main_script_map_name); the console, any map.
+Global initializers run before the map is ready and may not change maps. */
+static void main_set_map_name_evaluate(
+	short function_index,
+	long thread_index,
+	boolean initialize)
+{
+	struct hs_arguments_string *arguments = (struct hs_arguments_string *)hs_macro_function_evaluate(function_index, thread_index, initialize);
+
+	if (arguments)
+	{
+		if (hs_runtime_port_executing_console_command())
+			main_set_map_name(arguments->value);
+		else if (hs_runtime_port_executing_script_type() != NONE)
+			main_script_map_name(arguments->value);
+		else
+			error(_error_silent, "map_name requires a script or console command; a global initializer cannot change maps");
+		hs_return(thread_index, 0);
+	}
+	return;
+}
 HS_EVALUATE_VOID_STRING(main_set_multiplayer_map_name_evaluate, main_set_multiplayer_map_name)
 HS_EVALUATE_VOID_UNSIGNED_SHORT(main_set_difficulty_evaluate, main_set_difficulty)
 /* port: a campaign script still switches, and so does a player walking
@@ -15330,7 +15503,7 @@ boolean hs_scenario_postprocess(
 	if (scenario->hs_globals.count<0 ||
 		scenario->hs_globals.count>MAXIMUM_HS_GLOBALS-hs_external_global_count)
 	{
-		error(0, "the scenario has %ld script globals, more than the %d there is room for; its scripts won't run",
+		error(_error_silent, "the scenario has %ld script globals, more than the %d there is room for; its scripts won't run",
 			scenario->hs_globals.count,
 			MAXIMUM_HS_GLOBALS-hs_external_global_count);
 		hs_scenario_scripts_disable(scenario);
@@ -15348,7 +15521,7 @@ boolean hs_scenario_postprocess(
 
 			if (!hs_type_valid(global->type))
 			{
-				error(0, "the scenario's script global #%d has no type (%d); its scripts won't run",
+				error(_error_silent, "the scenario's script global #%d has no type (%d); its scripts won't run",
 					global_index,
 					global->type);
 				hs_scenario_scripts_disable(scenario);
@@ -15362,7 +15535,7 @@ boolean hs_scenario_postprocess(
 	if (scenario->hs_scripts.count<0 ||
 		scenario->hs_scripts.count>MAXIMUM_HS_SCRIPTS_PER_SCENARIO)
 	{
-		error(0, "the scenario has %ld scripts, more than the %d there is room for; its scripts won't run",
+		error(_error_silent, "the scenario has %ld scripts, more than the %d there is room for; its scripts won't run",
 			scenario->hs_scripts.count,
 			MAXIMUM_HS_SCRIPTS_PER_SCENARIO);
 		hs_scenario_scripts_disable(scenario);
@@ -15383,21 +15556,24 @@ boolean hs_scenario_postprocess(
 	}
 	else
 	{
+		/* port: _error_silent, not the original's 0 (_error_immediate, which
+		halts the game before the scripts below are let go of): a map whose
+		scripts don't link plays without them */
 		if (recompile)
-			error(0, "recompiling scripts after scenarios were merged.");
+			error(_error_silent, "recompiling scripts after scenarios were merged.");
 		else if (!error_message)
-			error(0, "an unspecified error occurred loading scripts");
+			error(_error_silent, "an unspecified error occurred loading scripts");
 		else if (!error_source)
-			error(0, "%s", error_message);
+			error(_error_silent, "%s", error_message);
 		else
-			error(0, "%s: %s", error_source, error_message);
+			error(_error_silent, "%s: %s", error_source, error_message);
 
 		/* port: the map's script source is not compiled again. A cache
 		file's blocks can't be resized (tag_block_resize), so the recompile
 		never reset the map's scripts and globals and none ran afterwards
 		either way; and the source is the map's, which the compiler would
 		recurse into as deep as it nests. The nodes go, and none run */
-		error(0, "the scenario's scripts won't run");
+		error(_error_silent, "the scenario's scripts won't run");
 		data_delete_all(hs_syntax_data);
 		hs_scenario_scripts_disable(scenario);
 		success = FALSE;
@@ -15556,6 +15732,7 @@ static boolean hs_compile_and_evaluate_command(
 		if (server_command_try(expression, &server_result))
 			return server_result;
 	}
+	/* port: typed bot controls, after the dedicated console's role check. */
 	/* port: the co-op host's bringto, which brings every player to the host
 	(players.c; a client is told it is the host's) */
 	if (hs_host_player_command(expression, "bringto"))
@@ -15791,3 +15968,149 @@ static boolean hs_compile_and_evaluate_command(
 }
 
 /* ---------- private code */
+
+/* port: the trigger volumes the map's scripts kill in (death_volumes.c):
+a volume is one when a call that kills (unit_kill, unit_kill_silent,
+damage_object, damage_new, object_destroy, or a static script that makes
+one) and the volume's constant are both under the same expression, the
+lowest that holds both - (if (volume_test_objects killme2 (players))
+(unit_kill ...)), or a begin's (sleep_until (volume_test_object ...))
+then its kill. Volumes named in globals or other scripts' calls are not. */
+#define HS_KILL_VOLUME_LONGS 8
+#define HS_KILL_VOLUME_DEPTH 96
+
+struct hs_kill_volume_walk
+{
+	unsigned long *found;
+	short volume_count;
+	boolean const *killing_scripts;
+	long nodes_left;
+};
+
+static boolean hs_kill_function(short function_index)
+{
+	static char const *const names[] = { "unit_kill", "unit_kill_silent", "damage_object", "damage_new", "object_destroy" };
+	struct hs_function_definition *function = mcc_script_function(function_index);
+	short index;
+
+	if (!function)
+	{
+		if (function_index < 0 || function_index >= hs_function_table_count)
+			return FALSE;
+		function = hs_function_table.functions[function_index];
+	}
+	if (!function || !function->name)
+		return FALSE;
+	for (index = 0; index < (short)NUMBEROF(names); index++)
+	{
+		if (!csstrcmp(function->name, names[index]))
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/* (the volumes under an expression into volumes, whether a kill is under
+it into kills; TRUE when the lowest expression holding both was found
+under it, its volumes marked) */
+static boolean hs_kill_volumes_walk(struct hs_kill_volume_walk *walk, long expression_index, short depth,
+	unsigned long *volumes, boolean *kills)
+{
+	struct hs_syntax_node const *node = hs_syntax_try_get(expression_index);
+	struct hs_syntax_node const *child;
+	boolean joint = FALSE;
+	short index;
+
+	*kills = FALSE;
+	if (!node || depth > HS_KILL_VOLUME_DEPTH || --walk->nodes_left < 0)
+		return FALSE;
+	if (TEST_FLAG(node->flags, _hs_syntax_node_primitive_bit))
+	{
+		if (node->type == _hs_type_trigger_volume && !TEST_FLAG(node->flags, _hs_syntax_node_variable_bit) &&
+			node->short_value >= 0 && node->short_value < walk->volume_count &&
+			node->short_value < HS_KILL_VOLUME_LONGS * 32)
+		{
+			BIT_VECTOR_SET_FLAG(volumes, node->short_value, TRUE);
+		}
+		return FALSE;
+	}
+	if (TEST_FLAG(node->flags, _hs_syntax_node_script_bit))
+		*kills = walk->killing_scripts && node->script_index >= 0 && node->script_index < MAXIMUM_HS_SCRIPTS_PER_SCENARIO &&
+			walk->killing_scripts[node->script_index];
+	else
+		*kills = hs_kill_function(node->function_index);
+	/* (the arguments: after the function's name, the first child) */
+	for (child = hs_syntax_try_get(node->data), index = 0; child && child->next_node_index != NONE && index < 256; index++)
+	{
+		unsigned long child_volumes[HS_KILL_VOLUME_LONGS];
+		long child_index = child->next_node_index;
+		boolean child_kills;
+		short word;
+
+		csmemset(child_volumes, 0, sizeof(child_volumes));
+		if (hs_kill_volumes_walk(walk, child_index, (short)(depth + 1), child_volumes, &child_kills))
+			joint = TRUE;
+		*kills |= child_kills;
+		for (word = 0; word < HS_KILL_VOLUME_LONGS; word++)
+			volumes[word] |= child_volumes[word];
+		child = hs_syntax_try_get(child_index);
+	}
+	if (!joint && *kills)
+	{
+		short word;
+		boolean any = FALSE;
+
+		for (word = 0; word < HS_KILL_VOLUME_LONGS; word++)
+		{
+			if (volumes[word])
+				any = TRUE;
+			if (walk->found)
+				walk->found[word] |= volumes[word];
+		}
+		joint = any;
+	}
+	return joint;
+}
+
+/* the volumes (bits by index into volumes, HS_KILL_VOLUME_LONGS longs: 256
+volumes) the map's scripts kill in; their count */
+short hs_scenario_kill_volumes(unsigned long *volumes, short volume_count)
+{
+	static boolean killing_scripts[MAXIMUM_HS_SCRIPTS_PER_SCENARIO];
+	struct scenario *scenario;
+	struct hs_kill_volume_walk walk;
+	short pass, index, count = 0;
+
+	csmemset(volumes, 0, sizeof(unsigned long) * HS_KILL_VOLUME_LONGS);
+	if (global_scenario_index == NONE || !hs_syntax_data)
+		return 0;
+	scenario = global_scenario_get();
+	csmemset(killing_scripts, 0, sizeof(killing_scripts));
+	/* (first which static scripts kill, then every script's volumes with
+	calls to those as kills) */
+	for (pass = 0; pass < 2; pass++)
+	{
+		for (index = 0; index < scenario->hs_scripts.count && index < MAXIMUM_HS_SCRIPTS_PER_SCENARIO; index++)
+		{
+			struct hs_script const *script = TAG_BLOCK_GET_ELEMENT(&scenario->hs_scripts, index, struct hs_script);
+			unsigned long subtree[HS_KILL_VOLUME_LONGS];
+			boolean kills;
+
+			if (pass == 0 && script->script_type != _hs_script_static)
+				continue;
+			csmemset(subtree, 0, sizeof(subtree));
+			walk.found = pass == 1 ? volumes : NULL;
+			walk.volume_count = volume_count;
+			walk.killing_scripts = pass == 1 ? killing_scripts : NULL;
+			walk.nodes_left = 65536;
+			hs_kill_volumes_walk(&walk, script->root_expression_index, 0, subtree, &kills);
+			if (pass == 0)
+				killing_scripts[index] = kills;
+		}
+	}
+	for (index = 0; index < volume_count && index < HS_KILL_VOLUME_LONGS * 32; index++)
+	{
+		if (BIT_VECTOR_TEST_FLAG(volumes, index))
+			count++;
+	}
+	return count;
+}

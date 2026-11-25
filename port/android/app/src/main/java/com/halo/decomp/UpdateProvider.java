@@ -14,6 +14,7 @@ import java.io.FileNotFoundException;
 /**
  * Hands Android's package installer the downloaded new version of the app
  * (Updater), read-only, the one file content://<application id>.update/halo.apk.
+ * The bridge (port/android/bridge) has one of its own, for the same.
  * (The app has no AndroidX, whose FileProvider does the same.)
  */
 public class UpdateProvider extends ContentProvider {

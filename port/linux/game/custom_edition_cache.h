@@ -83,6 +83,36 @@ the Custom Edition maps folders alone, never from the game's own. */
 boolean custom_edition_level_name(
 	char const *level_name);
 
+/* Each tag of the Custom Edition map `map_name` (a level name or a file
+name), read from its file without loading it: its group and name to `visit`,
+which returns 0 to stop. FALSE for no such map, or none read. */
+/* the map's multiplayer player's body, shield, shield stun time and shield
+recharge time (cache_file_formats.h's custom_edition_cache_player_shields) */
+boolean custom_edition_map_player_shields(char const *map_name, float out[4]);
+boolean custom_edition_map_tag_names_walk(
+	char const *map_name,
+	int (*visit)(void *context, unsigned long group_tag, char const *name),
+	void *context);
+/* Whether a level name is custom_maps\<name> of a map Forge saved (an Xbox
+cache with Forge's FLG1 trailer), which custom_edition_level_name leaves out
+(it loads as the game's own maps do); and whether a level name is either:
+a map of custom_maps a network game shares (map_share.c), its version its
+hash's, asked of the host when a joiner lacks it */
+boolean custom_forge_map_level(
+	char const *level_name);
+boolean custom_edition_shared_level_name(
+	char const *level_name);
+
+/* Whether a level name is custom_maps\<name> of an Xbox multiplayer map (an
+Xbox cache, version 5): the game's own format, unpacked into the map cache
+as the game's maps are (cache_files_windows.c) rather than read by the Custom
+Edition loader, under its level name, never taken for the game's map of the
+name its header gives; a network game on one needs the
+custom_xbox_multiplayer_maps capability of each machine
+(network_extensions.h). */
+boolean custom_xbox_map_level(
+	char const *level_name);
+
 /* TRUE when Custom Edition maps may run (game.custom_edition) and the level
 `level_name` is a Custom Edition map's whose file is a Custom Edition cache:
 it is then read in place, never copied to the cache partition. */
@@ -160,10 +190,20 @@ boolean custom_edition_cache_present(
 
 /* The scenario type of the Custom Edition cache at `path`: a campaign map's
 (_scenario_type_solo, played alone or as network co-op) or a multiplayer
-map's, or another; NONE if it is no Custom Edition cache. `path` is the
-file a folder's listing found (custom_edition_maps.c), opened once. */
+map's, or another; NONE if it is no Custom Edition cache (nor an Xbox
+multiplayer map: custom_xbox_map_level); *xbox_map (NULL: not asked) whether it
+is an Xbox map. `path` is the file a folder's listing found
+(custom_edition_maps.c), opened once. */
+/* port: the display name a map Forge saved has in its header (Forge's
+map settings, port/forge/src/forge_map_settings.c), into `name` (`size`
+bytes); FALSE for a map with none */
+boolean custom_edition_cache_file_forge_name(
+	char const *path,
+	char *name,
+	long size);
 short custom_edition_cache_file_scenario_type(
-	char const *path);
+	char const *path,
+	boolean *xbox_map);
 
 /* Loads the Custom Edition map `map_name` names into its tag cache and
 converts its tags for this build, copying its cache header to `header`
@@ -267,6 +307,15 @@ the validator has checked: for the bitmaps of mods (mod_bitmaps.c), Halo
 PC's on any map. FALSE after logging why it cannot. */
 boolean custom_edition_loaded_reordered_bitmaps_find(
 	void);
+/* (port) After it: the bitmaps a sequence of the bitmap tag `handle` names
+(all of the tag's for NONE) drawn in `channel_order` (enum
+custom_edition_channel_order) whatever was found: an MCC map's bundle's
+model shaders and HUD meters whose flags say their channels are in Xbox
+order already (tag_injector.c) */
+void custom_edition_reordered_bitmaps_override(
+	long handle,
+	short sequence_index,
+	short channel_order);
 /* The order (enum custom_edition_channel_order) Halo PC keeps the channels
 of bitmap `bitmap_index` of the tag `handle` names in, of those found. */
 short custom_edition_bitmap_channel_order(

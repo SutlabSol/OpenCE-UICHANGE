@@ -288,6 +288,8 @@ static void lobby_checks(void)
 	hosting_token = token;
 	/* hosting a public game: listed */
 	p2p_set_hosting_public(1);
+	/* (its map's source rides in the stamp's second byte) */
+	p2p_set_game_listing_map_source(P2P_LISTING_MAP_SOURCE_CUSTOM_EDITION);
 	p2p_set_game_listing("Test game", "bloodgulch", "Slayer", 2, 0x81, 1, 0, 1, 0, 0);
 	lobby_update(token, 3, 16);
 	check(publish_count == 1 && !published_closing && p2p_lobby_listed(), "the host publishes its listing");
@@ -324,6 +326,7 @@ static void lobby_checks(void)
 		!strcmp(listing.gametype, "Slayer") && listing.player_count == 3 && listing.maximum_player_count == 16 &&
 		listing.engine_type == 2 && listing.kind == 0x81 && listing.open && listing.has_teams && !listing.in_progress,
 		"the listing's details");
+	check(count == 1 && listing.map_source == P2P_LISTING_MAP_SOURCE_CUSTOM_EDITION, "the listing's map source");
 	/* the next pass in the same millisecond as the probe's end (an even one) */
 	count = probe_count;
 	lobby_update(token, 3, 16);
@@ -526,7 +529,7 @@ static void probe_order_checks(void)
 		p2p_ed25519_public(seed, signing_key, x25519_secret);
 		p2p_x25519(x25519_public, x25519_secret, NULL);
 		p2p_set_hosting_public(1);
-		p2p_set_game_listing(names[index], "bloodgulch", "Slayer", 2, 0, 1, 0, 0);
+		p2p_set_game_listing(names[index], "bloodgulch", "Slayer", 2, 0, 1, 0, 0, 0, 0);
 		clock_now += 6000;
 		lobby_update(token, player_counts[index], 16);
 		memcpy(payloads[index], published, (size_t)published_size);

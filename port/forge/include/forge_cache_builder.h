@@ -20,13 +20,13 @@ extern "C" {
 
 /* ---------- constants */
 
-#define FORGE_MAX_PLACED_OBJECTS 512
+#define FORGE_MAX_PLACED_OBJECTS 2048
 #define FORGE_MAX_PLAYER_SPAWNS 512
 #define FORGE_MAX_NETGAME_FLAGS 512
 #define FORGE_MAX_NETGAME_EQUIPMENT 200
 #define FORGE_MAX_AI_SPAWNS 256
 #define FORGE_MAX_AI_ACTORS 64
-#define FORGE_MAX_DEFAULT_OBJECT_EDITS 256
+#define FORGE_MAX_DEFAULT_OBJECT_EDITS 1024
 #define FORGE_TAG_PATH_MAX 256
 
 enum forge_placed_object_category
@@ -65,6 +65,18 @@ struct forge_placed_object_entry
 	uint16_t gametype_flags; /* 0 = All Modes, bit0=CTF, bit1=Slayer, bit2=Oddball, bit3=KOTH, bit4=Race */
 	uint8_t source_cache_id;
 	uint8_t active;
+	/* (a vehicle's ALWAYS SPAWN: forge_live_instance's, saved as the
+	OBJECT_ALWAYS_SPAWN line before its OBJECT line) */
+	uint8_t always_spawn;
+	/* (an emitter's DEAL DAMAGE off: forge_live_instance's, saved as the
+	OBJECT_NO_DAMAGE line before its OBJECT line) */
+	uint8_t no_damage;
+	/* (a scenery's COLLISION off, saved as the OBJECT_NO_COLLISION line before
+	its OBJECT line) */
+	uint8_t no_collision;
+	/* (its SCALE, 0 for none: forge_live_instance's, saved as the
+	OBJECT_SCALE line before its OBJECT line) */
+	float scale;
 };
 
 struct forge_default_object_edit
@@ -136,6 +148,14 @@ struct forge_ai_spawn_entry
 	uint8_t detached;
 	uint8_t active;
 	uint8_t spawn_effect; /* forge_ai.c's s_ai_spawn_effects: as each unit appears */
+	uint8_t cloaked; /* its units cloaked as they appear, and kept so (they flicker as they fire, as a cloaked elite does) */
+	uint8_t hover_height; /* a flying unit kept this many world units over the ground (sentinels, drones), 0: as it flies */
+	uint8_t goal; /* enum forge_ai_goal (forge_engine.h): what its units do out of a fight */
+	uint8_t goal_link; /* PATROL VOLUME's or ROUTE's number */
+	uint8_t goal_who; /* HUNT's and FOLLOW's players: any, red or blue; top bit the SPEED's RUN (FORGE_AI_GOAL_RUN_BIT) */
+	uint8_t goal_start; /* HUNT and FOLLOW move once their player is farther than this (world units) */
+	uint8_t goal_follow; /* GO TO PLAYER's STOP DISTANCE, a friendly team's (world units) */
+	uint8_t goal_alert; /* ALERT TIME: seconds its squad stays alert once one is hurt or dies (0: FORGE_AI_GOAL_ALERT_DEFAULT) */
 };
 
 /* a campaign tag a saved map's spawns use: copied into the level as it loads,
@@ -208,6 +228,18 @@ int forge_export_scenario_map(
 	char const *base_map_path,
 	struct forge_scenario_edit_state const *edits,
 	char const *output_map_name);
+
+/* Saves a map made on an MCC multiplayer map (version 13) to `output_map_path`
+(an Xbox path, d:\mcc_maps\forge\<name>.map): `base_map_path`'s file as it is,
+with Forge's trailer, whose "Base Map:" is `base_level` (mcc_maps\<package>\<name>).
+None of the base map's resource files are copied: the saved map reads them as
+the base map does (mcc_package.c's mcc_package_forge_base). */
+int forge_export_mcc_scenario_map(
+	char const *base_map_path,
+	char const *base_level,
+	struct forge_scenario_edit_state const *edits,
+	char const *output_map_name,
+	char const *output_map_path);
 
 /* Loads 2D floorplan collision edges and initial scenario placements from any CE (v609) or PC (v7) .map file */
 int forge_load_map_blueprint(

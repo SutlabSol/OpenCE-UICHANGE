@@ -162,6 +162,7 @@ symbols in this file:
 #include "main/main.h"
 #include "tag_files/tag_groups.h"
 #include "player_ui.h"
+#include "mcc_ui.h" /* port: port/linux/game/mcc_ui.c */
 
 /* ---------- constants */
 
@@ -730,7 +731,15 @@ void player_ui_set_single_player_local_player_controller(
 long player_ui_get_player1_last_used_profile_index(
 	void)
 {
-	if (!player1_profile_path[0] &&
+	/* port: z:\lastprof.txt read once a run. Absent (no profile chosen yet
+	on this install), it was read again at every ask, and asked each frame
+	while no profile is active (hosting from the menus has no player): two
+	lines in debug.txt each time, ten a second. A profile chosen since sets
+	the path itself (player_ui_remember_player1_profile) */
+	static boolean player1_profile_path_read = FALSE;
+
+	if (!player1_profile_path[0] && !player1_profile_path_read &&
+		(player1_profile_path_read = TRUE) &&
 		saved_game_file_retrieve_player1_last_used_profile_directory(
 			player1_profile_path))
 	{
@@ -832,6 +841,8 @@ void player_ui_begin_editing_profile(
 	long type;
 
 	player_ui_globals.edit_profile_index = NONE;
+	/* port: a profile editor opened here is no longer MCC's pause menu's */
+	mcc_ui_settings_profile_released();
 	type = saved_game_file_get_type(profile_index);
 
 	switch (type)
@@ -1336,15 +1347,19 @@ static void set_local_player_controls_from_player_profile(
 	short local_player_index)
 {
 	struct game_input_preferences preferences = { 0 };
-	real pitch_rate_table[NUMBER_OF_LOOK_SENSITIVITY_SETTINGS] =
+	/* port: Look Sensitivity goes on to 15 (port/linux/game/menu_functions.c's
+	Gamepads screen), in the same steps: 1 to 10 the Xbox's, 11 to 15 past them */
+	real pitch_rate_table[PORT_NUMBER_OF_LOOK_SENSITIVITY_SETTINGS] =
 	{
 		40.0f, 50.0f, 60.0f, 70.0f, 80.0f,
-		90.0f, 100.0f, 110.0f, 120.0f, 130.0f
+		90.0f, 100.0f, 110.0f, 120.0f, 130.0f,
+		140.0f, 150.0f, 160.0f, 170.0f, 180.0f
 	};
-	real yaw_rate_table[NUMBER_OF_LOOK_SENSITIVITY_SETTINGS] =
+	real yaw_rate_table[PORT_NUMBER_OF_LOOK_SENSITIVITY_SETTINGS] =
 	{
 		80.0f, 100.0f, 120.0f, 140.0f, 160.0f,
-		180.0f, 200.0f, 220.0f, 240.0f, 260.0f
+		180.0f, 200.0f, 220.0f, 240.0f, 260.0f,
+		280.0f, 300.0f, 320.0f, 340.0f, 360.0f
 	};
 	struct player_profile_controller_settings *controls;
 	long look_sensitivity;
@@ -1366,8 +1381,8 @@ static void set_local_player_controls_from_player_profile(
 	}
 	else
 	{
-		if (yaw_index > NUMBER_OF_LOOK_SENSITIVITY_SETTINGS - 1)
-			pitch_index = NUMBER_OF_LOOK_SENSITIVITY_SETTINGS - 1;
+		if (yaw_index > PORT_NUMBER_OF_LOOK_SENSITIVITY_SETTINGS - 1)
+			pitch_index = PORT_NUMBER_OF_LOOK_SENSITIVITY_SETTINGS - 1;
 		else
 			pitch_index = (short)yaw_index;
 	}
@@ -1378,8 +1393,8 @@ static void set_local_player_controls_from_player_profile(
 	}
 	else
 	{
-		if (yaw_index > NUMBER_OF_LOOK_SENSITIVITY_SETTINGS - 1)
-			yaw_index = NUMBER_OF_LOOK_SENSITIVITY_SETTINGS - 1;
+		if (yaw_index > PORT_NUMBER_OF_LOOK_SENSITIVITY_SETTINGS - 1)
+			yaw_index = PORT_NUMBER_OF_LOOK_SENSITIVITY_SETTINGS - 1;
 	}
 
 	preferences.pitch_rate = pitch_rate_table[pitch_index];
@@ -1490,5 +1505,7 @@ static void clear_profile_edit_data(
 	void)
 {
 	player_ui_globals.edit_profile_index = NONE;
+	/* port: saving or cancelling also ends the editor MCC's pause menu opened */
+	mcc_ui_settings_profile_released();
 	return;
 }

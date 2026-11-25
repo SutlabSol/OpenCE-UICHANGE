@@ -255,7 +255,7 @@ static boolean custom_edition_model_part_verify(
 		part->centroid_secondary_node_index < 0 || part->centroid_secondary_node_index >= model->nodes.count ||
 		part->previous_part_index < NONE || part->previous_part_index >= part_count ||
 		part->next_part_index < NONE || part->next_part_index >= part_count ||
-		(local_nodes && part->local_node_count == 0))
+		(local_nodes && (part->local_node_count == 0 || part->local_node_count > MAXIMUM_NODES_PER_MODEL_GEOMETRY_PART)))
 	{
 		return FALSE;
 	}
@@ -443,6 +443,162 @@ static void custom_edition_model_part_shaders_bound(
 	{
 		error(_error_silent, "custom edition: %ld parts of the model '%s' name shaders it has not got, and are given its last",
 			bound, name);
+	}
+
+	return;
+}
+
+/* a vector this build cannot compress made one it can: its direction, or
+(i, j, k) where it has none (zero, infinite or not a number) */
+static boolean vector_repair(
+	real_vector3d *vector,
+	real i,
+	real j,
+	real k)
+{
+	double length;
+
+	if (vector_compressible(vector))
+		return FALSE;
+	length = sqrt((double)vector->i * vector->i + (double)vector->j * vector->j + (double)vector->k * vector->k);
+	if (length > 0.0 && length < HUGE_VAL)
+	{
+		vector->i = (real)(vector->i / length);
+		vector->j = (real)(vector->j / length);
+		vector->k = (real)(vector->k / length);
+	}
+	if (!vector_compressible(vector))
+	{
+		vector->i = i;
+		vector->j = j;
+		vector->k = k;
+	}
+
+	return TRUE;
+}
+
+/* Gives every index of the parts of `model` that names what the model or
+part has not got (a node, a part, a vertex) one that it has, and every
+vector this build cannot compress its direction, rather than the map
+refused: Halo PC draws such parts as they are (Stargate_Infinity's
+protected 'tag_2625'). Run before local nodes are made (which need every
+vertex's nodes to exist) and before any model is verified: vertices and
+strips that parts of different models share are each only given what is
+valid in the part of fewer (any part's check passes with it, verified
+before or after). A part of no vertices whose strip names some is left to
+be refused. */
+static void custom_edition_model_parts_repair(
+	struct model *model,
+	char const *name,
+	byte *model_data,
+	unsigned long index_data_offset)
+{
+	boolean local_nodes = TEST_FLAG(model->flags, _gbxmodel_parts_have_local_nodes_bit);
+	long links = 0;
+	long nodes = 0;
+	long strip_indices = 0;
+	long vectors = 0;
+	long geometry_index;
+
+	if (model->nodes.count < 1)
+		return;
+	for (geometry_index = 0; geometry_index < model->geometries.count; geometry_index++)
+	{
+		struct model_geometry const *geometry = TAG_BLOCK_GET_ELEMENT(
+			&model->geometries,
+			geometry_index,
+			struct model_geometry);
+		long part_index;
+
+		for (part_index = 0; part_index < geometry->parts.count; part_index++)
+		{
+			struct custom_edition_model_part *part = TAG_BLOCK_GET_ELEMENT(
+				&geometry->parts,
+				part_index,
+				struct custom_edition_model_part);
+			struct model_vertex_uncompressed *vertices =
+				(struct model_vertex_uncompressed *)(model_data + part->vertex_offset);
+			word *strip = (word *)(model_data + index_data_offset + part->strip_offset);
+			long node_limit;
+			long index;
+
+			if (part->centroid_primary_node_index < 0 || part->centroid_primary_node_index >= model->nodes.count)
+			{
+				part->centroid_primary_node_index = 0;
+				links++;
+			}
+			if (part->centroid_secondary_node_index < 0 || part->centroid_secondary_node_index >= model->nodes.count)
+			{
+				part->centroid_secondary_node_index = 0;
+				links++;
+			}
+			if (part->previous_part_index < NONE || part->previous_part_index >= geometry->parts.count)
+			{
+				part->previous_part_index = NONE;
+				links++;
+			}
+			if (part->next_part_index < NONE || part->next_part_index >= geometry->parts.count)
+			{
+				part->next_part_index = NONE;
+				links++;
+			}
+			if (local_nodes)
+			{
+				if (part->local_node_count == 0 || part->local_node_count > MAXIMUM_NODES_PER_MODEL_GEOMETRY_PART)
+				{
+					if (part->local_node_count == 0)
+						part->local_node_indices[0] = 0;
+					part->local_node_count = part->local_node_count ? MAXIMUM_NODES_PER_MODEL_GEOMETRY_PART : 1;
+					nodes++;
+				}
+				for (index = 0; index < part->local_node_count; index++)
+				{
+					if (part->local_node_indices[index] >= model->nodes.count)
+					{
+						part->local_node_indices[index] = 0;
+						nodes++;
+					}
+				}
+			}
+			node_limit = local_nodes ? part->local_node_count : model->nodes.count;
+			if (part->vertex_count > 0)
+			{
+				for (index = 0; index < part->strip_triangle_count + 2; index++)
+				{
+					if (strip[index] >= part->vertex_count)
+					{
+						/* (the index before it: a triangle of no area) */
+						strip[index] = index > 0 ? strip[index - 1] : 0;
+						strip_indices++;
+					}
+				}
+			}
+			for (index = 0; index < part->vertex_count; index++)
+			{
+				struct model_vertex_uncompressed *vertex = &vertices[index];
+				long slot;
+
+				for (slot = 0; slot < 2; slot++)
+				{
+					short other = vertex->nodes[1 - slot];
+
+					if (vertex->nodes[slot] < 0 || vertex->nodes[slot] >= node_limit)
+					{
+						vertex->nodes[slot] = other >= 0 && other < node_limit ? other : 0;
+						nodes++;
+					}
+				}
+				vectors += vector_repair(&vertex->normal, 0.0f, 0.0f, 1.0f);
+				vectors += vector_repair(&vertex->binormal, 0.0f, 1.0f, 0.0f);
+				vectors += vector_repair(&vertex->tangent, 1.0f, 0.0f, 0.0f);
+			}
+		}
+	}
+	if (links || nodes || strip_indices || vectors)
+	{
+		error(_error_silent,
+			"custom edition: the model '%s' had %ld part links or centroid nodes, %ld vertex or local nodes and %ld strip indices past what it has, and %ld vectors this build cannot compress: given ones it can draw",
+			name, links, nodes, strip_indices, vectors);
 	}
 
 	return;
@@ -993,6 +1149,14 @@ boolean custom_edition_models_convert(
 	boolean success = TRUE;
 
 	assert(!globals->models.parts && !globals->model_geometry);
+	/* (every model's parts repaired before local nodes are made or any is
+	verified: custom_edition_model_parts_repair) */
+	while ((model = custom_edition_cache_tag_next(tag_cache, loaded_bytes, GBXMODEL_GROUP_TAG, sizeof(*model), &tag_index)) != NULL)
+	{
+		custom_edition_model_parts_repair(model, custom_edition_cache_tag_name(tag_cache, loaded_bytes, tag_index),
+			model_data, (unsigned long)report->model_index_data_offset);
+	}
+	tag_index = NONE;
 	/* (every model's local nodes are made before any model is verified:
 	making them writes node indices into the model data, and parts of
 	different models may name the same vertices there, so a model verified
@@ -1198,6 +1362,7 @@ static boolean injected_model_convert(
 
 	/* (its strips at their offsets in model_data itself) */
 	csmemset(&report, 0, sizeof(report));
+	custom_edition_model_parts_repair(model, name, model_data, 0);
 	if (model_has_many_nodes(model) && !TEST_FLAG(model->flags, _gbxmodel_parts_have_local_nodes_bit) &&
 		model->nodes.count <= MAXIMUM_NODES_PER_MODEL && model_local_nodes_make(model, model_data))
 	{

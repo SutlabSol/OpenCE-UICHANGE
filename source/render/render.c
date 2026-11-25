@@ -60,6 +60,7 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries.h"
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
 #include "cseries/errors.h"
 #include "render.h"
 #include "render_cameras_internal.h"
@@ -268,6 +269,9 @@ void render_frame_pregame(
 	halo_screen_ui_offset(TRUE);
 	render_ui_widgets(0, &window->rasterizer_camera.viewport_bounds);
 	halo_screen_ui_offset(FALSE);
+	/* port: hosting from the menus, the host's screen here too, between
+	maps (port/linux/game/host_dashboard.c) */
+	host_dashboard_draw();
 	bink_playback_render();
 
 	{
@@ -354,10 +358,18 @@ static void render_window(
 	else if (!bink_playback_in_progress())
 	{
 		build_sprite_prepare_for_window();
+		first_person_weapon_render_update();
+		/* port: before the first draw, so that the dynamic lighting's fields are
+		sent with no rendering to interrupt (plasma_occlusion_prepare_view). It
+		draws nothing, and the sky's queued lens flares go in after it */
+		lights_preprocess_scene();
 		halo_render_marker("sky");
 		render_sky();
-		first_person_weapon_render_update();
-		lights_preprocess_scene();
+		{
+			extern void lights_submit_queued_lens_flares(void); /* port: object_lights.c */
+
+			lights_submit_queued_lens_flares();
+		}
 		halo_render_marker("objects");
 		render_objects();
 		structure_render_preprocess();
@@ -529,6 +541,16 @@ static void render_player_frame(
 	structure_get_planar_fog((short)render.cluster_index, &render.fog);
 	/* port: Floodfection's fog over every map, which hides the sky
 	(port/linux/game/infection.c), closer in a cluster with none */
+#if OPENCE_ENABLE_FORGE
+	/* port: a Forge map's atmosphere, over the map's own fog and under
+	Floodfection's (port/forge/src/forge_map_settings.c) */
+	{
+		extern int forge_map_settings_fog(short local_player_index, int indoors, struct render_fog *fog);
+
+		if (forge_map_settings_fog(window->local_player_index, render.visible_sky_index == NONE, &render.fog))
+			render.visible_sky_model = FALSE;
+	}
+#endif
 	if (infection_fog(window->local_player_index, render.visible_sky_index == NONE, &render.fog))
 		render.visible_sky_model = FALSE;
 

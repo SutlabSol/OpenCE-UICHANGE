@@ -464,6 +464,49 @@ struct actor_variant_definition *actor_combat_get_firing_variant_definition(
 	return firing_variant_definition;
 }
 
+/* port: the rate an actor pulls its trigger at. Its variant's, for the
+weapon the variant was made for; a weapon it holds that is another's (a
+Firefight loadout's, the Tag Injector's, one picked up) with no firing
+parameters of its own fires as that weapon allows: an automatic one held
+through the bursts (0), as a variant's for its own is; a semi-automatic or
+charged one pulled at half its own rate, between 0.5 and 2 a second. The
+variant's rate for a weapon of another kind held the trigger down without
+end (a fuel rod's 0 on a plasma pistol: overcharge after overcharge), or
+pulled it 6 times a second (an assault rifle's on a rocket launcher) */
+#define ACTOR_FOREIGN_WEAPON_AUTOMATIC_RATE 8.0f
+/* port: Firefight's enemies fire less often than their tags say
+(firefight.c's firefight_enemy_fire_pacing) */
+real firefight_enemy_fire_pacing(short team_index);
+real firefight_enemy_aim_error_scale(short team_index);
+static real actor_combat_rate_of_fire(
+	long actor_index,
+	struct actor_variant_definition const *firing_variant_definition)
+{
+	real rate_of_fire = firing_variant_definition->ranged_combat.rate_of_fire;
+	long weapon_index = actor_get_weapon(actor_index);
+	long weapon_definition_index;
+	struct weapon_definition *weapon_definition;
+	struct weapon_trigger_definition *trigger;
+	real weapon_rate;
+
+	if (weapon_index == NONE)
+		return rate_of_fire;
+	weapon_definition_index = weapon_get(weapon_index)->definition_index;
+	weapon_definition = weapon_definition_get(weapon_definition_index);
+	if (!weapon_definition || weapon_definition->weapon.ai_firing_parameters.index != NONE ||
+		firing_variant_definition->ranged_combat.reference.index == NONE ||
+		firing_variant_definition->ranged_combat.reference.index == weapon_definition_index ||
+		weapon_definition->weapon.triggers.count < 1)
+	{
+		return rate_of_fire;
+	}
+	trigger = TAG_BLOCK_GET_ELEMENT(&weapon_definition->weapon.triggers, 0, struct weapon_trigger_definition);
+	weapon_rate = MAX(trigger->initial_rate_of_fire, trigger->final_rate_of_fire);
+	if (trigger->charging_time <= 0.0f && weapon_rate >= ACTOR_FOREIGN_WEAPON_AUTOMATIC_RATE)
+		return 0.0f;
+	return PIN(weapon_rate * 0.5f, 0.5f, 2.0f);
+}
+
 static void actor_combat_get_firing_parameters(
 	long actor_index,
 	struct actor_variant_definition *firing_variant_definition,
@@ -617,6 +660,8 @@ static void actor_start_pause(
 	{
 		burst_separation *= 1.7f;
 	}
+	/* port: Firefight's enemies, longer between bursts */
+	burst_separation /= firefight_enemy_fire_pacing(actor->meta.team_index);
 
 	actor->control.fire_state_timer = (short)(burst_separation*TICKS_PER_SECOND);
 
@@ -1264,6 +1309,8 @@ static void actor_start_burst(
 			{
 				burst_duration *= 0.6f;
 			}
+			/* port: Firefight's enemies, shorter bursts */
+			burst_duration *= firefight_enemy_fire_pacing(actor->meta.team_index);
 		}
 		actor->control.fire_state_timer = (short)(burst_duration*TICKS_PER_SECOND);
 	}
@@ -1279,6 +1326,8 @@ static void actor_start_burst(
 		{
 			burst_error *= firing_pattern->error_angle_modifier;
 		}
+		/* port: Firefight's enemies miss more */
+		burst_error *= firefight_enemy_aim_error_scale(actor->meta.team_index);
 		if (actor->external_orders.playfighting)
 		{
 			burst_error = 2.0f*burst_error + DEGREES_TO_RADIANS(1.0f);
@@ -2372,7 +2421,8 @@ void actor_combat_update(
 
 			if (fire_primary)
 			{
-				real rate_of_fire = firing_variant_definition->ranged_combat.rate_of_fire;
+				/* port: the weapon held's (actor_combat_rate_of_fire) */
+				real rate_of_fire = actor_combat_rate_of_fire(actor_index, firing_variant_definition);
 
 				if (actor->control.overcharging_weapon)
 				{
@@ -2407,6 +2457,8 @@ void actor_combat_update(
 					{
 						rate_of_fire *= firing_pattern->rate_of_fire_modifier;
 					}
+					/* port: Firefight's enemies, more slowly */
+					rate_of_fire *= firefight_enemy_fire_pacing(actor->meta.team_index);
 					actor_debug_info->shooting_rof = rate_of_fire;
 					trigger_delay = (short)fast_ftol(TICKS_PER_SECOND/rate_of_fire);
 					actor->control.trigger_delay_timer = MAX(2, trigger_delay);

@@ -489,6 +489,8 @@ static void copy_title_files(void)
 	copy_title_file("brokers.txt");
 	copy_title_file("rank_icons.bin");
 	copy_title_file("forge_markers.bin");
+	copy_title_file("tag_props.bin");
+	copy_title_file("map_categories.txt");
 }
 
 void ps5_net_start(void)

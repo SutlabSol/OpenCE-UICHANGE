@@ -64,7 +64,13 @@ each, split again by every allocation inside it; after a crowded network game
 the 512 records there were ran out and an allocation failed. Freed memory is
 unmapped now, so the records are live mappings only, and these are room to
 spare. */
-#define MAPPING_LIMIT 2048
+/* Not room enough for an MCC map: b30_evolved's conversion (6567 tags, 2407
+textures, 5633 sound permutations) held more than 2048 guest allocations at
+once, each over musl's mmap threshold a mapping of its own; the 2049th, a
+4 KB page, was refused, the menus' tags could not be added, the MCC pause
+menus could not be built on them and the map was refused. A record is 48
+bytes, so 8192 of them are under 400 KB. */
+#define MAPPING_LIMIT 8192
 
 enum mapping_kind
 {
@@ -96,6 +102,9 @@ struct mapping
 
 static struct mapping mappings[MAPPING_LIMIT];
 static int mapping_count;
+/* the live records, and the most there have been: said each time it passes
+another quarter of the table, so a log shows how close a map came */
+static int mapping_live, mapping_live_most;
 
 static struct mapping *mapping_find(void *address, size_t length, int exact_length)
 {
@@ -152,6 +161,13 @@ static struct mapping *mapping_add(void *address, size_t length, void *backing,
 			return NULL;
 		}
 		mapping = &mappings[mapping_count++];
+	}
+	if (++mapping_live > mapping_live_most)
+	{
+		mapping_live_most = mapping_live;
+		if (mapping_live_most % (MAPPING_LIMIT / 4) == 0)
+			host_logf(HOST_LOG_WARN, "the table of mappings has %d live records, of %d", mapping_live_most,
+				MAPPING_LIMIT);
 	}
 	mapping->kind = kind;
 	mapping->address = address;
@@ -354,6 +370,17 @@ int host_mman_low_code_mode(void)
 {
 	learn_regions();
 	return low_code_mode;
+}
+
+/* the end of the range the guest's memory below 4 GB can be mapped in: the
+stack region's, where svcMapMemory maps it; anywhere below 4 GB where it is
+code memory or aliased heap (low code mode) */
+uint64_t host_mman_guest_limit(void)
+{
+	learn_regions();
+	if (low_code_mode || !stack_region_end || stack_region_end > 0x100000000ULL)
+		return 0x100000000ULL;
+	return stack_region_end;
 }
 
 /* whether svcMapMemory will take the range */
@@ -759,6 +786,7 @@ static struct mapping *mapping_split(struct mapping *mapping, void *address, siz
 	address being occupied for good. */
 	unmap_mapping(mapping);
 	free(mapping->backing);
+	mapping_live--;
 	mapping->kind = _mapping_free;
 	mapping->address = NULL;
 	mapping->length = 0;
@@ -841,6 +869,7 @@ static int release_range(void *address, size_t length)
 		}
 		unmap_mapping(middle);
 		free(middle->backing);
+		mapping_live--;
 		middle->kind = _mapping_free;
 		middle->address = NULL;
 		middle->length = 0;

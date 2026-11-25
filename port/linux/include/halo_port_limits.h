@@ -49,10 +49,11 @@ machines, 16 players) are 0x226 and 0x434. */
 /* (then the gametype's PC + OpenCE + Firefight options, struct game_variant_options: 0x58 bytes;
 stock OpenCE is 0x2C bytes) */
 #define HALO_PORT_NETWORK_GAME_VARIANT_OPTIONS_OFFSET (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0xA)
+/* (and after local_data, upstream's MCC content and metadata SHA-256, 64 bytes) */
 #define HALO_PORT_STOCK_NETWORK_GAME_LOCAL_DATA_OFFSET (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x36)
-#define HALO_PORT_STOCK_NETWORK_GAME_SIZE (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x3A)
+#define HALO_PORT_STOCK_NETWORK_GAME_SIZE (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x3A + 64)
 #define HALO_PORT_NETWORK_GAME_LOCAL_DATA_OFFSET (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x62)
-#define HALO_PORT_NETWORK_GAME_SIZE (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x66)
+#define HALO_PORT_NETWORK_GAME_SIZE (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x66 + 64)
 
 /* ---------- system link protocol
 
@@ -69,7 +70,17 @@ is newer (network_client_manager.c). A host advertises it, with its netcode,
 in its game's advertisement's reserved bytes (network_server_message_handler.c),
 which hosts built before there was a version send as zeros: version 0.
 Raise it with any change to what the machines send each other. */
-#define HALO_PORT_NETWORK_VERSION 41
+/* Version 42 integrates MCC admission/sharing and shared checkpoint, boat,
+clock and scripted-pose agreement. Every map family uses the same version.
+Version 43: an MCC map's damage impulses follow the damage's direction, a
+vehicle on its side throws its riders, chat marks the host's lines, a co-op
+cutscene's sound carries how far the host has played it, and a machine's
+MCC conversion holds a round's start out of an allowance; a player standing
+on a vehicle rides it (a unit's state carries the deck it stands on, the map's
+riding choice has its own message: port/linux/NETCODE.md).
+Version 44: MCC package offers are automatic under Map Sharing, and a joiner
+may satisfy omitted base resources with its own validated local files. */
+#define HALO_PORT_NETWORK_VERSION 44
 /* ... the advertisement's reserved bytes: the version (a little-endian word),
 then flags, then the game's kind (an OpenCE gametype's mode, and Hardcore:
 port/linux/game/game_modes.h's game_modes_kind), for the server browser;
@@ -173,9 +184,31 @@ in !FA: and shown by !FE:, and the campaign effects a Forge game imports; 15
 two of those effects gone, which moves the tags after them; 100 a number
 Content Extended's fork, of the same signature and on 8, will not come to:
 machines of the two would list each other's games; 101 a Firefight variant's
-options, ROUND 2 VEHICLE's byte and ENEMY LOADOUT's. A Firefight game is always
-of this signature (network_server_message_handler.c) */
-#define HALO_PORT_MOD_NETWORK_VERSION 102
+options, ROUND 2 VEHICLE's byte and ENEMY LOADOUT's; 103 Firefight's ordnance pod,
+in its state and copied into its levels (which moves the tags after it), and
+its variant's MAP CONTENT; 104 the game's props (tag_props.bin: the ordnance
+pod's capsule, Forge's weapon rack and their Firefight copies) added to
+Firefight's and Forge's levels, which moves the tags after them, and a
+weapon an ordnance pod (48 pods' places in Firefight's state); 105 the pods
+let go in groups, each player's own, a pod an ammo crate, a health pack or an
+overshield (each pod's player, kind and use in Firefight's state); 106
+the enemy drop points' kinds (Forge marker types 8-10), the Flood's drop out
+of Keyes' Flood form (its time and place in Firefight's state, the form and
+its gore copied into Firefight's levels from d20, which moves the tags after
+them); 107 Forge's GRAVITY volumes (!FW:'s effect 5, its STRENGTH in the
+damage's place, pulling every machine's physics) and an AI spawn's PLAYERS'
+teams (!FA:'s team 6-8: ALL PLAYERS, RED, BLUE); 108 Forge's ONE WAY volumes
+(!FW:'s effect 6), a GRAVITY volume's FALL DAMAGE OFF (!FW:'s flags, an eighth
+field) and a scenery's COLLISION off (!FK:); 109 a volume's FALL DAMAGE
+VANILLA/LANDING/EXIT and REMOVE INERTIA (!FW:'s flags 1-2, 4), on any volume; 110 Forge's
+AI PATROL volumes (!FW:'s effect 7, the number in its flags' top bits), AI route
+points ('airt' markers, all of a point in its !FH:/!FU: team) and an AI spawn's
+GOAL (!FJ:); 111 Firefight's objectives (firefight_objectives.c's view, at the
+end of Firefight's state); 112 the objectives' marks in that view (Use X only's
+weapons, a camp's enemies, Collect's dropped skulls and its deposit's skull)
+and an ammo crate's pod the props' resupply rack. A Firefight game is always of this signature
+(network_server_message_handler.c) */
+#define HALO_PORT_MOD_NETWORK_VERSION 112
 #define HALO_PORT_MODDED_VERSION_MARK 0xFF00
 #define HALO_PORT_ADVERTISED_MODDED_VERSION (HALO_PORT_MODDED_VERSION_MARK | HALO_PORT_MOD_NETWORK_VERSION)
 
@@ -187,7 +220,7 @@ header included; the per-tick update of 128 players is 3,857 */
 update of 128 players decodes to 0x1010 bytes */
 #define HALO_PORT_NETWORK_PACKET_SIZE 0x1100
 
-/* the game settings record (HALO_PORT_NETWORK_GAME_SIZE, 13,136 bytes at 128
+/* the game settings record (HALO_PORT_NETWORK_GAME_SIZE, 13,200 bytes at 128
 machines and players) does not fit one message; it is sent in pieces of
 this many bytes (4 pieces), each 3,594 bytes on the wire */
 #define HALO_PORT_NETWORK_GAME_SETTINGS_FRAGMENT_SIZE 0xE00

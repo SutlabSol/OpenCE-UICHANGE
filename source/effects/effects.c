@@ -172,6 +172,10 @@ symbols in this file:
 #include "tag_files/tag_groups.h"
 #include "units/bipeds.h"
 #include "units/units.h"
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
+#if OPENCE_ENABLE_FORGE
+int forge_volumes_effect_damage_blocked(long object_index);
+#endif
 #undef real_local_random
 
 /* ---------- constants */
@@ -718,6 +722,47 @@ void effect_delete(
 	return;
 }
 
+/* port: a client checkpoint boundary retires delayed damage and object
+creation from its discarded prediction. Use the same validated part classes
+as effect_generate_part; the deterministic flag also covers harmless lights. */
+void effects_discard_gameplay(void)
+{
+	long effect_index;
+
+	if (!effect_data || !effect_data->valid)
+		return;
+	for (effect_index = data_next_index(effect_data, NONE);
+		effect_index != NONE;
+		effect_index = data_next_index(effect_data, effect_index))
+	{
+		struct effect_definition *definition = effect_definition_get(effect_get(effect_index)->definition_index);
+		boolean gameplay = FALSE;
+		short event_index;
+
+		for (event_index = 0; event_index < definition->events.count && !gameplay; event_index++)
+		{
+			struct effect_event_definition *event = TAG_BLOCK_GET_ELEMENT(
+				&definition->events, event_index, struct effect_event_definition);
+			short part_index;
+
+			for (part_index = 0; part_index < event->parts.count; part_index++)
+			{
+				struct effect_part_definition *part = TAG_BLOCK_GET_ELEMENT(
+					&event->parts, part_index, struct effect_part_definition);
+
+				if (part->reference.index != NONE && (part->runtime_base_class_tag == OBJECT_DEFINITION_TAG ||
+					part->runtime_base_class_tag == DAMAGE_EFFECT_DEFINITION_TAG))
+				{
+					gameplay = TRUE;
+					break;
+				}
+			}
+		}
+		if (gameplay)
+			effect_delete(effect_index);
+	}
+}
+
 long effect_new_attached_from_markers(
 	long definition_index,
 	long owner_object_index,
@@ -760,6 +805,31 @@ long effect_new_attached_from_markers(
 		382,
 		scale_b>=0.f && scale_b<=1.f,
 		csprintf(temporary, "scale_b %f not in [0,1]", scale_b));
+
+	/* port: an impact on a scaled object (a Forge scenery's SCALE) is made
+	where it struck, in the world, as on an object of its own size: on the
+	object, its node matrix's scale would make its particles as big, as fast
+	and as spread as the object is (the object's own effects grow with it) */
+	{
+		struct object_datum *object = object_try_and_get(object_index);
+
+		if (object && object->object.scale > 0.0f && fabs(object->object.scale - 1.0f) > 0.001f)
+		{
+			return effect_new_unattached_from_markers(
+				definition_index,
+				owner_object_index,
+				&object->object.translational_velocity,
+				marker_count,
+				marker_names,
+				marker_points,
+				marker_forwards,
+				scale_a,
+				scale_b,
+				color,
+				impulse_field,
+				FALSE);
+		}
+	}
 
 	effect_index = effect_allocate(definition_index, owner_object_index, TRUE);
 	if (effect_index != NONE)
@@ -1621,6 +1691,12 @@ static void effect_generate_part(
 	no damage, no sound (port/linux/game/skulls_outbreak.c) */
 	if ((skulls_effect_quiet && part_definition->runtime_base_class_tag == SOUND_DEFINITION_TAG) ||
 		(skulls_effect_harmless && part_definition->runtime_base_class_tag == DAMAGE_EFFECT_DEFINITION_TAG) ||
+#if OPENCE_ENABLE_FORGE
+		/* port: a Forge emitter whose DEAL DAMAGE is off: its fire burns no
+		one (port/forge/src/forge_volumes.c) */
+		(part_definition->runtime_base_class_tag == DAMAGE_EFFECT_DEFINITION_TAG &&
+			forge_volumes_effect_damage_blocked(effect->object_index)) ||
+#endif
 		/* port: and Floodfection's, no objects but garbage (its bits), which
 		each machine keeps for itself: a multiplayer game's clients would not
 		have the others (port/linux/game/infection.c) */
@@ -2027,6 +2103,9 @@ static void effect_generate_particles(
 				real_point3d world_point;
 				real_vector3d world_direction;
 				real_vector3d world_velocity;
+				/* port: the size of the object it's on (a Forge emitter's SCALE):
+				its node matrix grows where particles go, and this their size */
+				real object_size = 1.0f;
 				real emission_radius = effect_real_random_range(
 					get_global_local_random_seed_address(),
 					effect,
@@ -2089,6 +2168,8 @@ static void effect_generate_particles(
 						node_matrix,
 						&data.velocity,
 						&world_velocity);
+					if (node_matrix->scale > 0.0f)
+						object_size = node_matrix->scale;
 				}
 				else
 				{
@@ -2144,7 +2225,7 @@ static void effect_generate_particles(
 						particles->radius_upper_bound,
 						particles->scale_a_flags,
 						particles->scale_b_flags,
-						_effect_particle_radius_bit) * skulls_effect_size;
+						_effect_particle_radius_bit) * skulls_effect_size * object_size;
 					data.angular_velocity = effect_real_random_range(
 						get_global_local_random_seed_address(),
 						effect,

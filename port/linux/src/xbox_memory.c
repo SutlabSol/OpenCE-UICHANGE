@@ -21,8 +21,8 @@ The web build (HALO_WEB) has no pages to map or protect: WebAssembly's
 memory is one block, made large enough that the window is its top 128 MB
 (tools/web_build.py), and the C heap stays below it (port/web/src/web_main.c).
 A block is cleared when it is allocated, as fresh pages would be, and
-protection is only remembered. The Custom Edition window lies in the C
-heap's range there, which grows around it (port/web/src/web_main.c).
+protection is only remembered. web_memory.c keeps the heap below the separate
+Custom Edition tag window and initializes it after the page's settings.
 */
 
 #include "platform.h"
@@ -41,6 +41,7 @@ heap's range there, which grows around it (port/web/src/web_main.c).
 #include <unistd.h>
 
 #ifdef HALO_WEB
+#include "../../web/src/web_memory.h"
 /* the memory's size: whether it covers the window */
 #define web_memory_bytes() ((unsigned long long)__builtin_wasm_memory_size(0) << 16)
 #endif
@@ -53,7 +54,11 @@ typedef char window_is_the_hosts[
 #ifndef HALO_MOVABLE_WINDOW
 	PLATFORM_CONTIGUOUS_BASE == HALO_GUEST_WINDOW_BASE &&
 #endif
+#ifdef HALO_MACOS
+	PLATFORM_CONTIGUOUS_SIZE == HALO_GUEST_WINDOW_MAXIMUM ? 1 : -1];
+#else
 	PLATFORM_CONTIGUOUS_SIZE == HALO_GUEST_WINDOW_SIZE ? 1 : -1];
+#endif
 #endif
 /* the texture and sound caches, which the window hands out top-down, fit
 above the game state (halo_port_capacity.h; measured from where the game
@@ -289,9 +294,7 @@ const char *halo_custom_edition_tag_cache_problem(void)
 void *halo_custom_edition_tag_cache(void)
 {
 #ifdef HALO_WEB
-	if (!config_boolean("game.custom_edition"))
-		return NULL;
-	return (void *)CUSTOM_EDITION_TAG_CACHE_ADDRESS;
+	return web_custom_edition_tag_cache();
 #else
 	return custom_edition_tag_cache;
 #endif

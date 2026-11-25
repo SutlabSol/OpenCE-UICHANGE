@@ -47,6 +47,8 @@ started again rolls again, and a checkpoint keeps what was placed.
 
 #include "tag_injector.h"
 #include "tag_campaign.h"
+#include "tag_multiplayer.h"
+#include "opence_features.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -65,6 +67,7 @@ long port_tag_campaign_profiles_find(char const *file);
 char const *port_tag_campaign_profiles_name(long profile);
 char const *port_tag_campaign_profiles_file(long profile);
 char const *port_tag_campaign_profiles_option(long profile, char const *key);
+int port_tag_profile_file_option(char const *path, char const *key, char *value, unsigned long size);
 long port_tag_campaign_profiles_list_count(long profile, char const *section, char const *key);
 char const *port_tag_campaign_profiles_list(long profile, char const *section, char const *key, long entry);
 extern boolean unit_can_hold_weapon_definition(long unit_index, long weapon_definition_index);
@@ -454,12 +457,61 @@ void tag_campaign_profile_choose(
 		profile == NONE ? "none" : port_tag_campaign_profiles_name(profile));
 }
 
+/* the level plays a network co-op game's share (tag_campaign_level_profile_shared):
+its player settings are its campaign.toml's, the host's, on every machine */
+static boolean tag_campaign_level_shared;
+
+/* a key of a campaign profile, or of a share's campaign.toml (forge's
+option: forge_map_settings_players_from_options) */
+static char const *campaign_profile_option(
+	void *context,
+	char const *key)
+{
+	return port_tag_campaign_profiles_option(*(long const *)context, key);
+}
+
+static char const *campaign_file_option(
+	void *context,
+	char const *key)
+{
+	static char value[256];
+
+	if (!port_tag_profile_file_option((char const *)context, key, value, sizeof(value)))
+		value[0] = 0;
+	return value;
+}
+
+/* the player's biped, hands and movement the campaign profile plays (each
+slot's: the game has none of teams) */
+static void campaign_players_set(
+	long campaign_profile)
+{
+#if OPENCE_ENABLE_FORGE
+	extern void forge_map_settings_players_from_options(char const *(*option)(void *context, char const *key),
+		void *context, int campaign);
+	char path[1024];
+
+	if (tag_campaign_level_shared)
+	{
+		if (tag_multiplayer_level_share_file("campaign.toml", path, sizeof(path)))
+			forge_map_settings_players_from_options(campaign_file_option, path, TRUE);
+	}
+	else if (campaign_profile != NONE)
+	{
+		forge_map_settings_players_from_options(campaign_profile_option, &campaign_profile, TRUE);
+	}
+#else
+	(void)campaign_profile;
+#endif
+}
+
 long tag_campaign_level_profile(
 	void)
 {
 	long campaign_profile = tag_campaign_profile_chosen();
 	long profile;
 
+	tag_campaign_level_shared = FALSE;
 	tag_campaign_level.file[0] = 0;
 	if (campaign_profile == NONE)
 		return NONE;
@@ -482,6 +534,7 @@ long tag_campaign_level_profile_shared(
 	long campaign_profile)
 {
 	tag_campaign_level.file[0] = 0;
+	tag_campaign_level_shared = profile != NONE;
 	if (profile == NONE)
 		return NONE;
 	/* (the host's campaign profile; a client has none, adding the host's
@@ -510,6 +563,8 @@ void tag_campaign_level_loaded(
 
 	snprintf(file, sizeof(file), "%s", tag_campaign_level.file);
 	tag_campaign_level_unloaded();
+	if (profile != NONE)
+		campaign_players_set(campaign_profile);
 	if (profile == NONE || campaign_profile == NONE)
 		return;
 	snprintf(tag_campaign_level.file, sizeof(tag_campaign_level.file), "%s", file);

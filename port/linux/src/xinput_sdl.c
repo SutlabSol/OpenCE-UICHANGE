@@ -49,8 +49,15 @@ extern unsigned char network_aim_assist_block_mouse(void);
 #if defined(HALO_GUEST) || defined(HALO_ANDROID) || defined(HALO_PS5)
 #include "guest_host.h"
 #endif
+#include "keyboard_prompts.h"
 #include "controller_buttons.h"
 #include "controller_remap.h"
+#include "halo_host_dashboard.h"
+#include "server_mode.h" /* port: halo_server_hosting, the host's screen a menu */
+/* (network_replay_playback.c: a replay played, or the host's game watched
+live; ui_widget.c: a player's own menu up) */
+unsigned char network_replay_viewing(void);
+unsigned char halo_ui_controller_menu_up(short controller_index);
 
 #include <SDL3/SDL.h>
 #include <math.h>
@@ -73,6 +80,7 @@ and the touch controls' stick and look */
 extern unsigned char network_chat_keyboard_open(void);
 /* ... with the system's keyboard in its place (halo_system_keyboard) */
 extern unsigned char network_chat_system_keyboard(void);
+extern unsigned char network_chat_system_back(void);
 /* port/linux/game/network_votekick.c: the D-pad's left and right vote now */
 extern unsigned char network_vote_pad_open(void);
 /* port/linux/game/menu_functions.c: two or more players on this machine
@@ -196,6 +204,37 @@ short halo_stick_dead_range(short stick)
 		}
 	}
 	return ranges[stick ? 1 : 0];
+}
+
+/* the right stick's turn up and down, in degrees a second, of each setting
+of input.stick_vertical_sensitivity (1 to 15): 1 to 10 Look Sensitivity's
+left and right range on the Xbox, 40 to 260, in even steps, and 11 to 15 on
+in the same steps (to about 382); 0 is the game's, half of left and right's
+(player_ui.c) */
+#define STICK_PITCH_RATE_SLOWEST 40.0f
+#define STICK_PITCH_RATE_AT_10 260.0f
+#define STICK_PITCH_RATE_STEPS 15
+
+float halo_stick_pitch_rate(short gamepad_index, float pitch_rate)
+{
+	static struct
+	{
+		unsigned long read_at;
+		float rate;
+	} players[PORT_COUNT];
+	int player = gamepad_index >= 0 && gamepad_index < PORT_COUNT ? gamepad_index : 0;
+
+	if (players[player].read_at != config_changes() + 1)
+	{
+		double setting = config_player_real(player, "input.stick_vertical_sensitivity");
+		long step = (long)(setting + 0.5);
+
+		/* (read_at 0 is never read: config_changes() + 1) */
+		players[player].read_at = config_changes() + 1;
+		players[player].rate = step < 1 || step > STICK_PITCH_RATE_STEPS ? 0.0f :
+			STICK_PITCH_RATE_SLOWEST + (STICK_PITCH_RATE_AT_10 - STICK_PITCH_RATE_SLOWEST) * (float)(step - 1) / 9.0f;
+	}
+	return players[player].rate > 0.0f ? players[player].rate : pitch_rate;
 }
 
 /* radians of yaw and pitch for the mouse motion since the last call; the
@@ -400,6 +439,10 @@ would never open it */
 static WORD overlay_held_buttons[PORT_COUNT];
 static unsigned char overlay_held_analog[PORT_COUNT];
 
+/* whether the overlay (or the host's dashboard) took a port's pad at its
+last read (for Forge: xinput_forge_unmapped) */
+static BOOL overlay_took_pad[PORT_COUNT];
+
 static void overlay_pad_take(int port, XINPUT_GAMEPAD *pad, SDL_Gamepad *gamepad)
 {
 	/* (an analog button pressed half way; the stick most of the way) */
@@ -416,6 +459,8 @@ static void overlay_pad_take(int port, XINPUT_GAMEPAD *pad, SDL_Gamepad *gamepad
 	if (pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) buttons |= 1UL << HALO_OVERLAY_PAD_DPAD_DOWN;
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_A] >= PRESSED) buttons |= 1UL << HALO_OVERLAY_PAD_A;
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_B] >= PRESSED) buttons |= 1UL << HALO_OVERLAY_PAD_B;
+	if (pad->bAnalogButtons[XINPUT_GAMEPAD_X] >= PRESSED) buttons |= 1UL << HALO_OVERLAY_PAD_X;
+	if (pad->bAnalogButtons[XINPUT_GAMEPAD_Y] >= PRESSED) buttons |= 1UL << HALO_OVERLAY_PAD_Y;
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_WHITE] >= PRESSED) buttons |= 1UL << HALO_OVERLAY_PAD_LEFT_SHOULDER;
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_BLACK] >= PRESSED) buttons |= 1UL << HALO_OVERLAY_PAD_RIGHT_SHOULDER;
 	if (gamepad)
@@ -427,8 +472,11 @@ static void overlay_pad_take(int port, XINPUT_GAMEPAD *pad, SDL_Gamepad *gamepad
 		if (SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_DPAD_DOWN))
 			buttons |= 1UL << HALO_OVERLAY_PAD_DPAD_DOWN;
 	}
-	if (overlay_menu_take_pad((short)port, buttons))
+	/* (the overlay first, which opens over the host's screen too) */
+	overlay_took_pad[port] = FALSE;
+	if (overlay_menu_take_pad((short)port, buttons) || host_dashboard_take_pad((short)port, buttons))
 	{
+		overlay_took_pad[port] = TRUE;
 		overlay_held_buttons[port] = pad->wButtons;
 		overlay_held_analog[port] = 0;
 		for (index = 0; index < 8; index++)
@@ -520,10 +568,11 @@ input.gyro_invert_vertical); the web's overlay has its own. Every other
 controller with a gyroscope (a DualSense, a DualShock 4, a Switch Pro
 Controller) aims the same way on any platform, each local player with
 their own: pad_gyro, by the host's SDL (host_sdl_gamepad_gyro) or this
-build's own (Windows and the web: sdl_gamepad_gyro_turn). */
+build's own (Windows, the web and the native x86 Linux build:
+sdl_gamepad_gyro_turn). */
 /* (the builds whose SDL is their own, not a host's: their gamepads'
-sensors read here) */
-#if defined(HALO_WINDOWS) || defined(HALO_WEB)
+sensors read here; the others are those that include guest_host.h) */
+#if !defined(HALO_GUEST) && !defined(HALO_ANDROID) && !defined(HALO_PS5)
 #define HALO_NATIVE_SDL_GYRO
 #endif
 /* input.gyro_aim and the rest, each local player's (its profile's own:
@@ -934,6 +983,8 @@ static void keyboard_gamepad(const struct platform_input_state *input, XINPUT_GA
 #endif
 	pad->bAnalogButtons[XINPUT_GAMEPAD_X] |= analog(k[SDL_SCANCODE_DELETE] || k[SDL_SCANCODE_E]);
 	pad->bAnalogButtons[XINPUT_GAMEPAD_Y] |= analog(k[SDL_SCANCODE_TAB]);
+	/* (the server browser's FAVORITE, as a controller's left trigger) */
+	pad->bAnalogButtons[XINPUT_GAMEPAD_LEFT_TRIGGER] |= analog(k[SDL_SCANCODE_F]);
 }
 
 /* the keys held when the game and the menus switch, or typing or the
@@ -1184,6 +1235,22 @@ static SDL_Gamepad *first_port_gamepad(void)
 }
 
 /* a binding held: of the keyboard and mouse, or of port 0's controller */
+/* Prompt readers use the same parsed bindings and refresh generation as play.
+ * No parallel setting table: a rebind is visible on the next lookup. */
+int halo_keyboard_binding_label(int action, int slot, char *shown, unsigned int size)
+{
+	char name[64];
+	if (!shown || !size) return 0;
+	shown[0] = 0;
+	if (action < 0 || action >= NUMBER_OF_HALO_KEYBOARD_ACTIONS || slot < 0 || slot >= MAXIMUM_BINDINGS)
+		return 0;
+	bindings_read();
+	if (bindings[action][slot] < 0) return 0;
+	halo_input_name(bindings[action][slot], name, sizeof(name));
+	halo_input_shown_name(name, shown, size);
+	return shown[0] != 0;
+}
+
 static BOOL input_held(const struct platform_input_state *input, SDL_Gamepad *gamepad, int code)
 {
 	BOOL wheel = SDL_GetTicks() < wheel_press_until_ms;
@@ -1385,9 +1452,9 @@ int halo_push_to_talk_held(void)
 	and the game still gets it, network_chat.c; not in a replay's playback,
 	whose D-pad Down is its camera's: network_replay_playback.c) */
 	{
-		extern unsigned char network_replay_playing(void);
+		extern unsigned char network_replay_viewing(void);
 
-		return !input.menus && !network_replay_playing() && (chat_pad[0] & (1UL << HALO_CHAT_PAD_DOWN)) != 0;
+		return !input.menus && !network_replay_viewing() && (chat_pad[0] & (1UL << HALO_CHAT_PAD_DOWN)) != 0;
 	}
 }
 
@@ -1796,7 +1863,14 @@ static BOOL menu_buttons_swapped(BOOL menus)
 		read_at = config_changes();
 		swap = config_boolean("controls.nintendo_menu_buttons") != 0;
 	}
-	return (menus || game_engine_showing_postgame() || network_replay_playing()) && swap;
+	/* (and hosting from the menus: the host's screen is a menu, in a game too,
+	port/linux/game/host_dashboard.c) */
+	/* (and the text chat's on-screen keyboard, a menu's keys over the game:
+	A types, B cancels, network_chat.c) */
+	extern unsigned char network_chat_keyboard_open(void);
+
+	return (menus || game_engine_showing_postgame() || network_replay_playing() || halo_server_hosting() ||
+		network_chat_keyboard_open()) && swap;
 #else
 	(void)menus;
 	return FALSE;
@@ -1812,29 +1886,32 @@ int xinput_menu_buttons_swapped(void)
 
 /* the bottom and right face buttons held when the menus' swap of them starts or ends count as up until let go of:
 the right button that chose the level is not the game's B, a melee, at its first frame (as keys_held_over_switch) */
-static void face_buttons_held_over_swap(SDL_Gamepad *gamepad, BOOL swap, BOOL *held_back)
+static void face_buttons_held_over_swap(int port, SDL_Gamepad *gamepad, BOOL swap, BOOL *held_back)
 {
-	static int swapped = -1;
-	static BOOL held_south, held_east;
+	/* (each port's: a split screen player's menu swaps theirs alone) */
+	static int swapped[PORT_COUNT] = { -1, -1, -1, -1 };
+	static BOOL held_south[PORT_COUNT], held_east[PORT_COUNT];
 	BOOL south = SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_SOUTH);
 	BOOL east = SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_EAST);
 
-	if (swapped != (int)swap)
+	if (port < 0 || port >= PORT_COUNT)
+		return;
+	if (swapped[port] != (int)swap)
 	{
-		if (swapped >= 0)
+		if (swapped[port] >= 0)
 		{
-			held_south = south;
-			held_east = east;
+			held_south[port] = south;
+			held_east[port] = east;
 		}
-		swapped = (int)swap;
+		swapped[port] = (int)swap;
 	}
 	if (!south)
-		held_south = FALSE;
+		held_south[port] = FALSE;
 	if (!east)
-		held_east = FALSE;
-	if (held_south)
+		held_east[port] = FALSE;
+	if (held_south[port])
 		held_back[SDL_GAMEPAD_BUTTON_SOUTH] = TRUE;
-	if (held_east)
+	if (held_east[port])
 		held_back[SDL_GAMEPAD_BUTTON_EAST] = TRUE;
 }
 
@@ -2051,9 +2128,9 @@ void halo_virtual_gamepads_start(void)
 
 static void virtual_gamepads_attach(void)
 {
-#ifdef HALO_ANDROID
-	/* (the Android host's SDL has no virtual joysticks for the guest: the
-	automated test's gamepads are the desktop's) */
+#if defined(HALO_ANDROID) || defined(HALO_GUEST)
+	/* (the guest builds' SDL, the host's through the guest's bridge, has no
+	virtual joysticks: the automated test's gamepads are the desktop's) */
 	virtual_pad_count = 0;
 #else
 	long wanted = config_integer("debug.virtual_gamepads");
@@ -2122,7 +2199,7 @@ static int virtual_button(const char *what, size_t length)
 /* the script's state at this moment, set on the pads */
 static void virtual_gamepads_update(void)
 {
-#ifndef HALO_ANDROID
+#if !defined(HALO_ANDROID) && !defined(HALO_GUEST)
 	BOOL pressed[PORT_COUNT][SDL_GAMEPAD_BUTTON_COUNT];
 	int triggers[PORT_COUNT][2];
 	BOOL keyboard_pressed = FALSE, keyboard_enter = FALSE;
@@ -2348,6 +2425,38 @@ int xinput_device_port(HANDLE device)
 	return controller_port(device);
 }
 
+/* port 0's gamepad as it was pressed and as a custom controller layout
+(controller_remap_input) made it, at its last read, whether that layout
+changed it: Forge's binds name the buttons where they sit (D-pad Right goes
+into Forge mode), where a custom layout keeps only the game's actions */
+static XINPUT_GAMEPAD forge_unmapped_pad, forge_remapped_pad;
+static BOOL forge_pad_remapped;
+
+/* a state XInputGetState gave port 0, made the buttons pressed again for
+Forge: what the layout made of them taken out, what was pressed put back (a
+key's or the touch controls' press on the same button may be lost with it) */
+void xinput_forge_unmapped(XINPUT_GAMEPAD *pad)
+{
+	int index;
+
+	/* (nothing put back while the overlay has the pad, nor a button it or a
+	vote holds over till it is let go) */
+	if (!forge_pad_remapped || overlay_took_pad[0])
+		return;
+	pad->wButtons = (WORD)((pad->wButtons & ~forge_remapped_pad.wButtons) |
+		(forge_unmapped_pad.wButtons & ~(overlay_held_buttons[0] | vote_held_buttons)));
+	for (index = 0; index < 8; index++)
+	{
+		BYTE value = pad->bAnalogButtons[index];
+
+		if (forge_remapped_pad.bAnalogButtons[index] && value <= forge_remapped_pad.bAnalogButtons[index])
+			value = 0;
+		if (forge_unmapped_pad.bAnalogButtons[index] > value && !(overlay_held_analog[0] & (1 << index)))
+			value = forge_unmapped_pad.bAnalogButtons[index];
+		pad->bAnalogButtons[index] = value;
+	}
+}
+
 /* debug camera (director.c): the middle button, R and F, and the wheel's
 notches since the director last asked */
 static BOOL debug_cam_middle = FALSE;
@@ -2397,6 +2506,8 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	int captured;
 	struct platform_input_state input;
 	short aiming_deflection;
+	unsigned long prompt_buttons;
+	int prompt_index;
 
 	memset(state, 0, sizeof(*state));
 	if (port < 0)
@@ -2411,6 +2522,14 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	{
 		platform_input_read(&input, TRUE);
 		menus_up = input.menus;
+		if (input.focused)
+		{
+			unsigned int mouse = 0;
+			for (prompt_index = 0; prompt_index < PLATFORM_MOUSE_BUTTON_COUNT; prompt_index++)
+				if (input.mouse_buttons[prompt_index]) mouse |= 1U << prompt_index;
+			if (input.mouse_dx || input.mouse_dy || input.mouse_wheel) mouse |= 0x100;
+			keyboard_prompt_keys(input.keys, sizeof(input.keys), mouse);
+		}
 		mouse_poll(&input);
 		wheel_update();
 		keyboard_actions_held = 0;
@@ -2427,22 +2546,46 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		/* (a replay's playback has no voice chat and no game's controls: its
 		own take every button, a shoulder bound to talk its speed too:
 		port/linux/game/network_replay_playback.c) */
-		BOOL replay = network_replay_playing() != 0;
+		BOOL replay = network_replay_viewing() != 0;
 
 		for (index = 0; index < INPUT_GAMEPAD_END - INPUT_GAMEPAD; index++)
 			held_back[index] = !replay &&
 				(gamepad_bound_to_talk[index] || (!input.menus && gamepad_bound_in_game[index]));
-		face_buttons_held_over_swap(gamepad, swap, held_back);
+		face_buttons_held_over_swap(0, gamepad, swap, held_back);
 		sdl_gamepad_state(gamepad, &physical, held_back, scoreboard_picking_port == 0, swap);
 	}
 	else if (port != 0 && gamepad)
 	{
-		sdl_gamepad_state(gamepad, &physical, NULL, scoreboard_picking_port == port, menu_buttons_swapped(menus_up));
+		/* (its own player's menu, in a game: a split screen player's pause
+		menu, not player 1's, swaps its face buttons: ui_widget.c's
+		halo_ui_controller_menu_up) */
+		BOOL swap = menu_buttons_swapped(halo_ui_controller_menu_up((short)port) != 0);
+		BOOL held_back[INPUT_GAMEPAD_END - INPUT_GAMEPAD];
+
+		memset(held_back, 0, sizeof(held_back));
+		face_buttons_held_over_swap(port, gamepad, swap, held_back);
+		sdl_gamepad_state(gamepad, &physical, held_back, scoreboard_picking_port == port, swap);
 	}
 	/* Keep the opening chat press so even B can open it without immediately closing it. */
 	chat_pad_record((short)port, &physical);
 	chat_physical_pad[port] = chat_pad[port];
+	/* Observe physical input before keyboard/touch merging or remapping. */
+	prompt_buttons = physical.wButtons;
+	for (prompt_index = 0; prompt_index < 8; prompt_index++)
+		if (physical.bAnalogButtons[prompt_index] > 30) prompt_buttons |= 1UL << (16 + prompt_index);
+	keyboard_prompt_pad((short)port, prompt_buttons,
+		abs(physical.sThumbLX) > 12000 || abs(physical.sThumbLY) > 12000 ||
+		abs(physical.sThumbRX) > 12000 || abs(physical.sThumbRY) > 12000,
+		gamepad != NULL);
+	if (port == 0)
+		forge_unmapped_pad = physical;
 	captured = controller_remap_input((short)port, &physical, gamepad != NULL);
+	if (port == 0)
+	{
+		forge_remapped_pad = physical;
+		forge_pad_remapped = !captured && gamepad &&
+			memcmp(&forge_unmapped_pad, &forge_remapped_pad, sizeof(forge_remapped_pad)) != 0;
+	}
 	if (port == 0)
 	{
 		unsigned long held;
@@ -2511,11 +2654,12 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	chat_pad_record((short)port, &state->Gamepad);
 #ifdef HALO_ANDROID
 	/* (a chat line typed with Android's keyboard: the system's back, once
-	that keyboard is down, closes the chat as B does; no key of the keyboard
+	that keyboard is down (or before the fork's box brought it up), closes
+	the chat as B does; no key of the keyboard
 	reaches the controller meanwhile) */
 	if (port == 0)
 	{
-		if (network_chat_system_keyboard() && input.keys[SDL_SCANCODE_AC_BACK])
+		if (network_chat_system_back() && input.keys[SDL_SCANCODE_AC_BACK])
 			chat_pad[0] |= 1UL << HALO_CHAT_PAD_B;
 		system_keyboard_update();
 	}

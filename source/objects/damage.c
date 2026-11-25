@@ -102,6 +102,7 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries.h"
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
 #include "damage.h"
 #include "game_modes.h" /* port: port/linux/game/game_modes.c */
 #include "infection.h" /* port: port/linux/game/infection.c */
@@ -144,6 +145,9 @@ symbols in this file:
 #include "biped_ragdoll.h" /* port: port/linux/game/biped_ragdoll.c */
 #include "campaign_score.h" /* port: port/linux/game/campaign_score.c */
 #include "firing_range.h" /* port: port/linux/game/firing_range.c */
+#include "mcc_damage.h" /* port: port/linux/game/mcc_damage.c */
+#include "mcc_ui_teams.h" /* port: port/linux/game/mcc_ui_teams.c */
+#include "server_team_switch.h" /* port: port/linux/game/server_team_switch.c */
 
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);
@@ -394,7 +398,25 @@ boolean debug_damage;
    January's order; no other name was tested. */
 static long global_debug_damage_object_index;
 
+/* port: the melee blow being dealt, NONE outside one (damage_melee_blow_begin) */
+static long damage_melee_blow_definition_index = NONE;
+
 /* ---------- public code */
+
+long damage_melee_blow_begin(
+	long definition_index)
+{
+	long previous = damage_melee_blow_definition_index;
+
+	damage_melee_blow_definition_index = definition_index;
+	return previous;
+}
+
+void damage_melee_blow_end(
+	long previous_definition_index)
+{
+	damage_melee_blow_definition_index = previous_definition_index;
+}
 
 void damage_initialize(void)
 {
@@ -1072,8 +1094,14 @@ static void object_damage_shield(
 	if (shield_damage >= damage_resistance->minimum_shield_stun_damage ||
 		object->object.shield_vitality == 0.f)
 	{
+		real stun_time = damage_resistance->shield_stun_time;
+
+		/* port: Firefight's SHIELD REGEN ON, on a map whose player's
+		shield waits for no stun (port/linux/game/firefight.c) */
+		if (stun_time < 1.f && firefight_player_shield_regen(object_index) == 1)
+			stun_time = FIREFIGHT_STOCK_SHIELD_STUN_SECONDS;
 		object->object.shield_stun_ticks =
-			(short)(damage_resistance->shield_stun_time * TICKS_PER_SECOND);
+			(short)(stun_time * TICKS_PER_SECOND);
 	}
 
 	*shield_damage_reference = shield_damage;
@@ -1108,6 +1136,10 @@ static void object_damage_aftermath(
 		object_definition_get(object->definition_index);
 	struct damage_effect_definition *damage_effect =
 		damage_effect_definition_get(damage->definition_index);
+	/* port: a melee blow's, by its damage's category or the blow being dealt
+	(a map's melee damage can be of no category: damage_melee_blow_begin) */
+	boolean melee_blow = damage_effect->damage.category == _damage_category_melee ||
+		(damage_melee_blow_definition_index != NONE && damage->definition_index == damage_melee_blow_definition_index);
 
 	/* port: (a client's replay of the host's nonlethal damage too) */
 	damage_data_validate_owner(damage);
@@ -1117,6 +1149,7 @@ static void object_damage_aftermath(
 		real_vector3d direction = damage->direction;
 		real_vector3d acceleration;
 		real acceleration_scale;
+		boolean mcc_accelerate_unit; /* port: MCC signed/vector damage impulses */
 
 		direction.k += 0.45f;
 		normalize3d(&direction);
@@ -1129,6 +1162,9 @@ static void object_damage_aftermath(
 		if (skull_active(_skull_sputnik))
 			acceleration_scale *= 3.f;
 		scale_vector3d(&direction, acceleration_scale, &acceleration);
+		/* port: MCC extension data cannot be represented by a scalar impulse. */
+		mcc_accelerate_unit = mcc_damage_acceleration(&damage_effect->damage,
+			object_definition->object.acceleration_scale, &direction, &acceleration);
 
 		switch (object->object.type)
 		{
@@ -1155,7 +1191,7 @@ static void object_damage_aftermath(
 			{
 				struct unit_datum const *unit = (struct unit_datum const *)object;
 
-				if (damage_effect->damage.instantaneous_acceleration > _real_epsilon &&
+				if (mcc_accelerate_unit && /* port: MCC admission, legacy scalar gate otherwise */
 					!TEST_FLAG(unit->unit.flags, _unit_impervious_bit))
 				{
 					if (object->object.type == _object_type_biped)
@@ -1187,7 +1223,7 @@ static void object_damage_aftermath(
 
 	/* port: skull: a punch's Pinata grenades and Black Eye shield, where
 	the host decides damage (port/linux/game/skulls.c) */
-	if (!network_game_distributed_client() && damage_effect->damage.category == _damage_category_melee)
+	if (!network_game_distributed_client() && melee_blow)
 		skulls_melee_damage(object_index, damage->owner_object_index, damage->owner_player_index);
 	/* port: skull: Give & Take, a player's hit on an enemy heals them */
 	if (!network_game_distributed_client())
@@ -1202,7 +1238,7 @@ static void object_damage_aftermath(
 		campaign_score_killing_blow(
 			object_index,
 			body_part,
-			damage_effect->damage.category == _damage_category_melee,
+			melee_blow,
 			&damage->direction,
 			damage->definition_index);
 	}
@@ -1221,7 +1257,7 @@ static void object_damage_aftermath(
 				_object_being_damaged_body_depleted_bit))
 		{
 			/* port: whether it is a melee's (Gun Game's demotion: game_modes.c) */
-			game_modes_kill_by_melee(damage_effect->damage.category == _damage_category_melee);
+			game_modes_kill_by_melee(melee_blow);
 			game_statistics_record_kill(
 				object_index,
 				damage->owner_player_index,
@@ -1238,11 +1274,20 @@ static void object_damage_aftermath(
 		no statistics on a machine that joined after, is no player's) */
 		if (player_index != NONE)
 		{
+			/* port: an MCC team change's death is this no-statistics one, not a
+			suicide at the same time (mcc_ui_teams.c) */
+			mcc_ui_team_respawn_damage(player_index, object_index,
+				TEST_FLAG(damage->flags, _damage_no_statistics_bit) != 0);
+			/* port: and a dedicated server's !switch's (server_team_switch.c) */
+			server_team_switch_damage(player_index, object_index,
+				TEST_FLAG(damage->flags, _damage_no_statistics_bit) != 0);
 			game_engine_player_killed(
 				player_index,
 				object_index,
 				player_index,
 				TRUE);
+			mcc_ui_team_respawn_damage(player_index, object_index, FALSE);
+			server_team_switch_damage(player_index, object_index, FALSE);
 		}
 	}
 
@@ -1257,7 +1302,7 @@ static void object_damage_aftermath(
 			object_index,
 			damage->owner_player_index,
 			body_part,
-			damage_effect->damage.category == _damage_category_melee,
+			melee_blow,
 			&damage->direction,
 			TEST_FLAG(being_damaged_flags, _object_being_damaged_body_depleted_bit),
 			TEST_FLAG(damage->flags, _damage_no_statistics_bit),
@@ -1273,7 +1318,7 @@ static void object_damage_aftermath(
 				object_index,
 				damage->owner_player_index,
 				(body_part == 2) || TEST_FLAG(being_damaged_flags, _object_being_damaged_killed_instantly_bit),
-				damage_effect->damage.category == _damage_category_melee,
+				melee_blow,
 				damage_effect->damage.category == _damage_category_grenade && damage->scale >= 0.90f,
 				damage_effect->damage.category == _damage_category_vehicle);
 		}
@@ -1288,7 +1333,7 @@ static void object_damage_aftermath(
 			damage->definition_index,
 			damage->owner_object_index,
 			&damage->direction,
-			damage_effect->damage.category == _damage_category_melee,
+			melee_blow,
 			damage_effect->damage.category == _damage_category_vehicle,
 			TEST_FLAG(being_damaged_flags, _object_being_damaged_body_depleted_bit));
 		unit_damage_aftermath(
@@ -1608,6 +1653,16 @@ void object_cause_damage(
 	(port/linux/game/firing_range.c) */
 	if (firing_range_damage_ignored(damage->owner_object_index, object_index))
 		return;
+#if OPENCE_ENABLE_FORGE
+	/* port: a Forge test spawn's mirrored copy hurts no one
+	(port/forge/src/forge_map_settings.c) */
+	{
+		extern int forge_map_settings_damage_ignored(long owner_object_index, long object_index);
+
+		if (forge_map_settings_damage_ignored(damage->owner_object_index, object_index))
+			return;
+	}
+#endif
 	/* the distributed netcode (port/linux/NETCODE.md): the host deals
 	damage; a client reports its own players' hits instead, and the host
 	deals those (port/linux/game/network_damage.c) */
@@ -1684,6 +1739,17 @@ void object_cause_damage(
 			firefight_apply_generator_damage(object_index, damage->owner_player_index, damage->owner_team_index, total_damage))
 		{
 			return;
+		}
+		/* port: a set objective's own: the enemy generator, the marines to
+		rescue (firefight_objectives.c) */
+		if (firefight_active())
+		{
+			if (firefight_objectives_apply_damage(object_index, damage->owner_player_index, damage->owner_team_index,
+				total_damage))
+			{
+				return;
+			}
+			total_damage *= firefight_objectives_damage_scale(object_index);
 		}
 		total_damage *= game_engine_get_damage_multiplier(
 			get_player_index_from_object_or_parents(damage->owner_object_index),
@@ -2262,18 +2328,31 @@ void object_damage_update(
 		}
 		/* port: skull: Rip & Tear, a player's shield recharging into an
 		overshield (port/linux/game/skulls_custom.c) */
-		else if (object->object.shield_vitality < skulls_shield_cap(object_index))
+		/* port: Firefight's SHIELD REGEN OFF, no recharge at all
+		(port/linux/game/firefight.c) */
+		else if (object->object.shield_vitality < skulls_shield_cap(object_index) &&
+			firefight_player_shield_regen(object_index) != 0)
 		{
+			short firefight_regen = firefight_player_shield_regen(object_index);
+
 			/* port: skull: Black Eye, a player's shield only a punch fills;
 			and Protected's shield never comes back (the model it was given
 			to has no recharge of its own, which may be at once) */
 			if (object->object.shield_stun_ticks == 0 &&
 				!((skull_active(_skull_black_eye) || skull_active(_skull_streaking)) &&
 					skulls_unit_is_player(object_index)) &&
-				!object_shield_given(object))
+				(!object_shield_given(object) || firefight_regen == 1))
 			{
 				real shield_recharge =
 					collision_model->resistance.runtime_shield_recharge_velocity;
+
+				/* port: Firefight's SHIELD REGEN ON, at the stock rate where
+				the map's player's shield has none (or none of its own) */
+				if (firefight_regen == 1 &&
+					(shield_recharge < 0.001f || collision_model->resistance.maximum_shield_vitality <= 0.f))
+				{
+					shield_recharge = 1.f / (FIREFIGHT_STOCK_SHIELD_RECHARGE_SECONDS * TICKS_PER_SECOND);
+				}
 
 				/* port: a firing range dummy's recharge, a multiplayer
 				player's */
@@ -2401,10 +2480,12 @@ static long get_player_index_from_object_or_parents(
 			break;
 		}
 
+		/* port: a projectile's owner can be gone by the time it hits (a dead
+		body purged by game_engine_update_purge, a respawned vehicle), and the
+		owner's index is then stale: no player, rather than object_get's halt */
 		object = object_try_and_get(object_index);
 		if (!object)
 			break;
-
 		object_index = object->object.parent_object_index;
 	}
 

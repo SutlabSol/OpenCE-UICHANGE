@@ -6,52 +6,50 @@
 		<on event="back" back="true"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/header_profile_video_settings"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/options_menu"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/note_0" x="54" y="353" platform="android"/>
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/header_profile_video_settings" controller="1" left="35" top="11" width="605" height="59" bitmap="main_menu/settings_select/player_setup/player_profile_edit/video_settings/header_profile_video_settings">
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/note_0" type="text" width="512" height="24" text="The graphics backend and driver change when the game restarts." font="ui\small_ui" color="#FF2896FF" text_x="13" text_y="5" text_flags="no_focus_test" platform="android">
-	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/help" type="text" controller="1" left="68" top="358" width="482" height="54" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/help_strings" font="ui\large_ui" color="#FFFFFFFF">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/help" type="text" controller="1" left="68" top="364" width="482" height="46" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/help_strings" font="ui\large_ui" color="#FFFFFFFF">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/options_menu" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_children" description="main_menu/settings_select/player_setup/player_profile_edit/video_settings/help">
 		<data input="port settings help"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_mode" x="54" y="73" platform="desktop"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_renderer" x="54" y="73" platform="android"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_resolution" x="54" y="101" platform="desktop"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_window_size" x="54" y="101" platform="desktop"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_vk_driver" x="54" y="101" platform="android"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_resolution_scaling" x="54" y="129" platform="desktop"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_resolution" x="54" y="99" platform="desktop"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_window_size" x="54" y="99" platform="desktop"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_vk_driver" x="54" y="99" platform="android"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_resolution_scaling" x="54" y="125" platform="desktop"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_resolution_scaling" x="54" y="73" platform="web"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_resolution_limit_ps5" x="54" y="73" platform="ps5"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_resolution_limit_android" x="54" y="129" platform="android"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_vsync" x="54" y="157" platform="desktop android"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_resolution_limit_android" x="54" y="125" platform="android"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_vsync" x="54" y="151" platform="desktop android"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_vsync" x="54" y="73" platform="switch"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_vsync" x="54" y="101" platform="ps5 web"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_max_fps" x="54" y="185" platform="desktop"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_max_fps" x="54" y="129" platform="web"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_max_fps_android" x="54" y="185" platform="android"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_interpolation" x="54" y="213" platform="desktop android"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_interpolation" x="54" y="101" platform="switch"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_interpolation" x="54" y="129" platform="ps5"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_interpolation" x="54" y="157" platform="web"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_resolution_limit" x="54" y="129" platform="switch"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_dynamic_resolution" x="54" y="157" platform="switch"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_graphics" x="54" y="241" platform="desktop android"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_graphics" x="54" y="185" platform="switch web"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_graphics" x="54" y="157" platform="ps5"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_fov_viewmodels" x="54" y="269" platform="desktop android"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_fov_viewmodels" x="54" y="213" platform="switch web"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_fov_viewmodels" x="54" y="185" platform="ps5"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_performance" x="54" y="241" platform="switch"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_extra_effects" x="54" y="297" platform="desktop android"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_extra_effects" x="54" y="269" platform="switch"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_extra_effects" x="54" y="213" platform="ps5"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_extra_effects" x="54" y="241" platform="web"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_campaign_ai" x="54" y="325" platform="desktop android"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_campaign_ai" x="54" y="297" platform="switch"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_campaign_ai" x="54" y="241" platform="ps5"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_campaign_ai" x="54" y="269" platform="web"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_vsync" x="54" y="99" platform="ps5 web"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_max_fps" x="54" y="177" platform="desktop"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_max_fps" x="54" y="125" platform="web"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_max_fps_android" x="54" y="177" platform="android"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_interpolation" x="54" y="203" platform="desktop android"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_interpolation" x="54" y="99" platform="switch"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_interpolation" x="54" y="125" platform="ps5"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_interpolation" x="54" y="151" platform="web"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_resolution_limit" x="54" y="125" platform="switch"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_dynamic_resolution" x="54" y="151" platform="switch"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_graphics" x="54" y="229" platform="desktop android"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_graphics" x="54" y="177" platform="switch web"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_graphics" x="54" y="151" platform="ps5"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_fov_viewmodels" x="54" y="255" platform="desktop android"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_fov_viewmodels" x="54" y="203" platform="switch web"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_fov_viewmodels" x="54" y="177" platform="ps5"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_performance" x="54" y="229" platform="switch"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_dynamic_lighting" x="54" y="281" platform="desktop android"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_dynamic_lighting" x="54" y="255" platform="switch"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_dynamic_lighting" x="54" y="203" platform="ps5"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_dynamic_lighting" x="54" y="229" platform="web"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_extra_effects" x="54" y="307" platform="desktop android"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_extra_effects" x="54" y="255" platform="web"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_campaign_ai" x="54" y="333" platform="desktop android"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_campaign_ai" x="54" y="281" platform="switch web"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_campaign_ai" x="54" y="229" platform="ps5"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/button_bar" y="414"/>
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
@@ -215,13 +213,21 @@
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/performance_label" type="text" controller="1" width="512" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/labels" string_index="16" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_extra_effects" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_dynamic_lighting" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<on event="a" open="main_menu/settings_select/player_setup/player_profile_edit/video_settings/dynamic_lighting/dynamic_lighting_settings_screen"/>
+		<on event="start" open="main_menu/settings_select/player_setup/player_profile_edit/video_settings/dynamic_lighting/dynamic_lighting_settings_screen"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/dynamic_lighting_label"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/dynamic_lighting_label" type="text" controller="1" width="512" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/labels" string_index="17" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_extra_effects" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF" platform="desktop android web">
 		<on event="a" open="main_menu/settings_select/player_setup/player_profile_edit/video_settings/extra_effects/extra_effects_settings_screen"/>
 		<on event="start" open="main_menu/settings_select/player_setup/player_profile_edit/video_settings/extra_effects/extra_effects_settings_screen"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/extra_effects_label"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/extra_effects_label" type="text" controller="1" width="512" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/labels" string_index="17" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/extra_effects_label" type="text" controller="1" width="512" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/labels" string_index="18" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/op_campaign_ai" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<on event="a" open="main_menu/settings_select/player_setup/player_profile_edit/video_settings/campaign_ai/campaign_ai_settings_screen"/>
@@ -229,7 +235,7 @@
 		<on event="left_mouse" run="mouse emit accept event"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/campaign_ai_label"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/campaign_ai_label" type="text" controller="1" width="512" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/labels" string_index="18" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/campaign_ai_label" type="text" controller="1" width="512" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/labels" string_index="19" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/button_defaults" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" string_list="strings/common_button_captions" string_index="3" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
 		<on event="a" run="port settings defaults"/>
@@ -259,6 +265,7 @@
 		<string text="GRAPHICS:"/>
 		<string text="FOV AND VIEWMODELS:"/>
 		<string text="PERFORMANCE:"/>
+		<string text="DYNAMIC LIGHTING:"/>
 		<string text="EXTRA EFFECTS:"/>
 		<string text="CAMPAIGN AI:"/>
 	</strings>
@@ -268,7 +275,7 @@
 		<string text="How the game draws: Vulkan, or OpenGL ES. Takes\neffect the next time the game starts."/>
 		<string text="What fullscreen and borderless draw at. Fullscreen\nsets the display to it; borderless scales it."/>
 		<string text="The window's size: 4:3, then 16:10, 16:9 and 21:9\n(its edges can also be dragged)."/>
-		<string text="The phone's own driver, or a zip from the drivers\nfolder (Turnip's, or one IMPORT DRIVER adds)."/>
+		<string text="The phone's own driver, or a zip IMPORT DRIVER\nadds. Takes effect the next time the game starts."/>
 		<string text="Native draws at the resolution, 75% to 25% that\npart each way; Original, the Xbox's 480 lines."/>
 		<string text="The most lines the game draws at, no more than\nthe display shows. Changes at once."/>
 		<string text="The most lines the game draws at, no more than\nthe screen has. More are sharper, and slower."/>
@@ -281,8 +288,8 @@
 		<string text="The HUD, text, anti-aliasing, shadows,\nlighting and HDR."/>
 		<string text="The field of view and the first-person\nweapon. Their defaults keep the stock view."/>
 		<string text="How fast the console runs the game: a steadier\nframe rate, or a cooler console."/>
-		<string text="Visual modifiers the stock game does not\nhave, such as the shield glow."/>
+		<string text="Added light from projectiles, weapons and\nenergy shields. Added lights default to off."/>
+		<string text="Visual modifiers the stock game does not\nhave, such as HDR and overshields."/>
 		<string text="MENDICANT AI: Marines and Covenant fighting\nas units, and how well they aim and fire."/>
 	</strings>
 </menus>
-

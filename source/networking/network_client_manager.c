@@ -383,10 +383,14 @@ symbols in this file:
 #include "main/main.h"
 #include "memory/data.h"
 #include "networking/network_client_manager.h"
+#include "mcc_load_network.h" /* port: bounded MCC conversion wait */
 #include "networking/network_client_message_handler.h"
 #include "networking/network_connection.h"
 #include "networking/network_game_globals.h"
 #include "networking/network_game_manager.h"
+void network_game_client_reset_settings_staging(void); /* port: discard partial settings across connections */
+#include "mcc_cache.h" /* port: MCC-only origin-change admission guard */
+#include "mcc_identity.h" /* port: MCC content admission and local package resolution */
 #include "networking/network_game_protocol.h"
 #include "networking/network_messages.h"
 #include "networking/network_server_manager.h"
@@ -395,6 +399,8 @@ symbols in this file:
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
 #include "randomizer.h" /* port: port/linux/game/randomizer.c */
 #include "tag_pack.h" /* port: port/linux/game/tag_pack.c */
+#include "network_extensions.h" /* port: port/linux/game/network_extensions.c */
+#include "network_delta.h" /* port: port/linux/game/network_delta.c */
 
 /* ---------- constants */
 
@@ -623,6 +629,7 @@ struct message_client_join_game_request
 	zero for none (port/linux/src/player_link.c) */
 	byte link_pass[170];
 	byte link_proof[64];
+	word network_version; /* port: shared agreement before host admission */
 };
 
 struct message_client_map_is_precached_pregame
@@ -751,7 +758,7 @@ typedef char message_client_ping_size_assert[
 	sizeof(struct message_client_ping) == 8 ? 1 : -1];
 /* (port: and a Discord account's pass and proof after the Xbox's 0x70) */
 typedef char message_client_join_game_request_size_assert[
-	sizeof(struct message_client_join_game_request) == 0x70 + 170 + 64 ? 1 : -1];
+	sizeof(struct message_client_join_game_request) == 0x70 + 170 + 64 + 2 ? 1 : -1];
 typedef char network_game_client_seconds_to_game_start_offset_assert[
 	offsetof(struct network_game_client, seconds_to_game_start) == NETWORK_GAME_CLIENT_TAIL_OFFSET + 0x10 ? 1 : -1];
 typedef char network_game_client_error_offset_assert[
@@ -956,6 +963,9 @@ void network_game_client_dispose(
 	network_replay_playback_stop();
 	if (client)
 	{
+		network_game_client_reset_settings_staging(); /* port: discard partial old-host settings */
+		mcc_identity_disconnect(); /* port: discard the MCC session's local binding */
+		network_delta_stop(); /* port: BYE to a Delta host that welcomed this machine */
 		if (client->connection)
 			network_connection_delete(client->connection);
 
@@ -1067,6 +1077,7 @@ boolean network_game_client_switch_to_pregame(
 		network_game_reset_for_next_round(&client->game, TRUE);
 		network_connection_keep_alive(client->connection);
 		client->next_update_number = 0;
+		network_game_client_reset_settings_staging(); /* port: discard the previous host's partial record */
 		client->join_in_progress = TRUE;
 		client->connection_silent = FALSE;
 		client->state = _network_game_client_state_pregame;
@@ -1311,6 +1322,9 @@ boolean network_game_client_idle(
 		0xC6,
 		client);
 
+	/* port: Delta Peer's handshake, never waited on (network_delta.c) */
+	network_delta_update();
+
 	switch (client->state)
 	{
 	case _network_game_client_state_searching:
@@ -1380,9 +1394,19 @@ boolean network_game_client_game_settings_updated(
 			return FALSE;
 		}
 		if (csstrcmp(message_packet->map.name, client->game.map.name) ||
-			message_packet->map.version != client->game.map.version)
+			/* port: MCC validation also belongs to the advertised origin in the name tail. */
+			(mcc_level_name(message_packet->map.name) &&
+			 memcmp(message_packet->map.name, client->game.map.name, sizeof(message_packet->map.name))) ||
+			message_packet->map.version != client->game.map.version ||
+			/* port: the host's MCC content may change without changing its stored checksum */
+			memcmp(message_packet->mcc_content_sha256, client->game.mcc_content_sha256, 32) ||
+			/* port: a changed MCC campaign manifest also requires admission. */
+			memcmp(message_packet->mcc_metadata_sha256, client->game.mcc_metadata_sha256, 32))
 		{
 			char build[0x20];
+
+			/* port: resolve MCC locally before native presence checks, retaining the host's wire name */
+			if (!mcc_identity_accept(message_packet)) return FALSE;
 
 			/* port: a map this machine has not (a Custom Edition map not in
 			its custom_maps folder, or another version of it than the host's,
@@ -1587,6 +1611,12 @@ boolean network_game_client_add_player(
 		0x530,
 		client && (local_player_index>=0) && (local_player_index<MAXIMUM_NUMBER_OF_LOCAL_PLAYERS));
 
+	/* port: hosting from the menus, the server has no player of its own:
+	the host's controller works its screen (port/linux/game/host_dashboard.c),
+	and the pregame screen's joins (its controllers signed in) are none */
+	if (halo_server_hosting())
+		return TRUE;
+
 	/* port: not until the host's settings name the game's map, and a game
 	in progress whose map is being downloaded not until it is (map sharing:
 	port/linux/game/map_share.c); asked again each frame */
@@ -1741,6 +1771,11 @@ boolean network_game_client_handle_game_update(
 			message_packet->game_time - game_time_get(),
 			message_packet->game_time);
 		game_time_set_distributed(message_packet->game_time);
+	}
+	else
+	{
+		/* port: smaller deficits need simulation ticks too, bounded per frame. */
+		game_time_synchronize_distributed(message_packet->game_time);
 	}
 
 	return TRUE;
@@ -1929,11 +1964,45 @@ boolean network_game_client_remove_player(
 				}
 			}
 
+			/* port: a local player who leaves while another remains no longer has
+			its slot: its entry in the local players is cleared here, as the datum
+			stays until a joiner takes the slot (network_game_spawn_player), which
+			then deletes it and makes another with a new identifier, and the entry
+			would name a player that no longer exists (player_get halts on it). The
+			last to leave ends the game, whose sounds and views still name it until
+			then, so its entry stays */
+			if (network_player_index != MAXIMUM_NUMBER_OF_PLAYERS &&
+				player->machine_index == client->machine_index &&
+				player->controller_index >= 0 && player->controller_index < MAXIMUM_LOCAL_PLAYERS &&
+				local_player_get_player_index(player->controller_index) == player_index)
+			{
+				local_player_set_player_index(player->controller_index, NONE);
+				/* (and its control, which names its unit: the datum no longer has a
+				local player index, so the host deleting the unit does not reset it
+				(network_player_detach_unit), and player_control_update would get a
+				unit that is gone) */
+				player_control_new_unit(player->controller_index, NONE);
+			}
+
 			/* port: a dedicated server's own machine never has a player
 			(port/linux/game/server_director.c): it leaves only when a player
 			of its own goes, which none is; nor has a replay's playback, which
 			plays on as the game's players leave
 			(port/linux/game/network_replay_playback.c) */
+			/* port: a split screen player of this machine who quit, the others
+			staying: their view goes, the others' filling the screen (and
+			their menus close); the unit dies at the quit (game.c) */
+			if (reason != NONE && player->machine_index == client->machine_index &&
+				network_player_index < MAXIMUM_NUMBER_OF_PLAYERS &&
+				VALID_INDEX(player->controller_index, MAXIMUM_NUMBER_OF_LOCAL_PLAYERS) &&
+				local_player_get_player_index(player->controller_index) == player_index)
+			{
+				extern void ui_widgets_port_close_for_controller(short controller_index);
+
+				local_player_set_player_index(player->controller_index, NONE);
+				ui_widgets_port_close_for_controller(player->controller_index);
+				network_event("local player #%d left, the others staying", player->controller_index);
+			}
 			if (network_player_index == MAXIMUM_NUMBER_OF_PLAYERS && !network_replay_playing() &&
 				(!halo_server_mode() || player->machine_index == client->machine_index))
 			{
@@ -1981,6 +2050,9 @@ void network_game_client_accepted_into_game(
 		network_event(
 			"successfully joined a net game; our machine is #%d",
 			message_packet->machine_index);
+		/* port: HELLO to a Delta host (network_delta.c) */
+		network_delta_accepted(message_packet->machine_index, source_address->address.long_words[0],
+			source_address->port);
 
 		network_game_generate_local_machine_name(settings_request.machine_name);
 		settings_request.machine_index = (char)message_packet->machine_index;
@@ -2186,6 +2258,8 @@ boolean network_game_client_initiate_join_game(
 		/* port: the host's randomizer setup, if this game is one
 		(port/linux/game/randomizer.c) */
 		network_game_client_randomizer_game = game_index;
+		/* port: a Delta host is said HELLO once joined (network_delta.c) */
+		network_delta_join_started(game_index);
 		if (game_index >= 0 && game_index < MAXIMUM_NETWORK_ADVERTISED_GAMES)
 		{
 			extern void randomizer_set_remote(int on, unsigned char const *setup, unsigned char crazy);
@@ -2348,6 +2422,8 @@ void network_game_client_reset(
 		client);
 
 	network_game_invalidate(&client->game);
+	/* port: a host's capabilities are its game's (port/linux/game/network_extensions.c) */
+	network_extensions_client_reset();
 
 	client->machine_index = NONE;
 	client->state = _network_game_client_state_searching;
@@ -2783,6 +2859,11 @@ static boolean add_advertised_game(
 			}
 			network_game_client_advertised_versions[game_index].kind =
 				advertisement->__unknown5A[HALO_PORT_ADVERTISED_KIND_OFFSET];
+			/* (port: a Delta host's game, network_delta.c, whose kind byte is
+			the kind only in a Slayer game: in another its host's Delta major) */
+			network_delta_advertised(game_index, advertisement->__unknown5A, sizeof(advertisement->__unknown5A));
+			if (network_delta_speaks(game_index) && advertisement->engine_type != game_engine_slayer)
+				network_game_client_advertised_versions[game_index].kind = 0;
 		}
 
 		if (advertisement->game_name[0] != L'\0')
@@ -3114,7 +3195,10 @@ static boolean network_game_client_idle_joining(
 				message_header *message;
 
 				csmemset(&join_game_request, 0, sizeof(join_game_request));
+				join_game_request.network_version = HALO_PORT_NETWORK_VERSION; /* port: explicit shared agreement */
 				network_game_generate_local_machine_name(join_game_request.machine_name);
+				/* port: marked for a Delta host, which then waits for this machine's HELLO */
+				network_delta_mark_join(join_game_request.machine_name, MAXIMUM_MACHINE_NAME_LENGTH);
 				csmemcpy(
 					join_game_request.join_token,
 					client->join_parameters.join_token,
@@ -3354,6 +3438,14 @@ static boolean network_game_client_idle_ingame(
 		client->connection_silent = connection_stale;
 	}
 
+	/* port: progressing MCC conversion has an absolute limit too, even when
+	 * the host keeps writing while its synchronous map conversion runs. */
+	if (success && mcc_load_network_client_expired())
+	{
+		network_event("MCC loading exceeded its bounded conversion window");
+		display_error_when_main_menu_loaded(_error_network_connection_lost);
+		success = FALSE;
+	}
 	if (success == TRUE)
 	{
 		success = network_connection_idle(client->connection, started ? 15000 : 75000, NULL);

@@ -17,6 +17,10 @@ Register values are clamped to [-1, 1] between stages, as on the hardware.
 
 #include "xgpu.h"
 #include "port_config.h"
+#include "mcc_environment_shader.h"
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+#include "plasma_model_shader.h"
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -178,7 +182,7 @@ static const char *output_mapping(unsigned long flags)
 
 /* ---------- one general combiner stage */
 
-static void combiner_stage(struct xgpu_text *text, const DWORD *state, int stage)
+static void combiner_stage(struct xgpu_text *text, const DWORD *state, int stage, BOOL mcc_bump)
 {
 	DWORD combiner_count = state[D3DRS_PSCOMBINERCOUNT];
 	BOOL unique_c0 = (combiner_count & 0x1000) != 0;
@@ -208,7 +212,9 @@ static void combiner_stage(struct xgpu_text *text, const DWORD *state, int stage
 		combiner_input(text, inputs & 0xff, alpha, stage, unique_c0, unique_c1);
 		xgpu_text_append(text, ";\n");
 
-		if (!alpha && (flags & 0x02))
+		if (mcc_bump && !alpha && inputs == 0x484B0A01 && (flags & 0x02))
+			mcc_environment_shader_emit(text);
+		else if (!alpha && (flags & 0x02))
 			xgpu_text_append(text, "\t\tvec3 cAB = vec3(dot(cA, cB));\n");
 		else
 			xgpu_text_append(text, "\t\t%s %sAB = %sA * %sB;\n", type, prefix, prefix, prefix);
@@ -571,10 +577,23 @@ world position the vertex program hands on and the same constants
 terms, clamped where the programs clamp them. The diffuse alpha, which the
 programs write apart (0, or planar fog's), is kept. */
 
-static void model_lighting(struct xgpu_text *text, BOOL point_lights)
+static void model_lighting(struct xgpu_text *text, BOOL point_lights, unsigned int plasma)
 {
 	int light;
 
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	/* (the dynamic lighting's model variant: the selected point lights'
+	squared falloff and visibility fields, as nv2a_psh_vk.c) */
+	if (!point_lights)
+		plasma = 0;
+	if (plasma)
+	{
+		xgpu_text_append(text, "%s", xgpu_plasma_model_declarations);
+		plasma_model_emit_pixel(text, plasma);
+	}
+#else
+	plasma = 0;
+#endif
 	xgpu_text_append(text,
 		"uniform vec4 model_lights[%d];\n"
 		"in vec4 xWorldNormal;\n"
@@ -601,12 +620,19 @@ static void model_lighting(struct xgpu_text *text, BOOL point_lights)
 			"\t{\n"
 			"\t\tvec3 to_light = model_lights[%d].xyz - xWorldPosition;\n"
 			"\t\tfloat distance_squared = dot(to_light, to_light);\n"
-			"\t\tvec3 l = to_light * inversesqrt(max(distance_squared, 1.0e-12));\n"
-			"\t\tlight += max(1.0 - distance_squared * model_lights[%d].w, 0.0) * clamp(dot(l, n), 0.0, 1.0) *\n"
+			"\t\tvec3 l = to_light * inversesqrt(max(distance_squared, 1.0e-12));\n", first);
+		if (plasma)
+			xgpu_text_append(text,
+				"\t\tlight += plasma_model_falloff(max(1.0 - distance_squared * model_lights[%d].w, 0.0), "
+				"plasma_model_parameters[%d], %d, xWorldPosition) * clamp(dot(l, n), 0.0, 1.0) *\n", first, light, light);
+		else
+			xgpu_text_append(text,
+				"\t\tlight += max(1.0 - distance_squared * model_lights[%d].w, 0.0) * clamp(dot(l, n), 0.0, 1.0) *\n", first);
+		xgpu_text_append(text,
 			"\t\t\tclamp(dot(l, -model_lights[%d].xyz) * model_lights[%d].w + model_lights[%d].w, 0.0, 1.0) *\n"
 			"\t\t\tmodel_lights[%d].xyz;\n"
 			"\t}\n",
-			first, first, first + 1, first + 1, first + 2, first + 2);
+			first + 1, first + 1, first + 2, first + 2);
 	}
 	xgpu_text_append(text, "\treturn clamp(light, 0.0, 1.0);\n}\n");
 }
@@ -652,7 +678,7 @@ char *nv2a_pixel_shader_to_glsl(const struct nv2a_pixel_shader_key *key)
 	if (key->source_blend)
 		xgpu_text_append(&text, "uniform vec4 blend_constant;\n");
 	if (key->per_pixel_lighting)
-		model_lighting(&text, key->per_pixel_lighting == 2);
+		model_lighting(&text, key->per_pixel_lighting == 2, key->plasma_model);
 	xgpu_text_append(&text,
 		"float signed_byte(float x)\n"
 		"{\n"
@@ -706,7 +732,7 @@ char *nv2a_pixel_shader_to_glsl(const struct nv2a_pixel_shader_key *key)
 		"\tvec4 r1 = vec4(0.0);\n");
 
 	for (stage = 0; stage < (int)combiner_count; stage++)
-		combiner_stage(&text, state, stage);
+		combiner_stage(&text, state, stage, key->mcc_bump_attenuation);
 
 	if (final_abcd == 0 && final_efg == 0)
 	{

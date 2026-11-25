@@ -4,7 +4,7 @@ FIREFIGHT_NETWORK.C
 Host -> Client Firefight state synchronization:
 - Synchronizes Set, Round, Wave, Phase, Session Elapsed Time, Next Wave Timer,
   Shared Lives Pool, Active Skulls, Team Score, Enemies Alive, Generator Health/Shield/Lockdown,
-  and Per-Player Scores/Kills/Assists.
+  Per-Player Scores/Kills/Assists, and the objectives (firefight_objectives.c).
 */
 
 #include <string.h>
@@ -54,7 +54,38 @@ struct firefight_net_packet
 	long player_score[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
 	short player_kills[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
 	short player_assists[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
+	/* (mod version 103) the ordnance pods: where each lands, and the game
+	time they were let go at (NONE: none), which each machine shows falling */
+	real_point3d ordnance_positions[FIREFIGHT_ORDNANCE_PODS_BEFORE_104];
+	long ordnance_pod_drop_time;
+	byte ordnance_pod_count;
+	byte ordnance_heavy;
+	/* (port) each player's set of pods (ordnance_pods_per_player), 0 from a
+	host before it: one set for all */
+	byte ordnance_pods_per_player;
+	byte pad[1];
+	/* (mod version 104) the rest, a weapon a pod */
+	real_point3d more_ordnance_positions[FIREFIGHT_MAX_ORDNANCE_PODS - FIREFIGHT_ORDNANCE_PODS_BEFORE_104];
+	/* (mod version 105) each pod's player, what it brings, and those used up */
+	byte ordnance_pod_owners[FIREFIGHT_MAX_ORDNANCE_PODS];
+	byte ordnance_pod_kinds[FIREFIGHT_MAX_ORDNANCE_PODS];
+	unsigned long ordnance_pod_spent[(FIREFIGHT_MAX_ORDNANCE_PODS + 31) / 32];
+	/* (mod version 106) the Flood's drop: the game time it started at (NONE:
+	none), where and its facing, which each machine grows */
+	long flood_drop_time;
+	real_point3d flood_drop_position;
+	real flood_drop_facing;
+	/* (mod version 111) the objectives as the host has them
+	(firefight_objectives.c), which each machine shows */
+	struct firefight_objectives_view objectives;
 };
+
+/* (a host's or a replay's state from before the pods: all but them; and
+from before a weapon a pod: four at most) */
+#define FIREFIGHT_NET_PACKET_BEFORE_POD offsetof(struct firefight_net_packet, ordnance_positions)
+#define FIREFIGHT_NET_PACKET_BEFORE_104 offsetof(struct firefight_net_packet, more_ordnance_positions)
+#define FIREFIGHT_NET_PACKET_BEFORE_106 offsetof(struct firefight_net_packet, flood_drop_time)
+#define FIREFIGHT_NET_PACKET_BEFORE_111 offsetof(struct firefight_net_packet, objectives)
 
 /* ---------- public code */
 
@@ -116,6 +147,24 @@ long firefight_write_network_state(
 		pkt.player_kills[i] = ff_state.player_stats[i].kills;
 		pkt.player_assists[i] = ff_state.player_stats[i].assists;
 	}
+	for (i = 0; i < FIREFIGHT_MAX_ORDNANCE_PODS; i++)
+	{
+		if (i < FIREFIGHT_ORDNANCE_PODS_BEFORE_104)
+			pkt.ordnance_positions[i] = ff_state.ordnance_pod_positions[i];
+		else
+			pkt.more_ordnance_positions[i - FIREFIGHT_ORDNANCE_PODS_BEFORE_104] = ff_state.ordnance_pod_positions[i];
+	}
+	pkt.ordnance_pod_count = (byte)PIN(ff_state.ordnance_pod_count, 0, FIREFIGHT_MAX_ORDNANCE_PODS);
+	pkt.ordnance_pod_drop_time = ff_state.ordnance_pod_drop_time;
+	pkt.ordnance_heavy = ff_state.last_ordnance_is_heavy ? 1 : 0;
+	pkt.ordnance_pods_per_player = (byte)PIN(ff_state.ordnance_pods_per_player, 0, 255);
+	csmemcpy(pkt.ordnance_pod_owners, ff_state.ordnance_pod_owners, sizeof(pkt.ordnance_pod_owners));
+	csmemcpy(pkt.ordnance_pod_kinds, ff_state.ordnance_pod_kinds, sizeof(pkt.ordnance_pod_kinds));
+	csmemcpy(pkt.ordnance_pod_spent, ff_state.ordnance_pod_spent, sizeof(pkt.ordnance_pod_spent));
+	pkt.flood_drop_time = ff_state.flood_drop_time;
+	pkt.flood_drop_position = ff_state.flood_drop_position;
+	pkt.flood_drop_facing = ff_state.flood_drop_facing;
+	pkt.objectives = *firefight_objectives_view_get();
 
 	csmemcpy(buffer, &pkt, sizeof(pkt));
 	return (long)sizeof(pkt);
@@ -130,10 +179,13 @@ boolean firefight_read_network_state(
 	short i;
 
 	(void)first;
-	if (!buffer || size < (long)sizeof(pkt))
+	if (!buffer || size < (long)FIREFIGHT_NET_PACKET_BEFORE_POD)
 		return FALSE;
 
-	csmemcpy(&pkt, buffer, sizeof(pkt));
+	csmemset(&pkt, 0, sizeof(pkt));
+	pkt.ordnance_pod_drop_time = NONE;
+	pkt.flood_drop_time = NONE;
+	csmemcpy(&pkt, buffer, (size_t)MIN(size, (long)sizeof(pkt)));
 
 	ff_state.current_set = pkt.current_set;
 	ff_state.current_round = pkt.current_round;
@@ -194,6 +246,42 @@ boolean firefight_read_network_state(
 		ff_state.player_stats[i].kills = pkt.player_kills[i];
 		ff_state.player_stats[i].assists = pkt.player_assists[i];
 	}
+	if (pkt.ordnance_pod_drop_time != NONE && pkt.ordnance_pod_drop_time > 0)
+	{
+		for (i = 0; i < FIREFIGHT_MAX_ORDNANCE_PODS; i++)
+		{
+			ff_state.ordnance_pod_positions[i] = i < FIREFIGHT_ORDNANCE_PODS_BEFORE_104 ? pkt.ordnance_positions[i] :
+				pkt.more_ordnance_positions[i - FIREFIGHT_ORDNANCE_PODS_BEFORE_104];
+		}
+		ff_state.ordnance_pod_count = (short)PIN(pkt.ordnance_pod_count, 1,
+			size >= (long)FIREFIGHT_NET_PACKET_BEFORE_104 + (long)sizeof(pkt.more_ordnance_positions) ?
+			FIREFIGHT_MAX_ORDNANCE_PODS : FIREFIGHT_ORDNANCE_PODS_BEFORE_104);
+		ff_state.last_ordnance_position = pkt.ordnance_positions[0];
+		ff_state.last_ordnance_is_heavy = pkt.ordnance_heavy != 0;
+		ff_state.ordnance_pods_per_player = pkt.ordnance_pods_per_player;
+		/* (a host from before: weapons all, the sets by ordnance_pods_per_player) */
+		if (size >= (long)FIREFIGHT_NET_PACKET_BEFORE_106)
+		{
+			csmemcpy(ff_state.ordnance_pod_owners, pkt.ordnance_pod_owners, sizeof(ff_state.ordnance_pod_owners));
+			csmemcpy(ff_state.ordnance_pod_kinds, pkt.ordnance_pod_kinds, sizeof(ff_state.ordnance_pod_kinds));
+		}
+		else
+		{
+			csmemset(ff_state.ordnance_pod_owners, FIREFIGHT_ORDNANCE_POD_ANYONE, sizeof(ff_state.ordnance_pod_owners));
+			csmemset(ff_state.ordnance_pod_kinds, _ff_pod_kind_weapon, sizeof(ff_state.ordnance_pod_kinds));
+		}
+	}
+	if (size >= (long)FIREFIGHT_NET_PACKET_BEFORE_106)
+		csmemcpy(ff_state.ordnance_pod_spent, pkt.ordnance_pod_spent, sizeof(ff_state.ordnance_pod_spent));
+	else
+		csmemset(ff_state.ordnance_pod_spent, 0, sizeof(ff_state.ordnance_pod_spent));
+	ff_state.ordnance_pod_drop_time = pkt.ordnance_pod_drop_time;
+	ff_state.flood_drop_time = pkt.flood_drop_time;
+	ff_state.flood_drop_position = pkt.flood_drop_position;
+	ff_state.flood_drop_facing = pkt.flood_drop_facing;
+	/* (a host from before them: none) */
+	if (size >= (long)sizeof(pkt))
+		firefight_objectives_view_set(&pkt.objectives);
 
 	return TRUE;
 }

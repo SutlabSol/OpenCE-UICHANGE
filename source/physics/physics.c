@@ -117,6 +117,7 @@ symbols in this file:
 #include "units/bipeds.h"
 #include "units/unit_definitions.h"
 #include "units/vehicles.h"
+#include "vehicle_riding.h" /* port: port/linux/game/vehicle_riding.c */
 
 /* ---------- constants */
 
@@ -772,6 +773,38 @@ static void friction_evaluate(
 	return;
 }
 
+/* port: Forge's GRAVITY volumes (port/forge/src/forge_volumes.c): FALSE
+outside them, else the pull there in units of global_gravity, the way
+things fall */
+extern int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
+
+/* port: the gravity on an object: its force (the world's, straight down, or
+a GRAVITY volume's pull at its middle, times its mass and its gravity scale),
+and how hard the ground holds it up, as stiff as that pull is strong, so a
+strong one sinks it no deeper */
+static void physics_object_gravity(
+	long object_index,
+	struct physics_definition const *physics,
+	real_vector3d *force,
+	real *ground_gravity)
+{
+	struct object_datum *object = object_get(object_index);
+	real gravity = physics->gravity_scale*global_gravity;
+	float pull[3];
+
+	set_real_vector3d(force, 0.0f, 0.0f, -physics->mass*gravity);
+	*ground_gravity = global_gravity;
+	if (forge_volumes_gravity_at(object->object.bounding_sphere_center.x, object->object.bounding_sphere_center.y,
+		object->object.bounding_sphere_center.z, pull))
+	{
+		real strength = (real)sqrt((double)(pull[0]*pull[0] + pull[1]*pull[1] + pull[2]*pull[2]));
+
+		set_real_vector3d(force, physics->mass*gravity*pull[0], physics->mass*gravity*pull[1],
+			physics->mass*gravity*pull[2]);
+		*ground_gravity = global_gravity*MAX(1.0f, strength);
+	}
+}
+
 void physics_compute_new(
 	struct physics_instance const *instance,
 	struct powered_mass_point_datum const *powered_mass_points,
@@ -782,13 +815,15 @@ void physics_compute_new(
 	struct object_datum *object = object_get(instance->object_index);
 	struct physics_definition const *physics = instance->physics;
 	real gravity = physics->gravity_scale*global_gravity;
+	real ground_gravity;
 	short mass_point_index;
 	/* port: no more mass points than the caller's arrays hold, nor a
 	powered one the physics does not have (physics_mass_point_count,
 	physics_powered_mass_point_index) */
 	short mass_point_count = physics_mass_point_count(physics);
 
-	set_real_vector3d(total_force, 0.0f, 0.0f, -physics->mass*gravity);
+	/* port: a GRAVITY volume's pull (physics_object_gravity) */
+	physics_object_gravity(instance->object_index, physics, total_force, &ground_gravity);
 	set_real_vector3d(total_torque, 0.0f, 0.0f, 0.0f);
 
 	memset(mass_points, 0, sizeof(struct mass_point_datum)*mass_point_count);
@@ -868,7 +903,7 @@ void physics_compute_new(
 
 			normal_velocity = dot_product3d(&mass_point->velocity, &mass_point->ground_plane.n);
 			mass_point->normal_force_magnitude = physics->mass*
-				(global_gravity/ground_depth*mass_point->ground_depth - normal_velocity*ground_damp_fraction);
+				(ground_gravity/ground_depth*mass_point->ground_depth - normal_velocity*ground_damp_fraction);
 			scale_vector3d(&mass_point->ground_plane.n, mass_point->normal_force_magnitude, &mass_point->normal_force);
 
 			scale_vector3d(&mass_point->ground_plane.n, -normal_velocity, &mass_point->velocity_relative_to_ground);
@@ -1056,15 +1091,104 @@ void physics_compute_new(
 	return;
 }
 
+/* port: the original's push, from the vehicle's centre to the biped's,
+lifted, at least 0.1, half the vehicle's velocity added
+(physics_compute_biped_collision; a function because a rider's own tick
+(biped_riding_contacts in vehicle_riding_bipeds.c) deals the crush along it too) */
+void physics_biped_vehicle_collision_push(
+	long vehicle_index,
+	long biped_index,
+	real_vector3d *acceleration)
+{
+	struct unit_datum *vehicle = vehicle_get(vehicle_index);
+	struct biped_datum *biped = biped_get(biped_index);
+	real vehicle_speed = magnitude3d(&vehicle->object.translational_velocity);
+
+	vector_from_points3d(
+		&vehicle->object.bounding_sphere_center,
+		&biped->object.bounding_sphere_center,
+		acceleration);
+	normalize3d(acceleration);
+	acceleration->k += 0.8f;
+	normalize3d(acceleration);
+	scale_vector3d(acceleration, MAX(vehicle_speed, 0.1f), acceleration);
+	add_vectors3d(acceleration, &vehicle->object.translational_velocity, acceleration);
+	scale_vector3d(acceleration, 0.5f, acceleration);
+}
+
+/* port: the original vehicle collision damage, along the push: to the
+biped, owned by the vehicle's driver, and the kill effect on the vehicle
+(physics_compute_biped_collision; a function because a rider's own tick
+(biped_riding_contacts in vehicle_riding_bipeds.c) deals it too) */
+void physics_biped_vehicle_collision_damage(
+	long vehicle_index,
+	long biped_index,
+	real_vector3d const *acceleration)
+{
+	static real scales[] = { 0.5f, 0.25f, 1.0f };
+	struct unit_datum *vehicle = vehicle_get(vehicle_index);
+	struct biped_datum *biped = biped_get(biped_index);
+	struct game_globals_falling_damage *falling_damage = TAG_BLOCK_GET_ELEMENT(
+		&scenario_get_game_globals()->falling_damage,
+		0,
+		struct game_globals_falling_damage);
+
+	if (falling_damage->vehicle_collision_damage.index != NONE)
+	{
+		long responsible_object_index = vehicle_index;
+		struct object_datum *responsible_object = (struct object_datum *)vehicle;
+		struct damage_data damage;
+
+		if (vehicle->unit.driver_object_index != NONE)
+		{
+			responsible_object_index = vehicle->unit.driver_object_index;
+			responsible_object = object_get(responsible_object_index);
+		}
+
+		damage_data_new(&damage, falling_damage->vehicle_collision_damage.index);
+		damage.scale = 1.0f;
+		SET_FLAG(damage.flags, _damage_area_of_effect_bit, TRUE);
+		damage.owner_player_index = responsible_object->object.owner_player_index;
+		damage.owner_object_index = responsible_object->object.owner_object_index != NONE ?
+			responsible_object->object.owner_object_index : responsible_object_index;
+		damage.owner_team_index = responsible_object->object.owner_team_index;
+		damage.origin = biped->object.bounding_sphere_center;
+		damage.epicenter = vehicle->object.bounding_sphere_center;
+		damage.direction = *acceleration;
+		normalize3d(&damage.direction);
+		object_cause_damage(&damage, biped_index, NONE, NONE, NONE, NULL);
+	}
+
+	if (falling_damage->vehicle_killed_unit_damage_effect.index != NONE)
+	{
+		struct unit_definition *unit_definition = unit_definition_get(biped->definition_index);
+		struct damage_data damage;
+
+		damage_data_new(&damage, falling_damage->vehicle_killed_unit_damage_effect.index);
+		match_assert(
+			"c:\\halo\\SOURCE\\physics\\physics.c",
+			830,
+			unit_definition->unit.blip_type>=0 && unit_definition->unit.blip_type<NUMBEROF(scales));
+		damage.scale = scales[unit_definition->unit.blip_type];
+		damage.origin = biped->object.bounding_sphere_center;
+		scale_vector3d(acceleration, -1.0f, &damage.direction);
+		object_cause_damage(&damage, vehicle_index, NONE, NONE, NONE, NULL);
+	}
+}
+
 static boolean physics_compute_biped_collision(
 	struct collision_model_instance *instance,
 	long biped_index)
 {
-	static real scales[] = { 0.5f, 0.25f, 1.0f };
 	boolean collision = FALSE;
 	real_point3d base;
 	real height;
 	real width;
+	/* port: the plane of the vehicle's feature the base is deepest in, when
+	the features found the contact (vehicle_riding.c: the way the biped's own
+	tick moves it out of the vehicle) */
+	real_vector3d contact_normal;
+	boolean have_contact_normal = FALSE;
 
 	biped_get_physics_pill(biped_index, &base, &height, &width);
 
@@ -1092,7 +1216,13 @@ static boolean physics_compute_biped_collision(
 			feature_width,
 			&features);
 		if (collision_features_test_point(&features, &base, &collision_plane))
+		{
 			collision = TRUE;
+			/* port: (its normal faces out of the vehicle toward the base,
+			vehicle_riding.c) */
+			contact_normal = collision_plane.plane.n;
+			have_contact_normal = TRUE;
+		}
 	}
 
 	if (collision)
@@ -1103,17 +1233,19 @@ static boolean physics_compute_biped_collision(
 		real_vector3d acceleration;
 		real_point3d new_position;
 		boolean cause_damage = TRUE;
+		/* port: a biped standing on this vehicle, just off it or in the air
+		over it (vehicle_riding.c: a touch the vehicle does not hit is
+		recorded for the biped's own tick) */
+		short riding = biped_riding_collision(biped_index, instance->object_index,
+			have_contact_normal ? &contact_normal : NULL, &base, height);
 
-		vector_from_points3d(
-			&vehicle->object.bounding_sphere_center,
-			&biped->object.bounding_sphere_center,
-			&acceleration);
-		normalize3d(&acceleration);
-		acceleration.k += 0.8f;
-		normalize3d(&acceleration);
-		scale_vector3d(&acceleration, MAX(vehicle_speed, 0.1f), &acceleration);
-		add_vectors3d(&acceleration, &vehicle->object.translational_velocity, &acceleration);
-		scale_vector3d(&acceleration, 0.5f, &acceleration);
+		/* port: (the vehicle it stands on, and a touch its own tick resolves,
+		neither push, fix nor hurt it here) */
+		if (riding == _vehicle_riding_collision_ignore || riding == _vehicle_riding_collision_resolved)
+			return collision;
+
+		/* port: (a rider's own tick deals a crush along it too: biped_riding_contacts in vehicle_riding_bipeds.c) */
+		physics_biped_vehicle_collision_push(instance->object_index, biped_index, &acceleration);
 		biped_accelerate(biped_index, &acceleration);
 
 		base.x += acceleration.i*2.0f;
@@ -1143,52 +1275,8 @@ static boolean physics_compute_biped_collision(
 
 		if (cause_damage)
 		{
-			struct game_globals_falling_damage *falling_damage = TAG_BLOCK_GET_ELEMENT(
-				&scenario_get_game_globals()->falling_damage,
-				0,
-				struct game_globals_falling_damage);
-
-			if (falling_damage->vehicle_collision_damage.index != NONE)
-			{
-				long responsible_object_index = instance->object_index;
-				struct object_datum *responsible_object = (struct object_datum *)vehicle;
-				struct damage_data damage;
-
-				if (vehicle->unit.driver_object_index != NONE)
-				{
-					responsible_object_index = vehicle->unit.driver_object_index;
-					responsible_object = object_get(responsible_object_index);
-				}
-
-				damage_data_new(&damage, falling_damage->vehicle_collision_damage.index);
-				damage.scale = 1.0f;
-				SET_FLAG(damage.flags, _damage_area_of_effect_bit, TRUE);
-				damage.owner_player_index = responsible_object->object.owner_player_index;
-				damage.owner_object_index = responsible_object->object.owner_object_index != NONE ?
-					responsible_object->object.owner_object_index : responsible_object_index;
-				damage.owner_team_index = responsible_object->object.owner_team_index;
-				damage.origin = biped->object.bounding_sphere_center;
-				damage.epicenter = vehicle->object.bounding_sphere_center;
-				damage.direction = acceleration;
-				normalize3d(&damage.direction);
-				object_cause_damage(&damage, biped_index, NONE, NONE, NONE, NULL);
-			}
-
-			if (falling_damage->vehicle_killed_unit_damage_effect.index != NONE)
-			{
-				struct unit_definition *unit_definition = unit_definition_get(biped->definition_index);
-				struct damage_data damage;
-
-				damage_data_new(&damage, falling_damage->vehicle_killed_unit_damage_effect.index);
-				match_assert(
-					"c:\\halo\\SOURCE\\physics\\physics.c",
-					830,
-					unit_definition->unit.blip_type>=0 && unit_definition->unit.blip_type<NUMBEROF(scales));
-				damage.scale = scales[unit_definition->unit.blip_type];
-				damage.origin = biped->object.bounding_sphere_center;
-				scale_vector3d(&acceleration, -1.0f, &damage.direction);
-				object_cause_damage(&damage, instance->object_index, NONE, NONE, NONE, NULL);
-			}
+			/* port: (a rider's own tick deals it too: biped_riding_contacts in vehicle_riding_bipeds.c) */
+			physics_biped_vehicle_collision_damage(instance->object_index, biped_index, &acceleration);
 		}
 	}
 
@@ -1678,6 +1766,7 @@ static void physics_update_old(
 	struct physics_definition const *physics = physics_definition_get(
 		object_definition->object.physics.index);
 	real gravity = physics->gravity_scale*global_gravity;
+	real ground_gravity;
 	real_matrix4x3 world_matrix;
 	real_vector3d total_force = { 0.0f, 0.0f, -physics->mass*gravity };
 	real_vector3d total_torque = { 0.0f, 0.0f, 0.0f };
@@ -1690,6 +1779,9 @@ static void physics_update_old(
 	short mass_point_index;
 	/* port: (as in physics_compute_new) */
 	short mass_point_count = physics_mass_point_count(physics);
+
+	/* port: a GRAVITY volume's pull (physics_object_gravity) */
+	physics_object_gravity(object_index, physics, &total_force, &ground_gravity);
 
 	matrix4x3_from_point_and_vectors(
 		&world_matrix,
@@ -1819,7 +1911,7 @@ static void physics_update_old(
 			real ground_scale = -mass_point_definition->mass*physics->ground_friction;
 
 			mass_point->normal_force_magnitude = physics->mass*(
-				global_gravity/physics->ground_depth*mass_point->ground_depth -
+				ground_gravity/physics->ground_depth*mass_point->ground_depth -
 				normal_velocity*physics->ground_damp_fraction);
 			scale_vector3d(
 				&mass_point->ground_plane.n,

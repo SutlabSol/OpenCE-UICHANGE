@@ -4,7 +4,7 @@ The game's settings are in `config.toml`, in its data folder:
 
 | Platform | File |
 | --- | --- |
-| Android | `/sdcard/Android/data/com.halo.decomp/files/config.toml` |
+| Android | `/sdcard/Android/data/com.halo.contentevolved/files/config.toml` |
 | Nintendo Switch | `sdmc:/switch/halo/config.toml` |
 | PlayStation 5 | `/data/halo/config.toml` |
 
@@ -89,6 +89,7 @@ The **Platforms** column says which platforms' `config.toml` has the setting.
 | `audio.effects_volume` | `1.0` | All | The volume of every other sound (effects and speech), 0.0 to 1.0 (of audio.volume). |
 | `audio.reverb` | `true` | All | Reverberate the world's sounds as the place the player is in does (the maps' sound environments, as the Xbox's I3DL2 reverb did); false keeps them dry. |
 | `audio.resampler` | `"sinc"` | All | How sounds are converted to the output's rate: "sinc" with a band-limited low pass; "linear" between neighbouring samples, brighter for the aliasing it lets through. |
+| `audio.realtime` | `true` | Android | Play through AAudio's low latency path (on a phone that has it, straight to the hardware, past the system's mixer); false goes through the mixer, where screen recorders take the app's sound. Changes at once. |
 | `audio.voice_chat` | `"push_to_talk"` | All | Talking in network games' voice chat: "push_to_talk" (while controls.push_to_talk is held; the microphone opens the first time), "open_mic" (whenever the microphone hears speech), or "off". Others' voices play whatever this is (audio.voice_volume 0 silences them). |
 | `audio.voice_volume` | `1.0` | All | The volume of the other players' voices (0 to 2). |
 
@@ -110,7 +111,7 @@ The **Platforms** column says which platforms' `config.toml` has the setting.
 
 | Setting | Default | Platforms | What it does |
 | --- | --- | --- | --- |
-| `game.overlay_menu` | `true` | All | Holding L and R and pressing the d-pad's down opens the game's overlay menu, and closes it: cheats, the game's speed, the HUD, the camera and the renderer's switches, in a panel at the left of the screen (on Android also three or four fingers on the screen together). While it is open the game gets no input; it is not paused. false: the buttons do not open it. |
+| `game.overlay_menu` | `true` | All | Holding L and R and pressing the d-pad's down opens the game's overlay menu, and closes it: cheats, the game's speed, the HUD, the camera, the renderer's switches and Force Lighting Off, in a panel at the left of the screen (on Android also three or four fingers on the screen together). While it is open the game gets no input; it is not paused. false: the buttons do not open it. |
 | `game.console_log` | `"none"` | All | What the game's console shows on screen of what it logs: "important" (bans, players dropped for cheating, what refuses a command, and the asserts that stop the game), "all" (every line, the game's own chatter too), or "none" (the asserts that stop the game only). What a command prints shows whatever this is, and debug.txt has every line. |
 | `game.language` | `""` | All | The language the game asks the Xbox for: "ja", "de", "fr", "es" or "it"; empty for English. The game data decides what is translated. |
 | `game.enhanced_animations` | `true` | All | The player bipeds' grenade throws keep their legs moving (crouched, in the air and in a vehicle's seat too), riders' hands leave the grips to throw and reload, and a player turns with the aim while throwing and in the air (so shots after a turn in a jump go to the crosshair); false: the original animations, which freeze the legs and stand a rider up (the turning, which moves where shots go, stays on in a network game for every player). |
@@ -121,15 +122,45 @@ The **Platforms** column says which platforms' `config.toml` has the setting.
 | `game.custom_edition` | `true` | All | Load and run Halo Custom Edition maps (not those that need OpenSauce): put them and Custom Edition's bitmaps.map, sounds.map and loc.map in the custom_maps folder beside the maps folder; the map lists show them as CUSTOM SINGLEPLAYER and CUSTOM MULTIPLAYER. Their tags are checked as the game's own maps' are before they run; false refuses them. |
 | `game.unlock_all_levels` | `false` | All | true: a profile made from now on starts with every campaign level finished on every difficulty, so any level can be played. false: a new profile starts at The Pillar of Autumn and opens each level as the one before it is finished, as on the Xbox. Profiles already made keep their progress; the console's profile_reset_campaign starts one over. |
 | `game.downloaded_maps` | `""` | All | Maps played as downloaded ones, besides those map sharing downloaded: their names (bloodgulch, hugeass), separated by commas, or "\*" for every map. A downloaded map's scripts may not change the player's settings or other players' games (debug.txt names what they were refused). |
-| `game.maps.path` | `""` | All | The folder the game's maps are read from; empty for the maps folder in the data folder. A relative path is under the data folder. Read once, at the start. The disc's maps are only ever unpacked into the data folder's maps, so a folder named here must hold them already. |
+| `game.maps.path` | `""` | All | The folder the game's maps are read from; empty for the maps folder in the data folder. A relative path is under the data folder. Read once, at the start. The disc's maps are only ever unpacked into the data folder's maps, so a folder named here must hold them already (on Android, the launcher's "Use another folder" sets this and unpacks them there). |
 | `game.custom_maps.path` | `""` | All | The folder Custom Edition maps are read from (and map sharing's downloads go to); empty for the custom_maps folder in the data folder. A relative path is under the data folder. Read once, at the start. |
+| `game.mods.path` | `""` | All | The folder the mods are read from (and Android's IMPORT puts them in); empty for the mods folder in the data folder. A relative path is under the data folder. |
+
+## Firefight objectives
+
+Optional objectives beside a Firefight game's waves, which the host's settings choose: Server Setup &gt; GAME SETTINGS &gt; ROUND OBJECTIVES and SET OBJECTIVES, the same on every map ([firefight_objectives.md](firefight_objectives.md)). Each objective's own setting is `true` (it can be rolled) or `false`.
+
+| Setting | Default | Platforms | What it does |
+| --- | --- | --- | --- |
+| `game.firefight_objectives_round` | `false` | All | A round can have a round objective, rolled as it starts, of those whose settings below are true. |
+| `game.firefight_objectives_round_chance` | `50` | All | The chance, in percent, that a round has one. |
+| `game.firefight_objective_kills` | `true` | All | KILLS: so many kills of a kind (headshots, melee, grenades, splatters, or a weapon class the players carry). |
+| `game.firefight_objective_no_deaths` | `true` | All | NO DEATHS: the round finished with no player dying. |
+| `game.firefight_objective_shields` | `true` | All | SHIELDS INTACT: no more than half the players' shields broken (falls, their own blasts and friendly fire count). |
+| `game.firefight_objective_kill_first` | `true` | All | KILL THE MARKED ENEMY FIRST: one of the first wave's, marked, killed before any other. |
+| `game.firefight_objective_dont_use` | `true` | All | DON'T USE: a weapon class (or a grenade) most players carry, never fired (or thrown). |
+| `game.firefight_objective_vehicle_kills` | `true` | All | VEHICLE KILLS: so many kills from a vehicle of a kind, one given the players if the map has none there. |
+| `game.firefight_objective_travel` | `true` | All | TRAVEL: a player reaches a marked point far from them. |
+| `game.firefight_objective_weapon_only` | `true` | All | USE ONLY: a weapon dropped to every player; from the first wave, firing any other fails it. |
+| `game.firefight_objectives_set` | `false` | All | A set can have a set objective, from its second or third round to its end, of those whose settings below are true and whose points the map has. |
+| `game.firefight_objectives_set_chance` | `80` | All | The chance, in percent, that a set has one. |
+| `game.firefight_objective_target` | `true` | All | HIGH VALUE TARGET: an enemy camp round a map objective; its VIP killed before they teleport out. |
+| `game.firefight_objective_generator` | `true` | All | ENEMY GENERATOR: an enemy camp round a map objective; its generator destroyed before time runs out. |
+| `game.firefight_objective_purge` | `true` | All | CLEAR ENEMY BASE: an enemy camp round a map objective; every one of them killed before the set ends. |
+| `game.firefight_objective_data_link` | `true` | All | DATA LINK: a King of the Hill hill held, uncontested, for a quarter of the set's time. |
+| `game.firefight_objective_flag` | `true` | All | FLAG: a flag carried to the other base; every enemy goes for its carrier. |
+| `game.firefight_objective_rescue` | `true` | All | RESCUE: marines reached in time and their attackers cleared; they follow the players. |
+| `game.firefight_objective_oddball` | `true` | All | ODDBALL: a boss's skull held for a quarter of the set's time; every enemy goes for its holder. |
+| `game.firefight_objective_collect` | `true` | All | COLLECT: kills drop skulls, carried to a hill or a flag's base and banked; a carrier who dies drops them all. |
+| `game.firefight_objective_bomb` | `true` | All | BOMB: the oddball carried to a far target, planted and defended until it goes off. |
 
 ## Bots
 
 | Setting | Default | Platforms | What it does |
 | --- | --- | --- | --- |
-| `bots.count` | `0` | All | Computer players (bots) in a Slayer, Capture the Flag or King of the Hill game hosted here, local (split screen), system link or a private internet one (not a public one, which the server browser lists): 0 to 63 join its lobby with the players, as far as the game has room. In a game, the console's add_bot and drop_bot (add_bot_red, drop_bot_blue...) add or take one. 0: none, as in the stock game. |
+| `bots.count` | `0` | All | Computer players (bots) in a Slayer, Capture the Flag or King of the Hill game hosted here, local (split screen), system link or a private internet one (not a public one, which the server browser lists): 0 to 63 join its lobby with the players, as far as the game has room. In a game, the console's add_bot and drop_bot (add_bot_red, drop_bot_blue...) add or take one. 0: none, as in the stock game. With `bots.kind` "provinggrounds", Oddball and Race games take bots too. |
 | `bots.skill` | `"normal"` | All | How well the bots play: "recruit", "easy", "normal", "heroic", "veteran" or "legendary" (how soon they react, how well they aim, how far they see, and how they fight: blows, grenades, strafes, retreats). |
+| `bots.kind` | `"birchwood"` | All | The kind of bot added from now on: "birchwood" (the bots as they were) or "provinggrounds" (a second kind, with hidden personalities, that also plays Oddball and Race). Each bot keeps the kind it joined as, so one game can hold both; in Oddball and Race every bot plays as Proving Grounds. |
 | `bots.teams` | `"even"` | All | In team games: "even" puts the bots on both teams, evening them with the players; "against" puts them all on the team the players are not on. |
 | `bots.vehicles` | `1` | All | 1: the bots drive and ride the map's vehicles (Warthogs, Ghosts and Scorpions) to goals a long way off, and man its turrets; 0: they stay on foot. |
 | `bots.routes` | `"direct"` | All | The ways the bots go to their goals: "direct" (everyone the shortest way, down the middle into one fight), "lanes" (the attackers spread over the map's side lanes, flanking) or "mixed" (most direct, a few on the side lanes). |
@@ -189,6 +220,12 @@ The **Platforms** column says which platforms' `config.toml` has the setting.
 | `network.browser_show_full` | `true` | All | The server browser lists full games (its Filters screen). |
 | `network.browser_maps` | `"yes"` | All | The server browser lists games on maps this machine lacks: "yes", "no", or "downloadable" (those of a Custom Edition map its host shares). |
 | `network.browser_gametype` | `"any"` | All | The server browser lists games of one kind only: "any", "ctf", "slayer", "oddball", "king" or "race" (its Filters screen). |
+| `network.browser_vanilla_maps` | `true` | All | The server browser lists games on the game's own maps (its Filters screen's VANILLA MAPS). |
+| `network.browser_custom_edition_maps` | `true` | All | The server browser lists games on Custom Edition maps (its Filters screen's CUSTOM EDITION MAPS). |
+| `network.browser_mcc_maps` | `true` | All | The server browser lists games on MCC maps (its Filters screen's MCC MAPS). |
+| `network.browser_mode` | `"all"` | All | The server browser lists "all" games, "multiplayer" games or "campaign" co-op games alone (its Filters screen's GAME MODE). |
+| `network.browser_favorites_only` | `false` | All | The server browser lists your favorite servers alone (its Filters screen's FAVORITES ONLY). |
+| `network.browser_favorites` | `""` | All | The server browser's favorite servers, listed first with a star: their names' letters and digits in lower case, between bars. The browser's FAVORITE button (a controller's left trigger, F on a keyboard) adds the chosen one, or takes it out. |
 | `network.browser_sort` | `"players"` | All | The server browser's order: "players" (the most players first), "servers" (dedicated servers first, then by players), "name", "map", "type" or "locked" (a password's first); "-" before one reverses it ("-players"). A column title sorts by it, and again the other way. |
 | `network.stun_servers` | `"stun.l.google.com:19302,stun.cloudflare.com:3478"` | All | Public STUN servers that tell this machine its internet address; comma-separated host:port. |
 | `network.link_page` | `true` | Switch, PS5 | While Join Game &gt; Direct Link is open, serve a page on the local network (its QR code and address are on that page) where a phone or a computer pastes an invite link for the console to join; nothing is served otherwise. false: none. |
@@ -225,6 +262,7 @@ For finding problems and measuring the game. You should not need these to play.
 | `debug.benchmark` | `""` | All | A benchmark run, the same each time: "standard" plays a10, a30, b30, c10 and c40 30 seconds each and Blood Gulch, Damnation, Sidewinder and Chill Out 15 seconds each with 63 bots, the view turning, and writes the frame rates to benchmark.txt (in the data folder, or the run's profile folder: debug.profile_run); or a list of map:seconds ("a30:30,bloodgulch:15"). Empty: none, the game as it is. |
 | `debug.benchmark_bots` | `63` | All | The computer players in the benchmark's multiplayer games: 63, with the player 64 in all; 0 to 63. |
 | `debug.benchmark_manual` | `false` | All | The benchmark leaves the player's view to the player rather than turning it, to measure the game as it is played (the player still cannot be hurt). |
+| `debug.benchmark_weapon` | `""` | All | Everyone in the benchmark's multiplayer games starts with this weapon, with no others on the map, playing to 1000 kills: "assault_rifle", "pistol", "shotgun", "sniper_rifle", "rocket_launcher", "plasma_pistol", "plasma_rifle" or "needler". Empty: the map's weapons, as usual. |
 | `debug.benchmark_quit` | `true` | All | Quit the game once the benchmark is done; false goes back to the main menu. |
 | `debug.core_dump_tick` | `0` | All | A core of the first level played (d:\core\game_state_&lt;address&gt;.bin, named for where the game state is) written at this game tick, for comparing saved games across runs; 0 for none. |
 | `debug.core_load` | `""` | All | A core (a file in d:\core, as debug.core_dump_tick writes) loaded into the first level played at debug.core_dump_tick, in place of writing one: a core of a run whose window lay elsewhere, for trying saved games across windows; empty for none. |
@@ -258,7 +296,9 @@ For finding problems and measuring the game. You should not need these to play.
 | `debug.null_renderer` | `false` | All | Run drawing nothing. |
 | `debug.gl_debug` | `false` | All | Report OpenGL errors in the log. |
 | `debug.menu_open` | `""` | All | Start on this screen of the menus instead of the main menu, a player profile being edited; empty for the main menu. |
-| `debug.gpu_stats` | `false` | All | Log the renderer's draw counts once a second (otherwise, on Android's Vulkan, only a second whose draws were skipped). |
+| `debug.network_extensions_require` | `""` | All | Capabilities (docs/network_extensions.md) this machine's games require when it hosts, separated by commas, whatever the game is: a machine without them is told and removed (for testing the handshake); empty for none. |
+| `debug.custom_campaign` | `""` | All | Mount this folder of custom_campaigns as the game starts, its own menus and maps played instead of the stock ones (docs/custom_campaigns.md); empty for none. |
+| `debug.gpu_stats` | `false` | All | Log the renderer's draw counts once a second (otherwise, on Android's Vulkan, only a second whose draws were skipped), and what dynamic lighting's fields did. |
 | `debug.gpu_trace_frame` | `-1` | All | Log every draw of this frame; -1 none. |
 | `debug.gpu_trace_constants` | `false` | All | With gpu_trace_frame, also the vertex shader constants. |
 | `debug.gpu_skip_vertex_shaders` | `""` | All | Comma-separated ids of vertex shaders not to draw with. |
@@ -287,6 +327,7 @@ For finding problems and measuring the game. You should not need these to play.
 | `debug.vk_present_marker` | `false` | Android, PS5 | Under the Vulkan renderer, draw a red square at the top left and a green one at the top right of the picture, so that a screenshot shows which way up it is. |
 | `debug.vk_static_geometry` | `true` | Android, PS5 | Under the Vulkan renderer, draw the map's geometry (written once as it loads) from a copy made the first time it is drawn, rather than copying it at each draw. false copies it at each draw, as before. |
 | `debug.custom_edition_elsewhere` | `false` | Android, PS5 | Put Custom Edition's tag cache somewhere other than 0x40440000 even where that address is free, and move its maps' addresses there, as on a phone whose Java runtime holds 0x40440000. For testing that move. |
+| `debug.mcc_elsewhere` | `false` | Android, Switch | Put an MCC map's tag window somewhere other than 0x50000000 even where that address is free, and move its tags there, as on a phone whose Java runtime holds part of 0x50000000-0x54000000. For testing that move. |
 | `debug.vk_static_check` | `false` | Android, PS5 | Under the Vulkan renderer, compare the game's static geometry with what was copied every 60 frames and log a range that changed (it would be drawn stale). |
 | `debug.vk_render_thread` | `true` | Android | Under the Vulkan renderer, record the game's commands, hand them to the driver and present on a thread of their own, while the game makes the next frame. false runs them on the game's thread, as before. |
 | `debug.vk_self_test` | `false` | Android, PS5 | Under the Vulkan renderer, try the renderer's clears and the copying of a draw's data on small targets of its own at start-up; the log says ok or FAILED. |

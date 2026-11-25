@@ -122,6 +122,11 @@ in, and an archive's magic, most files and largest file */
 #define BAKED_FOLDER ".baked"
 #define BAKED_BUILDING "building"
 #define BAKED_PROFILE (MAXIMUM_TAG_PROFILES + 1)
+/* the game's own props (tools/prop_assets.py), unpacked from the data file
+beside config.toml: their folder and slot */
+#define PROPS_FOLDER ".props"
+#define PROPS_PROFILE (MAXIMUM_TAG_PROFILES + 2)
+#define PROPS_FILE "tag_props.bin"
 #define SHARED_ID_LENGTH 32
 #define ARCHIVE_MAGIC "OCETAGS1"
 #define ARCHIVE_MAGIC_LENGTH 8
@@ -180,12 +185,15 @@ struct tag_profile
 
 static struct
 {
-	/* the profiles found, then the shared profile opened (SHARED_PROFILE)
-	and the baked one (BAKED_PROFILE) */
-	struct tag_profile profiles[MAXIMUM_TAG_PROFILES + 2];
+	/* the profiles found, then the shared profile opened (SHARED_PROFILE),
+	the baked one (BAKED_PROFILE) and the props (PROPS_PROFILE) */
+	struct tag_profile profiles[MAXIMUM_TAG_PROFILES + 3];
 	long profile_count;
 	int shared_open;
 	int baked_open;
+	int props_open;
+	/* (the props are looked for once a run: 1 tried) */
+	int props_tried;
 	unsigned long scans;
 	/* the bundles a level reads from, whatever profiles are found meanwhile:
 	a bundle's file, or a tag file's handle (port_tag_store.c), plus one
@@ -732,6 +740,8 @@ static struct tag_profile *profile_get(long profile)
 		return port_tag_profiles.shared_open ? &port_tag_profiles.profiles[SHARED_PROFILE] : NULL;
 	if (profile == BAKED_PROFILE)
 		return port_tag_profiles.baked_open ? &port_tag_profiles.profiles[BAKED_PROFILE] : NULL;
+	if (profile == PROPS_PROFILE)
+		return port_tag_profiles.props_open ? &port_tag_profiles.profiles[PROPS_PROFILE] : NULL;
 	return profile >= 0 && profile < port_tag_profiles.profile_count ? &port_tag_profiles.profiles[profile] : NULL;
 }
 
@@ -1579,7 +1589,7 @@ int port_tag_profiles_shared_folder_make(void)
 
 int port_tag_profiles_shared(long profile)
 {
-	return profile == SHARED_PROFILE || profile == BAKED_PROFILE;
+	return profile == SHARED_PROFILE || profile == BAKED_PROFILE || profile == PROPS_PROFILE;
 }
 
 void port_tag_profiles_shared_close(void)
@@ -1771,6 +1781,84 @@ static int archive_entry_file(struct archive_entry *entry, const struct tag_prof
 	return archive_entry_path(entry, file, path);
 }
 
+/* (port) a bundle's header (tag_bundle.h): its signature, and its flags'
+"MCC's own content" (_tag_bundle_mcc_own_content_bit) */
+#define BUNDLE_SIGNATURE 0x4245434FUL
+#define BUNDLE_HEADER_FLAGS_OFFSET 8
+#define BUNDLE_MCC_OWN_CONTENT_FLAG (1UL << 2)
+
+/* whether a profile's tag was taken out of an MCC map and holds MCC's own
+content (a map not of the Steam Workshop, or pixels or samples of MCC's
+shared resource maps: port/linux/game/mcc_tag_bundle.c), which its EULA
+lets no one send to another machine: never in a network game's share or a
+Forge map's bake, which every machine of the game reads */
+static int tag_mcc_own_content(long profile, long tag)
+{
+	unsigned char header[BUNDLE_HEADER_FLAGS_OFFSET + 4];
+	unsigned long size = 0;
+	long handle = port_tag_profiles_bundle_open(profile, tag, &size);
+	int own = 0;
+
+	if (handle < 0)
+		return 0;
+	if (size >= sizeof(header) && port_tag_profiles_bundle_read_at(handle, 0, header, sizeof(header)))
+		own = archive_get_long(header) == BUNDLE_SIGNATURE &&
+			(archive_get_long(header + BUNDLE_HEADER_FLAGS_OFFSET) & BUNDLE_MCC_OWN_CONTENT_FLAG) != 0;
+	port_tag_profiles_bundle_close(handle);
+	return own;
+}
+
+/* the tags of other groups the next share holds too (a multiplayer
+profile's players' bipeds and hands): by their names, a map's hands also
+as "path#map" (a tag of that path and map) */
+#define MAXIMUM_SHARED_EXTRAS 16
+static char shared_extras[MAXIMUM_SHARED_EXTRAS][MAXIMUM_TAG_NAME_LENGTH + 64];
+static long shared_extra_count;
+
+void port_tag_profiles_shared_extras_set(const char *const *names, long count)
+{
+	long index;
+
+	shared_extra_count = 0;
+	for (index = 0; names && index < count && shared_extra_count < MAXIMUM_SHARED_EXTRAS; index++)
+	{
+		if (names[index] && names[index][0])
+			text_copy(shared_extras[shared_extra_count++], sizeof(shared_extras[0]), names[index]);
+	}
+}
+
+static int names_compare_length(const char *first, const char *second, size_t length)
+{
+	size_t index;
+
+	for (index = 0; index < length; index++)
+	{
+		if (lower(first[index]) != lower(second[index]))
+			return 1;
+		if (!first[index])
+			return 0;
+	}
+	return 0;
+}
+
+static int shared_extra(const struct tag_profile_tag *tag)
+{
+	long index;
+
+	for (index = 0; index < shared_extra_count; index++)
+	{
+		const char *name = shared_extras[index];
+		const char *hash = strchr(name, '#');
+
+		if (!names_compare(tag->name, name))
+			return 1;
+		if (hash && strlen(tag->name) == (size_t)(hash - name) && !names_compare_length(tag->name, name, (size_t)(hash - name)) &&
+			!names_compare(tag->map, hash + 1))
+			return 1;
+	}
+	return 0;
+}
+
 long port_tag_profiles_shared_build(long profile, unsigned long group, const char *multiplayer, const char *campaign,
 	const char *archive)
 {
@@ -1801,8 +1889,15 @@ long port_tag_profiles_shared_build(long profile, unsigned long group, const cha
 		struct tag_profile_tag *tag = &found->tags[index];
 		long other;
 
-		if (!tag->enabled || (group && tag->group != group) || !tag->size ||
-			!archive_entry_file(&entries[count], found, tag->file))
+		if (!tag->enabled || (group && tag->group != group && !shared_extra(tag)) || !tag->size)
+			continue;
+		if (tag_mcc_own_content(profile, index))
+		{
+			platform_log("tag injector: %s is MCC's own content, which stays on this machine: it is left out of the "
+				"network game's share", tag->name);
+			continue;
+		}
+		if (!archive_entry_file(&entries[count], found, tag->file))
 			continue;
 		/* (a file two tags name, once) */
 		for (other = 0; other < count && strcmp(entries[other].name, tag->file); other++)
@@ -1845,9 +1940,12 @@ long port_tag_profiles_shared_build(long profile, unsigned long group, const cha
 	return written ? shared.tag_count : 0;
 }
 
-/* an archive unpacked into the folder `id` of the shared or baked profiles */
+/* an archive unpacked into the folder `id` of the shared, baked (1) or props
+(2) profiles */
 static int archive_unpack(const char *archive, const char *id, int baked)
 {
+	const char *kind_folder = baked == 2 ? PROPS_FOLDER : baked ? BAKED_FOLDER : SHARED_FOLDER;
+
 	char root[MAXIMUM_PATH_LENGTH];
 	char folder[MAXIMUM_PATH_LENGTH];
 	unsigned char header[ARCHIVE_MAGIC_LENGTH + 4];
@@ -1906,14 +2004,14 @@ static int archive_unpack(const char *archive, const char *id, int baked)
 	if (!baked && port_tag_profiles.shared_open &&
 		!strcmp(port_tag_profiles.profiles[SHARED_PROFILE].folder + strlen(SHARED_FOLDER) + 1, id))
 		port_tag_profiles_shared_close();
-	if (baked && port_tag_profiles.baked_open &&
+	if (baked == 1 && port_tag_profiles.baked_open &&
 		!strcmp(port_tag_profiles.profiles[BAKED_PROFILE].folder + strlen(BAKED_FOLDER) + 1, id))
 		port_tag_profiles_baked_close();
 	posix_make_directory(profiles_root(root, sizeof(root)));
-	snprintf(folder, sizeof(folder), "%s/%s", root, baked ? BAKED_FOLDER : SHARED_FOLDER);
+	snprintf(folder, sizeof(folder), "%s/%s", root, kind_folder);
 	posix_make_directory(folder);
 	if (baked)
-		snprintf(folder, sizeof(folder), "%s/%s/%s", root, BAKED_FOLDER, id);
+		snprintf(folder, sizeof(folder), "%s/%s/%s", root, kind_folder, id);
 	else
 		port_tag_profiles_shared_path(id, folder, sizeof(folder));
 	folder_delete(folder);
@@ -2016,7 +2114,84 @@ void port_tag_profiles_baked_scratch_path(char *path, unsigned long size)
 	baked_path("scratch.tagshare", path, (size_t)size);
 }
 
-long port_tag_profiles_baked_build(const long *profiles, const long *tags, long count, const char *archive)
+/* ---------- the game's own props (tools/prop_assets.py: Firefight's and Forge's) */
+
+long port_tag_profiles_props_open(void)
+{
+	char archive[MAXIMUM_PATH_LENGTH];
+	char root[MAXIMUM_PATH_LENGTH];
+	char folder[MAXIMUM_FOLDER_LENGTH];
+	char id[24];
+	char path[MAXIMUM_PATH_LENGTH];
+	struct posix_file_information information;
+	struct tag_profile profile;
+	unsigned long low = 0x811C9DC5UL;
+	unsigned long high = 0x9E3779B9UL;
+	unsigned long size = 0;
+	FILE *stream;
+	size_t part;
+
+	if (port_tag_profiles.props_open)
+		return PROPS_PROFILE;
+	if (port_tag_profiles.props_tried)
+		return -1;
+	port_tag_profiles.props_tried = 1;
+	/* (the data file beside config.toml, named by its bytes: a build's new
+	props are unpacked anew, into a folder of their own) */
+	config_folder(archive, sizeof(archive));
+	snprintf(archive + strlen(archive), sizeof(archive) - strlen(archive), "%s", PROPS_FILE);
+	stream = fopen(archive, "rb");
+	if (!stream)
+	{
+		platform_log("tag injector: the props' file %s cannot be read: Firefight and Forge go without them", archive);
+		return -1;
+	}
+	while ((part = fread(port_tag_profiles.bounce, 1, sizeof(port_tag_profiles.bounce), stream)) > 0)
+	{
+		size_t index;
+
+		for (index = 0; index < part; index++)
+		{
+			low = ((low ^ port_tag_profiles.bounce[index]) * 16777619UL) & 0xFFFFFFFFUL;
+			high = ((high + port_tag_profiles.bounce[index]) * 2654435761UL) & 0xFFFFFFFFUL;
+		}
+		size += (unsigned long)part;
+	}
+	fclose(stream);
+	snprintf(id, sizeof(id), "%08lx%08lx", high, low);
+	profiles_root(root, sizeof(root));
+	snprintf(path, sizeof(path), "%s/%s/%s/profile.toml", root, PROPS_FOLDER, id);
+	if (posix_stat(path, &information) != 0)
+	{
+		/* (an earlier build's go) */
+		snprintf(path, sizeof(path), "%s/%s", root, PROPS_FOLDER);
+		folder_delete(path);
+		if (!archive_unpack(archive, id, 2))
+		{
+			platform_log("tag injector: the props' file %s cannot be unpacked", archive);
+			return -1;
+		}
+	}
+	snprintf(folder, sizeof(folder), "%s/%s", PROPS_FOLDER, id);
+	if (!profile_read(&profile, root, folder))
+	{
+		platform_log("tag injector: the props in %s/%s cannot be read", root, folder);
+		return -1;
+	}
+	port_tag_profiles.profiles[PROPS_PROFILE] = profile;
+	port_tag_profiles.props_open = 1;
+	platform_log("tag injector: the props (%lu bytes, %ld tags) are in %s/%s", size, profile.tag_count, root, folder);
+	return PROPS_PROFILE;
+}
+
+int port_tag_profiles_tag_mcc_own(long profile, long tag)
+{
+	return tag_mcc_own_content(profile, tag);
+}
+
+/* (keep_mcc_own: a level's own copy, on this machine alone, of the tags a
+saved map names but could not bake: port_tag_profiles_baked_build_local) */
+static long baked_build(const long *profiles, const long *tags, long count, const char *archive, int keep_mcc_own)
 {
 	char folder[MAXIMUM_PATH_LENGTH];
 	struct tag_profile baked;
@@ -2056,6 +2231,12 @@ long port_tag_profiles_baked_build(const long *profiles, const long *tags, long 
 
 		if (!source || !tag || !tag->size)
 			continue;
+		if (!keep_mcc_own && tag_mcc_own_content(profiles[index], tags[index]))
+		{
+			platform_log("tag injector: %s is MCC's own content, which stays on this machine: it is not baked into "
+				"the map", tag->name);
+			continue;
+		}
 		for (other = 0; other < baked.tag_count && strcmp(baked.tags[other].file, tag->file); other++)
 		{
 		}
@@ -2118,6 +2299,16 @@ long port_tag_profiles_baked_build(const long *profiles, const long *tags, long 
 	free(baked.tags);
 	folder_delete(folder);
 	return written ? index : 0;
+}
+
+long port_tag_profiles_baked_build(const long *profiles, const long *tags, long count, const char *archive)
+{
+	return baked_build(profiles, tags, count, archive, 0);
+}
+
+long port_tag_profiles_baked_build_local(const long *profiles, const long *tags, long count, const char *archive)
+{
+	return baked_build(profiles, tags, count, archive, 1);
 }
 
 /* the marker beside a share a client took a copy of (the copy's folder in

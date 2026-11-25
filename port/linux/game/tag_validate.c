@@ -45,11 +45,16 @@ data and which the game takes as models (tag_schema_custom_edition_groups).
 #include "cache/physical_memory_map.h"
 #include "tag_schema.h"
 #include "halo_port_window.h"
+#include "mcc_tag_validate.h" /* MCC callbacks have an independent context. */
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+
+/* NULL for Xbox/Custom Edition and in the asset-free standalone validator. */
+struct mcc_validation_dispatch const *mcc_validation_callbacks;
 
 /* ---------- constants */
 
@@ -228,6 +233,8 @@ static struct
 	boolean custom_edition;
 	char map_name[64];
 	long corrections;
+	/* blocks and data accepted as another's (claim_extent) */
+	long shared_extents;
 } tag_validate_globals;
 
 /* a bit for each byte of the tag cache that a tag's root, block or data
@@ -461,6 +468,160 @@ static void unclaim(
 	}
 }
 
+/* Each block and data claimed, by where it starts. Map tools that fold
+identical blocks together (Phantom-Zone's ui strings) leave tags whose
+blocks or data are the same bytes as another's, which Halo PC reads as each
+tag's own. Such a block is accepted where it starts where an earlier one of
+the same kind (a block's element definition, a data's field) starts, and
+holds no more than it: every byte of it was claimed, and is walked again as
+this tag's (the walk's corrections leave what they corrected as it is, and
+an address already moved is not moved again: halo_port_window.h). A block
+that overlaps another anywhere else is still refused. On the heap, grown
+as it fills; with no room it notes nothing, and shared blocks are refused
+as before. */
+struct tag_validate_extent
+{
+	/* the tag cache's offset of its first byte, plus one (0: an empty slot) */
+	unsigned long first_plus_one;
+	unsigned long size;
+	void const *kind;
+};
+
+static struct
+{
+	struct tag_validate_extent *entries;
+	/* a power of two, or 0 */
+	unsigned long capacity;
+	unsigned long count;
+} tag_validate_extents;
+
+#define MINIMUM_EXTENT_CAPACITY 0x4000UL
+
+static struct tag_validate_extent *extent_slot(
+	struct tag_validate_extent *entries,
+	unsigned long capacity,
+	unsigned long first)
+{
+	unsigned long index = (first * 2654435761UL) & (capacity - 1);
+
+	while (entries[index].first_plus_one && entries[index].first_plus_one != first + 1)
+		index = (index + 1) & (capacity - 1);
+
+	return &entries[index];
+}
+
+/* the extents into a table of `capacity` slots, those starting before
+`limit` kept: FALSE, with the table as it was, when there is no room */
+static boolean extents_rebuild(
+	unsigned long capacity,
+	unsigned long limit)
+{
+	struct tag_validate_extent *entries = (struct tag_validate_extent *)(calloc)(capacity, sizeof(*entries));
+	unsigned long count = 0;
+	unsigned long index;
+
+	if (!entries)
+		return FALSE;
+	for (index = 0; index < tag_validate_extents.capacity; index++)
+	{
+		struct tag_validate_extent const *extent = &tag_validate_extents.entries[index];
+
+		if (extent->first_plus_one && extent->first_plus_one - 1 < limit)
+		{
+			*extent_slot(entries, capacity, extent->first_plus_one - 1) = *extent;
+			count++;
+		}
+	}
+	if (tag_validate_extents.entries)
+		(free)(tag_validate_extents.entries);
+	tag_validate_extents.entries = entries;
+	tag_validate_extents.capacity = capacity;
+	tag_validate_extents.count = count;
+
+	return TRUE;
+}
+
+/* every extent forgotten (a new map's tags) */
+static void extents_clear(void)
+{
+	if (tag_validate_extents.entries)
+		memset(tag_validate_extents.entries, 0, tag_validate_extents.capacity * sizeof(*tag_validate_extents.entries));
+	tag_validate_extents.count = 0;
+}
+
+/* the extents of the bsp's bytes forgotten (another bsp loads there) */
+static void extents_forget_from(
+	unsigned long limit)
+{
+	if (tag_validate_extents.count && !extents_rebuild(tag_validate_extents.capacity, limit))
+		extents_clear();
+}
+
+static unsigned long tag_cache_offset_of(
+	void const *address)
+{
+	return (unsigned long)((byte const *)address - (byte const *)tag_validate_globals.header);
+}
+
+static struct tag_validate_extent const *extent_find(
+	void const *address)
+{
+	struct tag_validate_extent const *extent;
+
+	if (!tag_validate_extents.count)
+		return NULL;
+	extent = extent_slot(tag_validate_extents.entries, tag_validate_extents.capacity, tag_cache_offset_of(address));
+
+	return extent->first_plus_one ? extent : NULL;
+}
+
+static void extent_note(
+	void const *address,
+	unsigned long size,
+	void const *kind)
+{
+	struct tag_validate_extent *extent;
+
+	if ((tag_validate_extents.count + 1) * 2 > tag_validate_extents.capacity &&
+		!extents_rebuild(tag_validate_extents.capacity ? tag_validate_extents.capacity * 2 : MINIMUM_EXTENT_CAPACITY,
+			ULONG_MAX))
+	{
+		return;
+	}
+	extent = extent_slot(tag_validate_extents.entries, tag_validate_extents.capacity, tag_cache_offset_of(address));
+	if (!extent->first_plus_one)
+		tag_validate_extents.count++;
+	extent->first_plus_one = tag_cache_offset_of(address) + 1;
+	extent->size = size;
+	extent->kind = kind;
+}
+
+/* claims a block's or data's size bytes at address (of `kind`), or accepts
+them as an earlier one's (above) */
+static boolean claim_extent(
+	void const *address,
+	unsigned long size,
+	void const *kind)
+{
+	struct tag_validate_extent const *earlier;
+
+	if (!size)
+		return TRUE;
+	if (claim(address, size))
+	{
+		extent_note(address, size, kind);
+		return TRUE;
+	}
+	earlier = extent_find(address);
+	if (earlier && earlier->kind == kind && size <= earlier->size)
+	{
+		tag_validate_globals.shared_extents++;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
 /* whether a string ends in the region, or in the tags (where a bsp's tag
 references' names are) */
 static boolean string_valid(
@@ -644,10 +805,11 @@ static void validate_block_extent(
 			block->count, definition->size, (unsigned long)block->address);
 		return;
 	}
-	if (!claim(block->address, (unsigned long)block->count * definition->size))
+	if (!claim_extent(block->address, (unsigned long)block->count * definition->size, definition))
 	{
-		tag_validate_refuse(validation, "has %ld elements of %ld bytes at %08lx, which overlap another's",
-			block->count, definition->size, (unsigned long)block->address);
+		tag_validate_refuse(validation, "has %ld elements of %ld bytes at %08lx, which overlap another's%s",
+			block->count, definition->size, (unsigned long)block->address,
+			extent_find(block->address) ? " (one of other fields or fewer bytes, starting there)" : "");
 		return;
 	}
 	if (!block->count)
@@ -684,7 +846,8 @@ static void validate_data_extent(
 	}
 	VALIDATE_MOVE(data->address);
 	if (data->size &&
-		(!region_contains(validation, data->address, data->size) || !claim(data->address, data->size)))
+		(!region_contains(validation, data->address, data->size) ||
+			!claim_extent(data->address, (unsigned long)data->size, field)))
 	{
 		tag_validate_refuse(validation, "has %ld bytes at %08lx, outside the tags or overlapping another's",
 			data->size, (unsigned long)data->address);
@@ -1577,6 +1740,14 @@ static boolean validate_tag_table(
 	}
 
 	tag_validate_globals.corrections = validation->corrections;
+	if (tag_validate_globals.shared_extents && !validation->refused)
+	{
+		char message[MAXIMUM_MESSAGE_LENGTH];
+
+		snprintf(message, sizeof(message), "the map '%s' has %ld blocks and data that tags share, read as each tag's",
+			tag_validate_globals.map_name, tag_validate_globals.shared_extents);
+		tag_validate_report(message);
+	}
 
 	return !validation->refused;
 }
@@ -1599,6 +1770,7 @@ static void validation_begin(
 	tag_validate_globals.custom_edition = custom_edition;
 	snprintf(tag_validate_globals.map_name, sizeof(tag_validate_globals.map_name), "%s", map_name);
 	memset(tag_validate_claims, 0, CLAIM_WORDS * sizeof(unsigned long));
+	extents_clear();
 	validation_new(validation, tag_header, (unsigned long)tag_data_size);
 
 	return;
@@ -1715,6 +1887,7 @@ boolean tag_validate_structure_bsp(
 	}
 	/* (another bsp may have been where this one is) */
 	unclaim(tag_validate_globals.tag_data_size, tag_validate_globals.tag_cache_size - tag_validate_globals.tag_data_size);
+	extents_forget_from((unsigned long)tag_validate_globals.tag_data_size);
 	VALIDATE_MOVE(bsp_header->base_address);
 	VALIDATE_MOVE(bsp_header->vertex_buffers);
 	VALIDATE_MOVE(bsp_header->index_buffers);
@@ -1775,8 +1948,12 @@ boolean tag_validate_any_claimed(
 	void const *address,
 	unsigned long size)
 {
-	unsigned long offset = (unsigned long)address - (unsigned long)tag_validate_globals.header;
+	unsigned long offset;
 	unsigned long bit;
+
+	if (mcc_validation_callbacks)
+		return mcc_validation_callbacks->any_claimed(address, size);
+	offset = (unsigned long)address - (unsigned long)tag_validate_globals.header;
 
 	if (!tag_validate_globals.header || (unsigned long)address < (unsigned long)tag_validate_globals.header ||
 		offset > tag_validate_globals.tag_cache_size || size > tag_validate_globals.tag_cache_size - offset)
@@ -1811,6 +1988,14 @@ void tag_validate_refuse(
 {
 	va_list arguments;
 
+	if (mcc_validation_callbacks && mcc_validation_callbacks->owns(validation))
+	{
+		va_start(arguments, format);
+		mcc_validation_callbacks->message(validation, TRUE, format, arguments);
+		va_end(arguments);
+		return;
+	}
+
 	validation->refused = TRUE;
 	va_start(arguments, format);
 	validation_message(validation, "cannot be played", format, arguments);
@@ -1840,6 +2025,14 @@ void tag_validate_correct(
 {
 	va_list arguments;
 
+	if (mcc_validation_callbacks && mcc_validation_callbacks->owns(validation))
+	{
+		va_start(arguments, format);
+		mcc_validation_callbacks->message(validation, FALSE, format, arguments);
+		va_end(arguments);
+		return;
+	}
+
 	validation->corrections++;
 	if (validation->corrections <= MAXIMUM_LOGGED_CORRECTIONS)
 	{
@@ -1866,6 +2059,10 @@ boolean tag_validate_file_contains(
 {
 	short range_index;
 
+	if (mcc_validation_callbacks && mcc_validation_callbacks->owns(validation))
+		return mcc_validation_callbacks->file_contains(validation, offset, size);
+
+
 	(void)validation;
 	if (offset < 0 || size < 0)
 		return FALSE;
@@ -1886,12 +2083,18 @@ boolean tag_validate_file_contains(
 void *tag_validate_root(
 	struct tag_validation *validation)
 {
+	if (mcc_validation_callbacks && mcc_validation_callbacks->owns(validation))
+		return mcc_validation_callbacks->root(validation);
 	return validation->depth > 0 ? validation->frames[0].base : NULL;
 }
 
 boolean tag_validate_custom_edition(
 	struct tag_validation *validation)
 {
+	/* (an MCC map's: laid out as Custom Edition's only when its tags are
+	taken out as bundles, mcc_tags_validate_bundle) */
+	if (mcc_validation_callbacks && mcc_validation_callbacks->owns(validation))
+		return mcc_validation_callbacks->custom_edition ? mcc_validation_callbacks->custom_edition(validation) : FALSE;
 	(void)validation;
 
 	return tag_validate_globals.custom_edition;
@@ -1902,6 +2105,8 @@ boolean tag_validate_contains(
 	void const *address,
 	unsigned long size)
 {
+	if (mcc_validation_callbacks && mcc_validation_callbacks->owns(validation))
+		return mcc_validation_callbacks->contains(validation, address, size);
 	return region_contains(validation, address, size);
 }
 
@@ -1910,8 +2115,12 @@ void *tag_validate_tag_get(
 	long tag_index,
 	unsigned long group_tag)
 {
-	struct tag_validate_instance *instance = instance_get(tag_index);
+	struct tag_validate_instance *instance;
 	unsigned long groups[2];
+
+	if (mcc_validation_callbacks && mcc_validation_callbacks->owns(validation))
+		return mcc_validation_callbacks->tag_get(validation, tag_index, group_tag);
+	instance = instance_get(tag_index);
 
 	(void)validation;
 	groups[0] = group_tag;
@@ -1949,6 +2158,8 @@ void *tag_validate_vertex_buffer_data(
 	struct tag_validation *validation,
 	void const *buffer)
 {
+	if (mcc_validation_callbacks && mcc_validation_callbacks->owns(validation))
+		return mcc_validation_callbacks->buffer_data(validation, buffer, FALSE);
 	return buffer_data(validation->vertex_buffers, validation->vertex_buffer_count, buffer);
 }
 
@@ -1956,5 +2167,7 @@ void *tag_validate_index_buffer_data(
 	struct tag_validation *validation,
 	void const *buffer)
 {
+	if (mcc_validation_callbacks && mcc_validation_callbacks->owns(validation))
+		return mcc_validation_callbacks->buffer_data(validation, buffer, TRUE);
 	return buffer_data(validation->index_buffers, validation->index_buffer_count, buffer);
 }

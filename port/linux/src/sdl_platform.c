@@ -124,8 +124,10 @@ static void screen_keyboard_update(void);
 /* SDL's text input run while a line is typed from the keyboard, for the
 layout's characters */
 static void text_layout_update(void);
-/* dsound_sdl.c's: the output device followed */
+#endif
+/* dsound_sdl.c's: the output device (and Android's realtime audio) followed */
 void dsound_sdl_output_device_check(void);
+#ifndef HALO_ANDROID
 /* updater.c's: the desktop self-updater */
 void updater_start(void);
 void updater_poll(SDL_Window *window);
@@ -282,7 +284,7 @@ BOOL platform_sdl_initialize(void)
 	/* a dedicated server (server_mode.c) runs where there is no display,
 	sound or controller (a service, a container): SDL's drivers that need
 	none, and its events alone */
-	if (halo_server_mode())
+	if (halo_server_headless())
 	{
 		SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy");
 		SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
@@ -311,12 +313,12 @@ BOOL platform_sdl_initialize(void)
 	server's were, by server_mode.c) */
 	platform_data_root();
 #ifndef HALO_WEB
-	if (!halo_server_mode())
+	if (!halo_server_headless())
 		data_check_maps();
 #endif
 	/* (a new version looked for meanwhile, updater_poll asking about it; a
 	dedicated server's is server.auto_update's) */
-	if (!halo_server_mode())
+	if (!halo_server_headless())
 	{
 		updater_start();
 		/* (a player's public game on the master servers too, with a
@@ -326,7 +328,7 @@ BOOL platform_sdl_initialize(void)
 #endif
 	/* (a Discord account linked at a master server: its passes asked for
 	again before they run out, player_link.c) */
-	if (!halo_server_mode())
+	if (!halo_server_headless())
 		player_link_start();
 	/* (the mods, and whether to play those that say they cannot be played
 	together, before the window opens: port_mods.c) */
@@ -2383,7 +2385,7 @@ static void platform_pump_events_headless(void)
 	if (SDL_GetCurrentThreadID() != thread)
 		return;
 	/* (a dedicated server stops itself: server_director.c) */
-	if (!halo_server_mode())
+	if (!halo_server_headless())
 		exit_after_check();
 #ifndef HALO_ANDROID
 	if (config_string("debug.update_answer")[0])
@@ -2426,9 +2428,10 @@ void platform_pump_events(void)
 #endif
 #ifndef HALO_ANDROID
 	updater_poll(platform_window);
-	/* (Settings > Audio's output device, as it changes: dsound_sdl.c) */
-	dsound_sdl_output_device_check();
 #endif
+	/* (Settings > Audio's output device, and Android's realtime audio, as
+	they change: dsound_sdl.c) */
+	dsound_sdl_output_device_check();
 	screen_keyboard_update();
 #ifndef HALO_ANDROID
 	text_layout_update();
@@ -2793,13 +2796,18 @@ void platform_menus_set_active(BOOL active)
 	pthread_mutex_unlock(&input_lock);
 }
 
-void platform_binding_capture_begin(void)
+void platform_binding_capture_begin_keys(void)
 {
 	pthread_mutex_lock(&input_lock);
 	binding_capture = _binding_capture_waiting;
 	binding_settling = TRUE;
 	binding_polled_ms = SDL_GetTicks();
 	pthread_mutex_unlock(&input_lock);
+}
+
+void platform_binding_capture_begin(void)
+{
+	platform_binding_capture_begin_keys();
 	/* (or a button of the controller: xinput_sdl.c) */
 	halo_gamepad_capture_begin();
 }
@@ -3048,7 +3056,8 @@ While a name is typed, into the game's own keyboard (Change Name's:
 platform_text_typing) or a menu's text field (the server's name:
 platform_text_field, xinput_sdl.c), SDL's text input runs where the touch
 controls would show (touch_input_screen_buttons), which brings up Android's
-keyboard. What it types arrives as keys, as a Bluetooth or USB keyboard's
+keyboard and the game's text bar above it, showing what is typed (TextBar.java,
+host_sdl.c). What it types arrives as keys, as a Bluetooth or USB keyboard's
 does: SDL's input connection makes a key press of each character from space
 to '~' and of each backspace, and its Enter is the Return key, which ends the
 typing as a keyboard's does. The game's own keyboard still takes taps where
@@ -3097,9 +3106,10 @@ static void screen_keyboard_update(void)
 	if (!touch_input_screen_buttons())
 		return;
 	platform_log("text field: showing Android's keyboard");
-	/* (a name's as a visible password, for the keyboards' sake: no
-	suggestions, and no words held back while they are put together, so that
-	each key arrives as it is typed; a password's hidden) */
+	/* (the host shows the game's text bar over the keyboard, with its
+	suggestions, for anything but a hidden password: TextBar.java; the
+	visible password asks SDL's own hidden field, where there is no bar, for
+	no suggestions, so that each key arrives as it is typed) */
 	started = host_sdl_text_input(window,
 		wanted == 2 ? SDL_TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN : SDL_TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE) != 0;
 }
@@ -3163,3 +3173,137 @@ void platform_input_read(struct platform_input_state *state, BOOL consume_motion
 	}
 	pthread_mutex_unlock(&input_lock);
 }
+
+/* ---------- the desktop's IMPORT (platform.h's platform_import_file_pick) */
+
+#if !defined(HALO_ANDROID) && !defined(HALO_WEB) && !defined(HALO_PS5) && !defined(HALO_SWITCH)
+struct import_pick
+{
+	SDL_AtomicInt done;
+	BOOL failed;
+	char path[1024];
+	char error[256];
+};
+
+static void SDLCALL import_file_chosen(void *userdata, const char * const *files, int filter)
+{
+	struct import_pick *pick = userdata;
+
+	(void)filter;
+	if (!files)
+	{
+		pick->failed = TRUE;
+		snprintf(pick->error, sizeof(pick->error), "%s",
+			*SDL_GetError() ? SDL_GetError() : "no file dialog could be shown");
+	}
+	else if (files[0])
+		snprintf(pick->path, sizeof(pick->path), "%s", files[0]);
+	SDL_SetAtomicInt(&pick->done, 1);
+}
+
+struct import_copy
+{
+	char from[1024];
+	char part[1200];
+	char to[1200];
+};
+
+/* the file copied as <name>.part, then renamed: the inbox takes only whole
+files (mcc_import_inbox_ready) */
+static void *import_copy_thread(void *context)
+{
+	struct import_copy *copy = context;
+	FILE *from = fopen(copy->from, "rb");
+	FILE *to = from ? fopen(copy->part, "wb") : NULL;
+	BOOL whole = from && to;
+	char *buffer = whole ? malloc(1 << 20) : NULL;
+	size_t count;
+
+	whole = whole && buffer;
+	while (whole && (count = fread(buffer, 1, 1 << 20, from)) > 0)
+		whole = fwrite(buffer, 1, count, to) == count;
+	if (whole && ferror(from))
+		whole = FALSE;
+	if (from)
+		fclose(from);
+	if (to && fclose(to) != 0)
+		whole = FALSE;
+	free(buffer);
+	remove(copy->to);
+	if (!whole || rename(copy->part, copy->to) != 0)
+	{
+		remove(copy->part);
+		platform_log("import: %s could not be copied into the import folder", copy->from);
+	}
+	else
+		platform_log("import: %s copied into the import folder", copy->from);
+	free(copy);
+	return NULL;
+}
+
+BOOL platform_import_file_pick_available(void)
+{
+	return TRUE;
+}
+
+BOOL platform_import_file_pick(const char *inbox, char *picked, int size)
+{
+	static const SDL_DialogFileFilter filters[] =
+	{
+		{ "Maps and .zip files of maps", "map;zip" },
+		{ "All files", "*" },
+	};
+	static struct import_pick pick;
+	struct import_copy *copy;
+	const char *name;
+	pthread_t thread;
+
+	picked[0] = 0;
+	memset(&pick, 0, sizeof(pick));
+	SDL_ShowOpenFileDialog(import_file_chosen, &pick, platform_window, filters, 2, NULL, false);
+	/* (the dialog answers through events, and on some systems another
+	thread: data_choose_image's wait) */
+	while (!SDL_GetAtomicInt(&pick.done))
+	{
+		SDL_PumpEvents();
+		SDL_Delay(50);
+	}
+	if (pick.failed)
+	{
+		snprintf(picked, (size_t)size, "%s", pick.error);
+		return FALSE;
+	}
+	if (!pick.path[0])
+		return FALSE;
+	name = pick.path + strlen(pick.path);
+	while (name > pick.path && name[-1] != '/' && name[-1] != '\\')
+		name--;
+	copy = calloc(1, sizeof(*copy));
+	if (!copy)
+		return FALSE;
+	snprintf(copy->from, sizeof(copy->from), "%s", pick.path);
+	snprintf(copy->to, sizeof(copy->to), "%s/%s", inbox, name);
+	snprintf(copy->part, sizeof(copy->part), "%s.part", copy->to);
+	snprintf(picked, (size_t)size, "%s", name);
+	if (pthread_create(&thread, NULL, import_copy_thread, copy) != 0)
+	{
+		import_copy_thread(copy);
+		return TRUE;
+	}
+	pthread_detach(thread);
+	return TRUE;
+}
+#else
+BOOL platform_import_file_pick_available(void)
+{
+	return FALSE;
+}
+
+BOOL platform_import_file_pick(const char *inbox, char *picked, int size)
+{
+	(void)inbox;
+	if (size > 0)
+		picked[0] = 0;
+	return FALSE;
+}
+#endif

@@ -47,11 +47,14 @@ import java.util.zip.ZipInputStream;
  * the latest release when it starts, on a thread of its own, and if it is
  * newer asks the player whether to update:
  *
- * - Yes: the release's app (halo-android-release.zip or -debug.zip, the one
- *   named for this build's kind if the release has it, else the other: a
- *   local release's APK is Gradle's debug build, whatever its zip is named) is
- *   downloaded and handed to Android's package installer, which replaces the
- *   game (closing it) and offers to open the new version.
+ * - Yes: the release's app (halo-contentevolved-release.zip or -debug.zip,
+ *   the one named for this build's kind if the release has it, else the
+ *   other: a local release's APK is Gradle's debug build, whatever its zip is
+ *   named) is downloaded and handed to Android's package installer, which
+ *   replaces the game (closing it) and offers to open the new version.
+ *   (halo-android-*.zip, the name the apps up to build 141 ask for, is the
+ *   bridge, port/android/bridge, the old com.halo.decomp app's last update,
+ *   which moves its players to this one: tools/release.py.)
  * - No: nothing, until the next start.
  * - Do not ask again: after the player confirms it, update.auto = false is
  *   written to config.toml.
@@ -65,6 +68,8 @@ import java.util.zip.ZipInputStream;
 final class Updater {
     private static final String REPOSITORY = "Watanoge/halo-content-evolved";
     private static final String USER_AGENT = "halo-ce-universal-updater";
+    /** this app's zips in a release (tools/release.py); never halo-android-, the bridge's */
+    private static final String ASSET_PREFIX = "halo-contentevolved-";
     private static final int TIMEOUT_MILLISECONDS = 20000;
     /** the most a download (a release's zip, about 35 MB) or the app in it may be */
     private static final long MAXIMUM_UPDATE_SIZE = 256L * 1024 * 1024;
@@ -465,7 +470,7 @@ final class Updater {
                 JSONObject release = new JSONObject(new String(readAll(stream), StandardCharsets.UTF_8));
                 String tag = release.optString("tag_name");
                 JSONArray assets = release.optJSONArray("assets");
-                String wanted = "halo-android-" + (BuildConfig.DEBUG ? "debug" : "release") + ".zip";
+                String wanted = ASSET_PREFIX + (BuildConfig.DEBUG ? "debug" : "release") + ".zip";
                 String zip = null;
 
                 if (!tag.startsWith("build-") || assets == null)
@@ -475,7 +480,7 @@ final class Updater {
                     JSONObject asset = assets.getJSONObject(index);
                     String name = asset.optString("name");
 
-                    if (name.startsWith("halo-android-") && name.endsWith(".zip")
+                    if (name.startsWith(ASSET_PREFIX) && name.endsWith(".zip")
                         && (zip == null || name.equals(wanted)))
                         zip = asset.optString("browser_download_url");
                 }

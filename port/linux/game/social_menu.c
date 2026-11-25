@@ -180,6 +180,9 @@ enum
 	_row_setup_name,
 	_row_setup_color,
 	_row_setup_done,
+	/* (a new install's first setup: join an existing account with its
+	sync code, rather than make a profile it would replace) */
+	_row_setup_sync,
 	_row_clear_rank,
 };
 
@@ -1720,7 +1723,27 @@ static void action_take(
 			break;
 		case _row_sync_input:
 			social_account_code_take(answer);
+			/* (the account joined: its emblem and rank now) */
+			social_account_synced(answer);
 			social_sync_pull_soon();
+			/* (from a new install's first setup: the profile is the account's,
+			made by its name and with its emblem, and the setup is done; an
+			account with no emblem yet keeps the screen, its name filled in) */
+			if (social_menu.list == _list_setup && !social_menu_has_profile())
+			{
+				if (social_account_emblem(NULL))
+				{
+					char account_name[SOCIAL_MENU_NAME_SIZE];
+
+					account_name[0] = 0;
+					social_account_name(account_name, sizeof(account_name));
+					if (social_setup_profile_make(account_name[0] ? account_name : "Spartan") != NONE)
+						social_account_apply();
+					social_setup_finish();
+				}
+				else
+					social_setup_begin();
+			}
 			social_menu.friends_had = FALSE;
 			social_menu.outgoing_count = 0;
 			message_set("Synced: this device is now part of account %s.", social_account_code());
@@ -2057,6 +2080,8 @@ static void rows_build(
 		row_add(_row_setup_color, 0);
 		row_add(_social_ext_row_emblem, 0);
 		row_add(_row_setup_done, 0);
+		if (!social_menu_has_profile() && social_enabled())
+			row_add(_row_setup_sync, 0);
 		break;
 	case _list_friends:
 		for (index = 0; index < social_menu.friend_count; index++)
@@ -3755,6 +3780,10 @@ void social_menu_row(
 	case _row_setup_done:
 		snprintf(name, (size_t)name_size, "DONE");
 		break;
+	case _row_setup_sync:
+		snprintf(name, (size_t)name_size, "SYNC ACCOUNT");
+		snprintf(state, (size_t)state_size, "INPUT CODE");
+		break;
 	case _row_clear_rank:
 		snprintf(name, (size_t)name_size, "CLEAR RANK");
 		snprintf(state, (size_t)state_size, "TESTING");
@@ -4050,6 +4079,11 @@ void social_menu_details(
 		snprintf(title, (size_t)title_size, "CHAT COLOR");
 		text_add(text, text_size, "The colour of your name in the\nchat, for everyone who sees it.\nA or Left and Right change it.");
 		break;
+	case _row_setup_sync:
+		snprintf(title, (size_t)title_size, "SYNC ACCOUNT");
+		text_add(text, text_size, "Already playing on another device?\nOn it, SOCIAL > MY ACCOUNT > SYNC\nACCOUNT > CREATE CODE; then A here\n"
+			"types that code. This device joins\nthat account: its name, emblem,\nrank and friends.");
+		break;
 	case _row_setup_done:
 		snprintf(title, (size_t)title_size, "DONE");
 		text_add(text, text_size, social_menu_has_profile() ? "Saves these on your account." :
@@ -4293,6 +4327,14 @@ short social_menu_choose(
 	case _row_setup_done:
 		social_setup_done();
 		break;
+	case _row_setup_sync:
+		if (!social_menu_online())
+		{
+			message_set("The community server is not reached.");
+			break;
+		}
+		keyboard_open(_typing_sync_code);
+		return social_menu.typing != _typing_none ? _social_menu_typing : _social_menu_stays;
 	case _row_clear_rank:
 		if (confirmed(_row_clear_rank, "clear your rank"))
 			rank_clear();
@@ -4759,8 +4801,8 @@ void social_menu_player_act(
 	char const *name,
 	short action)
 {
-	static char const *const actions[] = { NULL, "mute", "unmute", "report" };
-	static short const kinds[] = { _row_friend_add, _row_mute, _row_unmute, _row_reason };
+	static char const *const actions[] = { NULL, "mute", "unmute", "report", "block", "unblock" };
+	static short const kinds[] = { _row_friend_add, _row_mute, _row_unmute, _row_reason, _row_block, _row_unblock };
 
 	if (action < 0 || action >= (short)NUMBEROF(kinds))
 		return;
@@ -4838,6 +4880,118 @@ boolean social_menu_is_friend(
 			return TRUE;
 	}
 	return FALSE;
+}
+
+/* whether a name is (or, prefix, starts with) the text typed, in any case */
+static boolean name_matches(
+	char const *name,
+	char const *typed,
+	boolean prefix)
+{
+	for (; *typed; name++, typed++)
+	{
+		char a = *name >= 'A' && *name <= 'Z' ? (char)(*name - 'A' + 'a') : *name;
+		char b = *typed >= 'A' && *typed <= 'Z' ? (char)(*typed - 'A' + 'a') : *typed;
+
+		if (!*name || a != b)
+			return FALSE;
+	}
+	return prefix || !*name;
+}
+
+/* a person of the list by name: exactly (any case), else the one whose
+name starts so (several: -1) */
+static short person_by_name(
+	struct social_menu_person const *people,
+	short count,
+	char const *name,
+	char *code,
+	long code_size,
+	char *found,
+	long found_size)
+{
+	short starts = NONE;
+	short starts_count = 0;
+	short index;
+
+	if (!name[0])
+		return 0;
+	for (index = 0; index < count; index++)
+	{
+		if (!people[index].code[0])
+			continue;
+		if (name_matches(people[index].name, name, FALSE))
+		{
+			snprintf(code, (size_t)code_size, "%s", people[index].code);
+			snprintf(found, (size_t)found_size, "%s", people[index].name);
+			return 1;
+		}
+		if (name_matches(people[index].name, name, TRUE))
+		{
+			starts = index;
+			starts_count++;
+		}
+	}
+	if (starts_count > 1)
+		return -1;
+	if (starts == NONE)
+		return 0;
+	snprintf(code, (size_t)code_size, "%s", people[starts].code);
+	snprintf(found, (size_t)found_size, "%s", people[starts].name);
+	return 1;
+}
+
+short social_menu_friend_by_name(
+	char const *name,
+	char *code,
+	long code_size,
+	char *found,
+	long found_size)
+{
+	return person_by_name(social_menu.friends, social_menu.friend_count, name, code, code_size, found, found_size);
+}
+
+short social_menu_moderated_by_name(
+	char const *name,
+	char *code,
+	long code_size,
+	char *found,
+	long found_size)
+{
+	return person_by_name(social_menu.moderated, social_menu.moderated_count, name, code, code_size, found,
+		found_size);
+}
+
+/* the chat's JOIN: taken the next frame by menu_functions.c */
+static short social_menu_invite_pending = 0;
+
+void social_menu_invite_join(
+	char const *name,
+	char const *link,
+	char const *host_key)
+{
+	social_menu.join_invite[0] = social_menu.join_host_key[0] = 0;
+	snprintf(social_menu.join_name, sizeof(social_menu.join_name), "%s", name && name[0] ? name : "that player");
+	social_menu_invite_pending = _social_menu_stays;
+	if (link && link[0])
+	{
+		snprintf(social_menu.join_invite, sizeof(social_menu.join_invite), "%s", link);
+		social_menu_invite_pending = _social_menu_join;
+	}
+	else if (host_key && host_key[0])
+	{
+		snprintf(social_menu.join_host_key, sizeof(social_menu.join_host_key), "%s", host_key);
+		social_menu_invite_pending = _social_menu_join_listed;
+	}
+}
+
+short social_menu_invite_join_take(
+	void)
+{
+	short kind = social_menu_invite_pending;
+
+	social_menu_invite_pending = _social_menu_stays;
+	return kind;
 }
 
 boolean social_menu_is_muted(

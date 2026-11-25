@@ -64,6 +64,8 @@ int halo_keyboard_typed_last(void);
 /* whether, in a replay's playback, the keyboard or the mouse was used after
 the first controller (xinput_sdl.c): its hints name their keys */
 int halo_replay_keyboard_last(void);
+/* Current binding label, slot 0/1; zero and empty for unbound or invalid inputs. */
+int halo_keyboard_binding_label(int action, int slot, char *shown, unsigned int size);
 /* whether voice chat's push to talk is held (controls.push_to_talk), in the
 game and in the menus alike */
 int halo_push_to_talk_held(void);
@@ -88,7 +90,8 @@ enum halo_chat_pad_button
 	HALO_CHAT_PAD_STICK_DOWN,
 	HALO_CHAT_PAD_STICK_LEFT,
 	HALO_CHAT_PAD_STICK_RIGHT,
-	/* the shoulder buttons (the Xbox pad's white and black) */
+	/* the shoulder buttons (the Xbox pad's white and black; the right one turns
+	the chat line's channel) */
 	HALO_CHAT_PAD_LEFT_SHOULDER,
 	HALO_CHAT_PAD_RIGHT_SHOULDER,
 	/* the right stick clicked in (R3) */

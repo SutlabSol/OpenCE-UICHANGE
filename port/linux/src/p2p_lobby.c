@@ -22,8 +22,9 @@ false details:
 	printable ASCII), a stamp (8: the game's kind, an OpenCE gametype's mode
 	and Hardcore, port/linux/game/game_modes.h's game_modes_kind; a modded
 	game's first byte is instead its HALO_PORT_MOD_NETWORK_VERSION, browsers
-	hiding others, and its kind none, being a campaign; the rest reserved,
-	zero), and the signature (64) of "hceu-lobby-1" and all before it.
+	hiding others, and its kind none, being a campaign; the second its
+	map's source, P2P_LISTING_MAP_SOURCE_*, which a build from before it
+	leaves zero; the rest reserved, zero), and the signature (64) of "hceu-lobby-1" and all before it.
 
 A modded game is one randomized, or a campaign with skulls
 (halo_port_limits.h): only a build with the mod can play it, so only those
@@ -162,6 +163,8 @@ struct listing
 	/* (_listing_password: its token, sealed) */
 	unsigned char sealed_token[P2P_SEALED_TOKEN_SIZE];
 	int player_count, maximum_player_count, engine_type, kind;
+	/* (the stamp's second byte: P2P_LISTING_MAP_SOURCE_*) */
+	int map_source;
 	char name[P2P_LISTING_NAME_SIZE + 1];
 	char map[P2P_LISTING_MAP_SIZE + 1];
 	char gametype[P2P_LISTING_GAMETYPE_SIZE + 1];
@@ -226,6 +229,7 @@ static struct
 	char gametype[P2P_LISTING_GAMETYPE_SIZE + 1];
 	int engine_type;
 	int kind;
+	int map_source;
 	int flags;
 	/* a modded game: listed in LISTING_FORMAT_MODDED */
 	int modded;
@@ -388,6 +392,7 @@ static int listing_make_token(unsigned char *bytes, int flags, const unsigned ch
 	size += put_text(bytes + size, lobby.gametype, P2P_LISTING_GAMETYPE_SIZE);
 	memset(bytes + size, 0, STAMP_SIZE);
 	bytes[size] = lobby.modded ? (unsigned char)HALO_PORT_MOD_NETWORK_VERSION : (unsigned char)lobby.kind;
+	bytes[size + 1] = (unsigned char)lobby.map_source;
 	size += STAMP_SIZE;
 	memcpy(data, signature_label, sizeof(signature_label) - 1);
 	memcpy(data + sizeof(signature_label) - 1, signed_part, (size_t)size);
@@ -462,6 +467,7 @@ static int listing_read(const unsigned char *bytes, int size, struct listing *li
 	listing too short for it fails the size check below) */
 	listing->mod_version = listing->modded && offset < size ? bytes[offset] : 0;
 	listing->kind = !listing->modded && offset < size ? bytes[offset] : 0;
+	listing->map_source = offset + 1 < size && bytes[offset + 1] <= P2P_LISTING_MAP_SOURCE_MCC ? bytes[offset + 1] : 0;
 	offset += STAMP_SIZE;
 	if (offset + P2P_SIGNATURE_SIZE != size)
 		return 0;
@@ -531,9 +537,11 @@ static void update_hosting(const unsigned char *token, int player_count, int max
 {
 	/* (a dedicated server is listed by the master servers, not among the
 	games players host: server_master.c; server.list_on_brokers, until
-	there are masters, lists it here too) */
+	there are masters, lists it here too. Hosting from the menus is listed
+	here as a player's game is: a console has no publisher key for the
+	masters, and was listed nowhere) */
 	int want = token && lobby.public && config_boolean("network.public_lobby") &&
-		(!halo_server_mode() || config_boolean("server.list_on_brokers"));
+		(!halo_server_headless() || config_boolean("server.list_on_brokers"));
 
 	lobby.hosting_token_valid = token != NULL;
 	if (token)
@@ -819,6 +827,7 @@ static void listing_take(const struct queued *queued, const struct listing *list
 	shown->maximum_player_count = (unsigned char)listing->maximum_player_count;
 	shown->engine_type = (unsigned char)listing->engine_type;
 	shown->kind = (unsigned char)listing->kind;
+	shown->map_source = (unsigned char)listing->map_source;
 	shown->open = (listing->flags & _listing_open) != 0;
 	shown->in_progress = (listing->flags & _listing_in_progress) != 0;
 	shown->has_teams = (listing->flags & _listing_has_teams) != 0;
@@ -1216,6 +1225,18 @@ void p2p_set_game_listing(const char *name, const char *map, const char *gametyp
 	server_master_changed();
 }
 
+void p2p_set_game_listing_map_source(int source)
+{
+	if (source < 0 || source > P2P_LISTING_MAP_SOURCE_MCC || source == lobby.map_source)
+		return;
+	pthread_mutex_lock(&p2p_lock);
+	lobby.map_source = source;
+	if (lobby.listed)
+		republish_soon(0);
+	pthread_mutex_unlock(&p2p_lock);
+	server_master_changed();
+}
+
 void p2p_lobby_browse(int on)
 {
 	pthread_mutex_lock(&p2p_lock);
@@ -1407,7 +1428,7 @@ int p2p_lobby_brokers_reached(void)
 
 static const char *const sort_names[NUMBER_OF_P2P_LOBBY_SORTS] =
 {
-	"servers", "players", "name", "map", "type", "locked",
+	"servers", "players", "name", "map", "type", "locked", "ping",
 };
 
 int p2p_lobby_filter(struct p2p_listing *games, int count, const struct p2p_lobby_choices *choices,
@@ -1476,6 +1497,10 @@ static int sort_order(const struct p2p_listing *first, const struct p2p_listing 
 	case P2P_LOBBY_SORT_LOCKED:
 		difference = second->locked - first->locked;
 		break;
+	case P2P_LOBBY_SORT_PING:
+		/* (those with none known go after these: p2p_lobby_sort) */
+		difference = first->ping - second->ping;
+		break;
 	case P2P_LOBBY_SORT_SERVERS:
 		/* (as p2p_lobby_games has them: then those joining has not failed,
 		and the open ones) */
@@ -1491,6 +1516,16 @@ static int sort_order(const struct p2p_listing *first, const struct p2p_listing 
 	return difference ? difference : text_order(first->name, second->name);
 }
 
+/* where a game goes whichever way the order is: those of another network
+version last, and by ping, those whose ping is not known yet (not timed, or
+a password's, whose host is not) after those whose is */
+static int sort_group(const struct p2p_listing *game, int order)
+{
+	if (game->network_version != HALO_PORT_NETWORK_VERSION)
+		return 2;
+	return order == P2P_LOBBY_SORT_PING && game->ping < 0;
+}
+
 void p2p_lobby_sort(struct p2p_listing *games, int count, int order, int reverse)
 {
 	int index;
@@ -1499,16 +1534,16 @@ void p2p_lobby_sort(struct p2p_listing *games, int count, int order, int reverse
 	for (index = 1; index < count; index++)
 	{
 		struct p2p_listing game = games[index];
-		int other_version = game.network_version != HALO_PORT_NETWORK_VERSION;
+		int group = sort_group(&game, order);
 		int place = index;
 
 		while (place > 0)
 		{
 			const struct p2p_listing *before = &games[place - 1];
-			int before_other = before->network_version != HALO_PORT_NETWORK_VERSION;
+			int before_group = sort_group(before, order);
 			int difference = sort_order(before, &game, order);
 
-			if (before_other != other_version ? !before_other : (reverse ? -difference : difference) <= 0)
+			if (before_group != group ? before_group < group : (reverse ? -difference : difference) <= 0)
 				break;
 			games[place] = games[place - 1];
 			place--;

@@ -71,7 +71,7 @@ platforms, it is available on Android.
 3. Stop the recording. Enter `profile_stop`, load another map, or quit.
 
 The game writes numbered `.part<n>.json` files to
-`/sdcard/Android/data/com.halo.decomp/files/profiles/` and logs their
+`/sdcard/Android/data/com.halo.contentevolved/files/profiles/` and logs their
 paths. Parts are retained after the recording stops. Enter `adb pull` to copy
 them to a computer.
 

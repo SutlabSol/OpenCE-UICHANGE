@@ -389,7 +389,12 @@ symbols in this file:
 #include "network_shield_effects.h" /* port: port/linux/game/network_shield_effects.c */
 #include "network_third_person.h" /* port: port/linux/game/network_third_person.c */
 #include "network_privacy.h" /* port: port/linux/game/network_privacy.c */
+#include "network_riding_map.h" /* port: port/linux/game/network_riding_map.c */
 #include "map_share.h" /* port: port/linux/game/map_share.c */
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
+#if OPENCE_ENABLE_FORGE
+extern int forge_level_is_session(void); /* port/forge/src/forge_hooks.c */
+#endif
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
 #ifdef HALO_PROFILE
 #include "profile_trace.h" /* port: port/linux/src/profile_trace.c */
@@ -409,6 +414,10 @@ symbols in this file:
 #include "text/font_group.h"
 #include "tag_files/files.h"
 #include "custom_edition_cache.h" /* port: custom_edition_level_name */
+#include "custom_campaigns.h" /* port: port/linux/game/custom_campaigns.c */
+#include "mcc_cache.h" /* port: port/linux/game/mcc_cache.h */
+#include "mcc_main.h" /* port: port/linux/game/mcc_main.h */
+#include "custom_edition_maps.h" /* port: main_script_map_name, a Custom Edition campaign's maps */
 #include "view_fov.h" /* port: display.fov, before the projection and culling */
 
 #if defined(HALO_WINDOWS) || defined(HALO_ANDROID) || defined(__linux__)
@@ -944,6 +953,89 @@ void main_won_map(
 	return;
 }
 
+/* port: the level a campaign map's own script named with map_name, which
+main_won_map_private takes next; empty for none */
+static char main_script_next_level[64];
+
+/* port: the level the scripts name in the same campaign as `current`: a
+mission of the same MCC package, else a Custom Edition campaign map; FALSE
+for any other. The name may have a path and an extension (".map"); only its
+last part counts */
+static boolean main_script_level_resolve(
+	char const *current,
+	char const *requested,
+	char *next,
+	size_t size)
+{
+	char const *leaf = requested;
+	char const *cursor;
+	char candidate[160];
+	size_t length;
+
+	if (!current || !current[0] || !requested)
+		return FALSE;
+	/* port: package mission identities and lookup belong to mcc_main.c. */
+	if (mcc_level_name(current))
+		return mcc_main_script_level_resolve(current, requested, next, size);
+	for (cursor = requested; *cursor; cursor++)
+	{
+		if (*cursor == '\\' || *cursor == '/')
+			leaf = cursor + 1;
+	}
+	length = strlen(leaf);
+	if (length > 4 && !_stricmp(leaf + length - 4, ".map"))
+		length -= 4;
+	if (!length || length > 64)
+		return FALSE;
+	if (custom_edition_level_name(current))
+	{
+		snprintf(candidate, sizeof(candidate), "%s%.*s", CUSTOM_EDITION_LEVEL_NAME_PREFIX, (int)length, leaf);
+		if (!custom_edition_maps_level_campaign(candidate) || strlen(candidate) >= size)
+			return FALSE;
+		csstrncpy(next, candidate, size - 1);
+		next[size - 1] = 0;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+/* port: H1A and Custom Edition campaigns end a level by naming the next with
+map_name in its scripts, where the Xbox's game_won takes it to the next of
+its own levels. A campaign map's script that does so ends the level as a won
+one, with the level it names next (main_won_map_private): alone, it loads; in
+network co-op the host takes every machine there, and a dedicated server
+plays its rotation's next, as after any won level. Only a level of the same
+campaign is taken; any other name does nothing, and the map's other scripts
+run on (no map's script may switch to any map: hs.c) */
+void main_script_map_name(
+	char const *map_name)
+{
+	struct network_game *game = game_connection() == _game_connection_network_server ?
+		network_game_get_game() : NULL;
+	char const *current = game ? game->map.name : main_globals.soloplayer_map_name;
+	char next[NUMBEROF(main_script_next_level)];
+
+	if (!main_script_level_resolve(current, map_name, next, sizeof(next)))
+	{
+		/* port: a Custom Edition map whose next level is no campaign one
+		goes on to a map in its own folder (main_script_set_map_name) */
+		if (custom_edition_cache_tags_loaded() && !game)
+		{
+			main_script_set_map_name(map_name);
+			return;
+		}
+		error(_error_silent, "the scripts' map_name %s is no level of %s's campaign: nothing happens",
+			map_name ? map_name : "", current);
+		return;
+	}
+	error(_error_silent, "the scripts end %s, with %s next", current, next);
+	csstrncpy(main_script_next_level, next, sizeof(main_script_next_level) - 1);
+	main_script_next_level[sizeof(main_script_next_level) - 1] = 0;
+	main_won_map();
+	return;
+}
+
 void main_lost_map(
 	void)
 {
@@ -1091,6 +1183,14 @@ void main_switch_structure_bsp(
 	main_globals.switch_to_structure_bsp_index = structure_bsp_index;
 	hud_load(TRUE);
 	return;
+}
+
+/* port: whether the main menu's map is the one loaded (hosting from the menus
+begins there: port/linux/game/host_dashboard.c) */
+boolean main_menu_scenario_is_loaded(
+	void)
+{
+	return main_globals.main_menu_scenario_loaded;
 }
 
 void main_goto_main_menu(
@@ -1285,6 +1385,9 @@ short main_get_solo_level_from_name(
 {
 	char lower_name[128] = { 0 };
 	short level;
+
+	if (mcc_level_name(name))
+		return NONE;
 
 	/* port: a Custom Edition map (custom_maps\a30) is never one of the
 	campaign's levels, whatever its name holds
@@ -1528,11 +1631,18 @@ static void main_new_map(
 		main_globals.save_core = FALSE;
 		main_globals.load_core = FALSE;
 		main_globals.load_core_at_startup = FALSE;
+		/* the refusal is not an error to stop on: left pending, the menu
+		map's errors_handle below took it and stopped the game ("main_new_map()
+		failed", floodgulch_forge_square) */
+		errors_clear();
 		main_return_to_menu_saying(text);
 		return;
 	}
 	else
 	{
+		/* port: an MCC map that fails to load goes back to the menus (mcc_main.c) */
+		if (mcc_main_load_failed(options->map_name))
+			return;
 		error(_error_immediate, "game_load() failed.");
 	}
 
@@ -1963,6 +2073,9 @@ void main_load_ui_scenario(
 {
 	struct game_options options;
 
+	/* port: the custom campaign the settings name, mounted before the menus'
+	map first loads (port/linux/game/custom_campaigns.c) */
+	custom_campaign_startup();
 	game_precache_new_map("levels\\ui\\ui", TRUE);
 	match_assert("c:\\halo\\SOURCE\\main\\main.c", 1092,
 		!main_globals.main_menu_scenario_loaded);
@@ -1992,6 +2105,9 @@ void main_load_ui_scenario(
 void main_roll_credits(
 	void)
 {
+	/* port: standalone MCC scenarios finish through their own menu transition. */
+	if (mcc_main_map_completed())
+		return;
 	error(_error_silent, "congratulations, you won the game!");
 	main_menu_load();
 	game_end_credits_start();
@@ -2161,6 +2277,29 @@ static void main_saving_map_private(
 static void main_save_map_private(
 	void)
 {
+	/* port: none while a cinematic can be skipped and the checkpoint its skip
+	goes back to is taken: a script that saves every so often would replace it,
+	and the skip would play the rest of the cinematic again. A save waits until
+	cinematic_skip_stop as one that is not safe would: one with a timeout gives
+	up after as many ticks (a script may wait for game_saving before the
+	cinematic's end), and an unsafe one, which can't wait, at once. A skip lets
+	go of it (main_skip_cinematic) */
+	if (cinematic_port_holds_checkpoints())
+	{
+		long current_tick = game_time_get();
+
+		if (current_tick > main_save_last_tick && main_globals.save_map_timeout)
+			main_globals.ticks_unable_to_save += current_tick-main_save_last_tick;
+		main_save_last_tick = current_tick;
+		if (!main_globals.save_map_safely ||
+			(main_globals.save_map_timeout && main_globals.ticks_unable_to_save > 240))
+		{
+			if (debug_game_save)
+				console_printf(FALSE, "gave up trying to save");
+			main_globals.saving_map = FALSE;
+		}
+		return;
+	}
 	if (!game_time_get_paused())
 	{
 		boolean save_map_safely = main_globals.save_map_safely;
@@ -2287,6 +2426,13 @@ static void main_lost_map_private(
 		{
 			if (skull_active(_skull_iron) && local_player_count() < 2 && players_are_all_dead())
 				main_reset_map();
+#if OPENCE_ENABLE_FORGE
+			/* port: a solo Forge game's death respawns the player: a revert
+			would rewind every object to the checkpoint, the map's edits since
+			with them (port/forge/src/forge_hooks.c) */
+			else if (players_are_all_dead() && forge_level_is_session())
+				players_respawn_at_checkpoint();
+#endif
 			else
 				game_state_revert();
 		}
@@ -2507,13 +2653,30 @@ static void main_won_map_private(
 {
 	short level;
 	short local_player_index;
+	/* port: the level the scripts named with map_name (main_script_map_name),
+	if they did */
+	char next[NUMBEROF(main_script_next_level)];
+
+	csstrncpy(next, main_script_next_level, sizeof(next) - 1);
+	next[sizeof(next) - 1] = 0;
+
+	/* port: explicit MCC campaigns own their mission order and host decision.
+	 * The Xbox/CE level table below cannot represent package mission identities. */
+	if (mcc_main_campaign_won(next[0] ? next : NULL))
+	{
+		main_script_next_level[0] = 0;
+		main_globals.won_map = FALSE;
+		return;
+	}
 
 	/* port: the level's score (display.campaign_score) is shown over the level
 	just won, until A or B is pressed, before anything else of the win is
 	done: this runs each frame until then (a network co-op game's clients
-	show theirs as they are told the level is won) */
+	show theirs as they are told the level is won), the scripts' next level
+	kept for it */
 	if (campaign_score_postgame_wait())
 		return;
+	main_script_next_level[0] = 0;
 	/* port: the skulls found in the level and not lost are kept, before the
 	next level's start forgets them (port/linux/game/skulls.c) */
 	{
@@ -2523,8 +2686,8 @@ static void main_won_map_private(
 	}
 	/* port: when a network co-op level is won, the round ends for everyone as
 	in multiplayer, back to the lobby, and the next round is the campaign's
-	next level (The Maw's: The Pillar of Autumn). A level not in the campaign
-	repeats. */
+	next level (The Maw's: The Pillar of Autumn), or the one the scripts named.
+	A level not in the campaign repeats. */
 	/* port: a daily challenge's level won ends its game: back to the lobby,
 	which plays it again, or to the menus, never on to the next level, and
 	the campaign's progress not kept, its settings the challenge's
@@ -2555,7 +2718,7 @@ static void main_won_map_private(
 		main_globals.won_map = FALSE;
 		level = game ? main_get_solo_level_from_name(game->map.name) : NONE;
 		player_profile_save_level_completed(0);
-		network_game_server_port_cooperative_won(level != NONE ?
+		network_game_server_port_cooperative_won(next[0] ? next : level != NONE ?
 			main_get_solo_level_name((level + 1) % NUMBER_OF_SINGLE_PLAYER_LEVELS) : NULL);
 		return;
 	}
@@ -2569,6 +2732,14 @@ static void main_won_map_private(
 		level = NONE;
 	for (local_player_index = 0; local_player_index < player_spawn_count; local_player_index++)
 		player_profile_save_level_completed(local_player_index);
+	/* port: a Custom Edition campaign's next level, as its scripts named it,
+	begun anew as ui_set_next_level begins one (no saved game taken) */
+	if (next[0])
+	{
+		main_set_map_name(next);
+		main_disallow_persistent_storage();
+		return;
+	}
 	ui_set_next_level(level);
 	return;
 }
@@ -3390,7 +3561,7 @@ void halt_and_catch_fire(
 #endif
 	/* port: a dedicated server has no screen to halt on: its error logged,
 	it ends with exit code 1 (port/linux/game/server_director.c) */
-	if (halo_server_mode())
+	if (halo_server_headless())
 		server_fatal(error_get());
 	if (!global_screenshot_count.halt_recursion_lock)
 	{
@@ -3516,7 +3687,7 @@ void main_loop_of_death(
 	void)
 {
 	/* port: as halt_and_catch_fire, on a dedicated server */
-	if (halo_server_mode())
+	if (halo_server_headless())
 		server_fatal(error_get());
 	while (TRUE)
 	{
@@ -3602,7 +3773,7 @@ static void main_game_render(
 			local player 0's, as film playback's is above, so that it is drawn
 			as a player's, with the playback's own view of the player watched
 			(port/linux/game/network_replay_playback.c) */
-			if (window_index == 0 && network_replay_playing() && network_replay_camera())
+			if (window_index == 0 && network_replay_viewing() && network_replay_camera())
 			{
 				last_local_player_index = 0;
 				window->local_player_index = 0;
@@ -3827,6 +3998,9 @@ static boolean main_loop_iteration(
 		event_manager_update();
 		telnet_console_process();
 		overlay_menu_update();
+		/* port: the host's screen, hosting from the menus
+		(port/linux/game/host_dashboard.c) */
+		host_dashboard_update();
 		link_page_update();
 		/* port: the Theater's replay page (port/linux/game/network_replay_page.c) */
 		network_replay_page_update();
@@ -3854,6 +4028,8 @@ static boolean main_loop_iteration(
 			/* port: whether the host's internet game is public, for its
 			players' friends (port/linux/game/network_privacy.c) */
 			network_privacy_update();
+			/* port: the map's riding choice, for every machine (port/linux/game/network_riding_map.c) */
+			network_riding_map_update();
 			/* port: map sharing, in the lobby and in game (port/linux/game/map_share.c) */
 			map_share_update();
 			/* port: the host's Tag Injector multiplayer weapons, shared with its
@@ -3938,7 +4114,7 @@ static boolean main_loop_iteration(
 
 			/* port: a dedicated server's frames paced by its clock, with no
 			display to wait for (port/linux/src/server_mode.c) */
-			if (halo_server_mode())
+			if (halo_server_headless())
 			{
 				server_mode_pace_frame();
 				profile_scope(main_update_time_section, main_update_time_unthrottled();)
@@ -4002,6 +4178,12 @@ static boolean main_loop_iteration(
 						render_frame = main_globals.main_menu_scenario_loaded ||
 							(main_globals.halt_time_scale && game_time_get()>0);
 					render_frame &= !game_engine_running() || game_time_get()>=3;
+					/* port: hosting from the menus, the host's screen every frame:
+					back in the lobby after a game, with nobody in it, the
+					game's clock stands still with its engine set up, which
+					drew nothing (port/linux/game/host_dashboard.c) */
+					if (halo_server_hosting())
+						render_frame = TRUE;
 					/* port: a replay's skip ahead: the frame it holds drawn, and its
 					held frames with its lines, though they run no tick or many
 					(port/linux/game/network_replay_playback.c) */
@@ -4032,14 +4214,14 @@ static boolean main_loop_iteration(
 				}
 			}
 			/* port: nothing drawn on a dedicated server, nor waited for */
-			else if (!halo_server_mode())
+			else if (!halo_server_headless())
 			{
 				profile_render_start();
 				main_pregame_render();
 				profile_render_end();
 			}
 
-			if (!halo_server_mode())
+			if (!halo_server_headless())
 				profile_scope(main_throttle_section, main_rasterizer_throttle();)
 
 			if (render_frame && !debug_no_drawing)

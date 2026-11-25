@@ -35,6 +35,10 @@ debug>.zip); a build without one never looks for updates */
 #if defined(HALO_ANDROID) || defined(HALO_WEB)
 /* (none: the Android app updates itself, the site through its service
 worker) */
+#elif defined(HALO_MACOS)
+/* (the macOS app, replaced whole from the release's zip by the host, as
+writing into it would break its signature: update_install_app) */
+#define UPDATE_PLATFORM "macos"
 #elif defined(_WIN32)
 #define UPDATE_PLATFORM "windows"
 #elif defined(__aarch64__)
@@ -71,7 +75,13 @@ worker) */
 #define PATH_SEPARATOR "/"
 #endif
 #define UPDATE_ASSET "halo-" UPDATE_PLATFORM "-" HALO_BUILD_FLAVOR ".zip"
+#ifdef HALO_MACOS
+/* (beside the app, in the folder that holds it: hidden, and on its volume,
+for the bundles' renames) */
+#define UPDATE_DIRECTORY ".Halo Content Evolved update"
+#else
 #define UPDATE_DIRECTORY "update.partial"
+#endif
 #define MAXIMUM_UPDATE_FILES 32
 /* the most a download may be: GitHub's answer about the latest release, a
 release's zip (about 30 MB) */
@@ -95,6 +105,11 @@ static long updater_latest_network_version;
 static long updater_release_network_version;
 static char updater_directory[1024];
 static char updater_executable[1024];
+#ifdef HALO_MACOS
+/* the running app's bundle (<folder>/<name>.app, whose Contents/MacOS holds
+the executable): what is replaced and started again */
+static char updater_app[1024];
+#endif
 
 /* ---------- paths */
 
@@ -654,6 +669,21 @@ static int updater_install(int windowed, char *error, size_t error_size)
 	{
 		snprintf(error, error_size, "could not make %s (is the game's folder read-only?)", partial);
 	}
+#ifdef HALO_MACOS
+	/* (the whole bundle, put in place by the host; the zip and the old app
+	are deleted at the next start, updater_clean_up) */
+	else if ((windowed ? updater_download_zip(zip_path, error, error_size) :
+		updater_download_zip_quietly(zip_path, error, error_size)) &&
+		update_install_app(zip_path, updater_app, error, (int)error_size))
+	{
+		/* (the flat unpacking is the other systems') */
+		(void)names;
+		(void)name_count;
+		(void)updater_unpack;
+		(void)updater_replace_files;
+		return 1;
+	}
+#else
 	else if ((windowed ? updater_download_zip(zip_path, error, error_size) :
 		updater_download_zip_quietly(zip_path, error, error_size)) &&
 		updater_unpack(zip_path, names, &name_count, error, error_size) &&
@@ -662,6 +692,7 @@ static int updater_install(int windowed, char *error, size_t error_size)
 		update_delete_file(partial);
 		return 1;
 	}
+#endif
 	return 0;
 }
 
@@ -674,7 +705,11 @@ static void updater_update(void)
 	if (updater_install(1, error, sizeof(error)))
 	{
 		platform_log("update: starting build %ld", updater_latest_build);
+#ifdef HALO_MACOS
+		if (update_launch(updater_app))
+#else
 		if (update_launch(updater_executable))
+#endif
 			exit(EXIT_SUCCESS);
 		snprintf(error, sizeof(error), "the new version is in place, but could not be started: start it again");
 	}
@@ -700,6 +735,14 @@ static void updater_clean_up(void)
 	char path[1200];
 	size_t index;
 
+#ifdef HALO_MACOS
+	/* (the update's folder whole: the download, the unpacked app, the old one) */
+	(void)names;
+	(void)index;
+	updater_path(path, sizeof(path), UPDATE_DIRECTORY);
+	update_delete_tree(path);
+	return;
+#endif
 	for (index = 0; index < sizeof(names) / sizeof(*names); index++)
 	{
 		updater_path(path, sizeof(path), names[index]);
@@ -713,18 +756,50 @@ static void updater_clean_up(void)
 
 /* ---------- the game's */
 
-/* at start-up (sdl_platform.c): looks for a new version, in the background */
-void updater_start(void)
+/* updater_executable's folder in updater_directory (on macOS, the folder
+that holds the app, whose bundle is updater_app); 0 if it has none */
+static int updater_find_directory(void)
 {
 	char *slash;
 
-	if (!update_executable_path(updater_executable, sizeof(updater_executable)))
-		return;
 	snprintf(updater_directory, sizeof(updater_directory), "%s", updater_executable);
+#ifdef HALO_MACOS
+	/* (<folder>/<name>.app/Contents/MacOS/halo) */
+	{
+		int up;
+
+		for (up = 0; up < 3; up++)
+		{
+			slash = strrchr(updater_directory, '/');
+			if (!slash)
+				return 0;
+			*slash = 0;
+		}
+		if (strlen(updater_directory) < 4 || strcmp(updater_directory + strlen(updater_directory) - 4, ".app"))
+		{
+			platform_log("update: not looked for: the game is not in an app bundle (%s)", updater_executable);
+			return 0;
+		}
+		snprintf(updater_app, sizeof(updater_app), "%s", updater_directory);
+	}
+#endif
 	slash = strrchr(updater_directory, PATH_SEPARATOR[0]);
 	if (!slash)
-		return;
+		return 0;
 	*slash = 0;
+	return 1;
+}
+
+/* at start-up (sdl_platform.c): looks for a new version, in the background */
+void updater_start(void)
+{
+	if (!update_executable_path(updater_executable, sizeof(updater_executable)))
+		return;
+	if (!updater_find_directory())
+	{
+		updater_directory[0] = 0;
+		return;
+	}
 	updater_clean_up();
 	/* (not for builds without a number, the player's no, or runs nobody is
 	watching, but for a test with its answer) */
@@ -765,22 +840,17 @@ way (update.auto and the tests' rules are not asked: the setting is the
 operator's): 0 if it cannot be looked for (a build without a number) */
 int updater_server_check(void)
 {
-	char *slash;
-
 	if (HALO_BUILD_NUMBER <= 0)
 		return 0;
 	if (!updater_directory[0])
 	{
 		if (!update_executable_path(updater_executable, sizeof(updater_executable)))
 			return 0;
-		snprintf(updater_directory, sizeof(updater_directory), "%s", updater_executable);
-		slash = strrchr(updater_directory, PATH_SEPARATOR[0]);
-		if (!slash)
+		if (!updater_find_directory())
 		{
 			updater_directory[0] = 0;
 			return 0;
 		}
-		*slash = 0;
 		updater_clean_up();
 	}
 	if (SDL_GetAtomicInt(&updater_state) == _updater_checking)
@@ -900,6 +970,36 @@ int updater_server_install_poll(char *error, int size)
 		return -1;
 	}
 	snprintf(error, (size_t)size, "no install was started");
+	return -1;
+}
+#else
+/* (the PS5's: no dedicated server, but its director's hosting from the
+menus, whose updates are the app's own, server_director.c asks these only
+of a dedicated server's process) */
+int updater_server_check(void)
+{
+	return 0;
+}
+
+long updater_server_available(void)
+{
+	return 0;
+}
+
+long updater_server_available_network_version(void)
+{
+	return 0;
+}
+
+int updater_server_install_start(void)
+{
+	return 0;
+}
+
+int updater_server_install_poll(char *error, int size)
+{
+	if (size > 0)
+		error[0] = 0;
 	return -1;
 }
 #endif

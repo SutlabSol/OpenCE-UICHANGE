@@ -8,6 +8,7 @@
  */
 
 #include "cseries.h"
+#include "cseries/errors.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -28,11 +29,13 @@
 #include "ai/ai_scenario_definitions.h"
 #include "ai/encounters.h"
 #include "game/game_engine.h"
+#include "game/players.h"
 #include "scenario/scenario.h"
 #include "math/real_math.h"
 #include "scenario/scenario_definitions.h"
 #include "physics/collisions.h"
 #include "units/unit_definitions.h"
+#include "units/biped_definitions.h"
 #include "items/items.h"
 #include "items/weapons.h"
 #include "items/weapon_definitions.h"
@@ -42,6 +45,8 @@
 #include "halo_skulls.h"
 
 #include "forge_engine.h"
+#include "forge_volumes.h"
+#include "forge_ai_routes.h"
 
 /* (the C library's own, not cseries.h's debug allocator: these blocks are
 calloc's, and live across maps) */
@@ -196,7 +201,7 @@ copies in as it loads, the same on every machine, so a unit the host's
 encounters make is the same tag on its clients (randomizer.c). A Forge game
 played online copies in all of them for that reason. */
 
-#define FORGE_AI_MAX_ADDED_ENCOUNTERS 32
+#define FORGE_AI_MAX_ADDED_ENCOUNTERS 64
 /* (weapons a level's spawns can name: a starting location's spare flag bits) */
 #define FORGE_AI_MAX_WEAPONS 127
 #define FORGE_AI_LOCATION_WEAPON_SHIFT 1
@@ -215,6 +220,11 @@ at most 512 (encounters.c) */
 /* what a made squad is, as the maps' own are: guarding, all but the two
 letters no map's use, its timer running */
 #define FORGE_AI_SQUAD_STATE 7
+/* (a new spawn's HUNT/FOLLOW START DISTANCE and FOLLOW DISTANCE, world units) */
+#define FORGE_AI_GOAL_START_DEFAULT 6
+#define FORGE_AI_GOAL_FOLLOW_DEFAULT 3
+/* (HUNT's HUNT RANGE as the goal is chosen: goal_start, 0 anywhere) */
+#define FORGE_AI_GOAL_HUNT_RANGE_DEFAULT 30
 #define FORGE_AI_SQUAD_POSITION_GROUPS 0x03FFFF03u
 #define FORGE_AI_SQUAD_POSITION_GROUP_COUNT 6
 
@@ -243,6 +253,8 @@ struct forge_ai_added_encounter
 	/* (a made encounter's, source_encounter NONE) */
 	struct firing_position_definition *firing_positions;
 	short firing_position_count;
+	/* (a GOAL's spawn's alone: forge_ai_goal_squad_make) */
+	boolean goal;
 };
 
 /* ---------- the actors the palette offers
@@ -413,6 +425,7 @@ static struct
 	struct actor_starting_location *locations;
 	struct tag_reference *palette;
 	struct firing_position_definition *firing_positions;
+	struct move_position_definition *move_positions;
 	void *original_encounters;
 	long original_encounter_count;
 	void *original_palette;
@@ -441,6 +454,8 @@ static int s_markers_scanned;
 /* Forge mode: the AI stands still as models on its markers, none of it
 playing, the encounters hidden from the engine so none respawn */
 static int s_ai_held;
+/* (diagnostic: the first units a level's AI places, in debug.txt) */
+static int s_ai_units_placed_logged;
 static struct scenario *s_held_scenario;
 static long s_held_encounter_count;
 
@@ -513,6 +528,8 @@ static struct tag_reference *forge_ai_original_palette(struct scenario const *sc
 	return (struct tag_reference *)scen->ai_actor_palette.address;
 }
 
+static void forge_ai_goals_reset(void);
+
 /* the map's own blocks back, and what stood in for them gone */
 static void forge_ai_scenario_restore(struct scenario *scen)
 {
@@ -532,7 +549,9 @@ static void forge_ai_scenario_restore(struct scenario *scen)
 	free(s_built.locations);
 	free(s_built.palette);
 	free(s_built.firing_positions);
+	free(s_built.move_positions);
 	memset(&s_built, 0, sizeof(s_built));
+	forge_ai_goals_reset();
 }
 
 int forge_ai_map_editable(void)
@@ -583,18 +602,65 @@ static int forge_ai_entry_plays(struct forge_ai_spawn_entry const *entry)
 /* a spawn with a squad of its own */
 static int forge_ai_entry_own_squad(struct forge_ai_spawn_entry const *entry)
 {
-	return entry->encounter_index < 0 || entry->detached || (entry->gametype_flags & FORGE_AI_RANDOM_RANK);
+	/* (a GOAL's spawn has its squad, and an encounter, to itself: forge_ai_goals_*) */
+	return entry->encounter_index < 0 || entry->detached || (entry->gametype_flags & FORGE_AI_RANDOM_RANK) ||
+		entry->goal != _forge_ai_goal_none;
+}
+
+/* whether a team is a player's in this match: a team game's red or blue, or
+any team a player of a free for all is on */
+static boolean forge_ai_players_team(short team_index)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+
+	if (game_engine_has_teams())
+		return team_index == 0 || team_index == 1;
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		if (player->team_index == team_index)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+int forge_ai_team_enmity(short our_team_index, short other_team_index)
+{
+	short other;
+
+	if ((our_team_index == FORGE_AI_TEAM_ALL_PLAYERS) == (other_team_index == FORGE_AI_TEAM_ALL_PLAYERS))
+		return NONE;
+	/* (a match of a multiplayer map's, not Firefight's: its players are all
+	on one team there, and a campaign's team 6 is its own) */
+	if (!g_forge.initialized || !game_engine_running() || firefight_active())
+		return NONE;
+	other = our_team_index == FORGE_AI_TEAM_ALL_PLAYERS ? other_team_index : our_team_index;
+	return forge_ai_players_team(other) ? FALSE : NONE;
+}
+
+/* the team an AI spawn plays on in this match: its own, or the players'
+teams as the match has them (FORGE_AI_TEAM_*) */
+static short forge_ai_match_team(short team)
+{
+	if (team != FORGE_AI_TEAM_ALL_PLAYERS && team != FORGE_AI_TEAM_RED && team != FORGE_AI_TEAM_BLUE)
+		return team;
+	if (!game_engine_running() || firefight_active())
+		return _game_team_player;
+	if (game_engine_has_teams() && team != FORGE_AI_TEAM_ALL_PLAYERS)
+		return team == FORGE_AI_TEAM_RED ? 0 : 1;
+	return FORGE_AI_TEAM_ALL_PLAYERS;
 }
 
 static short forge_ai_entry_team(struct forge_ai_spawn_entry const *entry, long variant)
 {
-	if (entry->team == _game_team_default)
-	{
-		struct actor_variant_definition *definition = (struct actor_variant_definition *)tag_get('actv', variant);
+	struct actor_variant_definition *definition;
 
-		if (definition->unit_reference.index != NONE)
-			return unit_definition_get(definition->unit_reference.index)->unit.default_team;
-	}
+	if (entry->team != _game_team_default)
+		return forge_ai_match_team(entry->team);
+	definition = (struct actor_variant_definition *)tag_get('actv', variant);
+	if (definition->unit_reference.index != NONE)
+		return unit_definition_get(definition->unit_reference.index)->unit.default_team;
 	return entry->team;
 }
 
@@ -864,6 +930,1609 @@ short forge_ai_squad_palette_index(void const *squad, short palette_index)
 	return palette_index;
 }
 
+/* ---------- AI goals: PATROL VOLUME, ROUTE, HUNT, FOLLOW
+
+A spawn with a GOAL has a squad, and an encounter, to itself, so what its
+units walk and fight from is theirs alone. The engine does the walking where
+it can: a squad's move positions are where its units go out of a fight
+(action_alert.c), at random (a PATROL VOLUME's, "moving randomly", which every
+Forge squad was already) or in order (a ROUTE's, looping or back and forth),
+and a fight, or being seen, stops it as it stops any squad's; out of the fight
+they go on from where they are. Its firing positions are where they fight
+from: a PATROL VOLUME's are on the ground in it and its PURSUIT RANGE, which
+keeps their fight there (and one who runs out past it is sent back); the rest
+have theirs on rings round where they are, laid again as they go.
+
+A ROUTE has a leader: the squad's first unit walks it (forge_ai_route_next_position),
+the others follow it, as FOLLOW's units follow a player (forge_ai_goals_update);
+another takes over when it dies. HUNT's units go for their player; FOLLOW's
+keep near theirs. Out of a fight only: once they fight, the engine has them.
+
+Where the volume and the route are: Forge's own (live instances), or, as a
+match of a saved map starts, before its markers are made, the saved map's
+VOLUME| and AI_ROUTE| lines (forge_ai_saved_parse). */
+
+#define FORGE_AI_GOAL_MOVE_POSITIONS 32
+#define FORGE_AI_GOAL_CANDIDATES 256
+/* (a route's units' leader is followed from this far, to this far) */
+#define FORGE_AI_FOLLOWER_START 4.0f
+#define FORGE_AI_FOLLOWER_DISTANCE 2.5f
+/* (a goal unit this near its point, held from it - a squadmate on it - has
+reached it) */
+#define FORGE_AI_ARRIVE_DISTANCE 2.0f
+/* (rings of firing positions laid again once their middle is this far behind) */
+#define FORGE_AI_GOAL_RING_MOVE 6.0f
+/* (a squad's alarm: once one of its units fights, is hurt or dies, all of them
+are alert its ALERT TIME after the last of it - the route held, the patrol and
+the rest kept - and those not fighting go to within this far of where it was) */
+#define FORGE_AI_GOAL_ALARM_JOIN 4.0f
+/* (the engine's encounters, encounters.c's MAXIMUM_ENCOUNTERS) */
+#define FORGE_AI_ENGINE_ENCOUNTERS 128
+
+extern boolean death_volume_column(real_point3d const *point, real height);
+static struct forge_ai_spawn_entry *forge_ai_entry_of(struct forge_live_instance const *inst);
+static int forge_ai_over_ground(float x, float y, float z, float height, union real_point3d *point);
+
+struct forge_ai_goal_volume
+{
+	int number;
+	int shape;
+	float position[3];
+	float yaw, pitch, roll;
+	float size[3];
+	float pursuit;
+};
+
+struct forge_ai_goal_route
+{
+	int number;
+	int behavior;
+	int count;
+	float points[FORGE_AI_ROUTE_MAX_POINTS][3];
+	short waits[FORGE_AI_ROUTE_MAX_POINTS];
+	short orders[FORGE_AI_ROUTE_MAX_POINTS];
+};
+
+/* a saved map's AI PATROL volumes and routes, as its text has them */
+static struct
+{
+	struct forge_ai_goal_volume volumes[FORGE_VOLUME_PATROL_MAX];
+	int volume_count;
+	struct forge_ai_goal_route routes[FORGE_AI_ROUTE_MAX];
+	int route_count;
+} s_saved_goals;
+
+/* a GOAL's squad as the level plays it */
+struct forge_ai_goal_slot
+{
+	uint8_t goal, who, start, follow;
+	short encounter_index;
+	struct squad_definition *squad;
+	struct firing_position_definition *firing;
+	struct forge_ai_goal_volume volume;
+	int behavior;
+	int route_started;
+	/* (where the route's walk is: the point its leader walks to, NONE before
+	it sets out, and which way along it, so a new leader, or the leader after
+	a fight, goes on from there) */
+	short route_target;
+	short route_forward;
+	long leader_unit;
+	/* (its alarm: alert until this tick (0: none), from about here; how many
+	units it had alive last update, a death sounding it) */
+	long alarm_until;
+	float alarm_point[3];
+	int alive_count;
+	int alive_now;
+	boolean alarm_seen;
+	/* (GO TO PLAYER: going for a player in its range, this tick: at a run) */
+	long chasing_until;
+	/* (its ALERT TIME, ticks; whether its team is a players' - red, blue, all
+	players - whose GO TO PLAYER stops STOP DISTANCE short) */
+	long alert_ticks;
+	boolean friendly;
+	/* (the route's leader: where it was, since when, and how often it was
+	sent on again from there, to tell it is stuck) */
+	float stuck_point[3];
+	long stuck_since;
+	int stuck_tries;
+	float ring_center[3];
+	/* (where its units are, this update: the rings' middle) */
+	float sum[3];
+	int sum_count;
+};
+
+static struct forge_ai_goal_slot s_goals[FORGE_AI_MAX_ADDED_ENCOUNTERS];
+static int s_goal_count;
+static short s_goal_of_encounter[FORGE_AI_ENGINE_ENCOUNTERS];
+
+/* (the level's goals gone, with what it built) */
+static void forge_ai_goals_reset(void)
+{
+	s_goal_count = 0;
+	memset(s_goal_of_encounter, 0xFF, sizeof(s_goal_of_encounter));
+}
+
+struct forge_ai_ground
+{
+	real_point3d point;
+	long surface_index;
+	short cluster_index;
+};
+
+/* the saved map's goal lines (forge_ai_saved_parse) */
+static void forge_ai_saved_goals_parse(char const *text)
+{
+	char const *cur;
+
+	memset(&s_saved_goals, 0, sizeof(s_saved_goals));
+	for (cur = text; (cur = strstr(cur, "VOLUME|")) != NULL; cur += 7)
+	{
+		struct forge_ai_goal_volume volume;
+		int effect = 0, map_index = 0, flags = 0;
+		float damage = 0.0f;
+
+		/* ("AI_..." or a line's start alone) */
+		if (cur > text && cur[-1] != '\n' && cur[-1] != '\r')
+			continue;
+		memset(&volume, 0, sizeof(volume));
+		if (sscanf(cur + 7, "%d|%d|%f|%f|%f|%f|%f|%f|%f|%f|%f|%f|%d|%d", &volume.shape, &effect, &damage,
+				&volume.position[0], &volume.position[1], &volume.position[2], &volume.yaw, &volume.pitch, &volume.roll,
+				&volume.size[0], &volume.size[1], &volume.size[2], &map_index, &flags) < 14 ||
+			effect != _forge_volume_ai_patrol || FORGE_VOLUME_PATROL_NUMBER(flags) == 0 ||
+			s_saved_goals.volume_count >= FORGE_VOLUME_PATROL_MAX)
+		{
+			continue;
+		}
+		volume.number = FORGE_VOLUME_PATROL_NUMBER(flags);
+		volume.pursuit = damage;
+		if (volume.shape == _forge_volume_map_box)
+			volume.shape = _forge_volume_box;
+		s_saved_goals.volumes[s_saved_goals.volume_count++] = volume;
+	}
+	for (cur = text; (cur = strstr(cur, "AI_ROUTE|")) != NULL; cur += 9)
+	{
+		float x = 0.0f, y = 0.0f, z = 0.0f, yaw = 0.0f;
+		unsigned usage = 0;
+		struct forge_ai_goal_route *route = NULL;
+		int number, order, k, slot;
+
+		/* (%g: scanf's %f, but the AI_SPAWN line's is the one the tests read) */
+		if (sscanf(cur + 9, "%g|%g|%g|%g|%u", &x, &y, &z, &yaw, &usage) != 5)
+			continue;
+		number = FORGE_AI_ROUTE_NUMBER(usage);
+		order = FORGE_AI_ROUTE_ORDER(usage);
+		if (number == 0)
+			continue;
+		for (k = 0; k < s_saved_goals.route_count && !route; k++)
+		{
+			if (s_saved_goals.routes[k].number == number)
+				route = &s_saved_goals.routes[k];
+		}
+		if (!route)
+		{
+			if (s_saved_goals.route_count >= FORGE_AI_ROUTE_MAX)
+				continue;
+			route = &s_saved_goals.routes[s_saved_goals.route_count++];
+			memset(route, 0, sizeof(*route));
+			route->number = number;
+			route->behavior = FORGE_AI_ROUTE_BEHAVIOR(usage);
+		}
+		if (route->count >= FORGE_AI_ROUTE_MAX_POINTS)
+			continue;
+		/* (in their order) */
+		for (slot = route->count; slot > 0 && route->orders[slot - 1] > order; slot--)
+		{
+			memcpy(route->points[slot], route->points[slot - 1], sizeof(route->points[0]));
+			route->waits[slot] = route->waits[slot - 1];
+			route->orders[slot] = route->orders[slot - 1];
+		}
+		route->points[slot][0] = x;
+		route->points[slot][1] = y;
+		route->points[slot][2] = z;
+		route->waits[slot] = (short)forge_ai_route_wait_seconds((int16_t)(uint16_t)usage);
+		route->orders[slot] = (short)order;
+		route->count++;
+	}
+}
+
+/* an AI PATROL volume of this number: Forge's, else the saved map's */
+static int forge_ai_goal_volume_get(int number, struct forge_ai_goal_volume *out)
+{
+	int32_t live_idx = forge_volume_patrol_find(number);
+	int k;
+
+	if (live_idx >= 0)
+	{
+		struct forge_live_instance const *inst = &g_forge.live_instances[live_idx];
+		struct forge_volume const *volume = forge_volume_get(live_idx);
+
+		memset(out, 0, sizeof(*out));
+		out->number = number;
+		out->shape = volume->shape == _forge_volume_map_box ? _forge_volume_box : volume->shape;
+		out->position[0] = inst->x;
+		out->position[1] = inst->y;
+		out->position[2] = inst->z;
+		out->yaw = inst->yaw;
+		out->pitch = inst->pitch;
+		out->roll = inst->roll;
+		memcpy(out->size, volume->size, sizeof(out->size));
+		out->pursuit = volume->damage;
+		return 1;
+	}
+	for (k = 0; k < s_saved_goals.volume_count; k++)
+	{
+		if (s_saved_goals.volumes[k].number == number)
+		{
+			*out = s_saved_goals.volumes[k];
+			return 1;
+		}
+	}
+	return 0;
+}
+
+/* a route of this number: Forge's, else the saved map's */
+static int forge_ai_goal_route_get(int number, struct forge_ai_goal_route *out)
+{
+	int32_t points[FORGE_AI_ROUTE_MAX_POINTS];
+	int count = forge_ai_route_points(number, points, FORGE_AI_ROUTE_MAX_POINTS);
+	int k;
+
+	if (count > 0)
+	{
+		memset(out, 0, sizeof(*out));
+		out->number = number;
+		out->count = count;
+		out->behavior = FORGE_AI_ROUTE_BEHAVIOR(g_forge.live_instances[points[0]].team_designator);
+		for (k = 0; k < count; k++)
+		{
+			struct forge_live_instance const *inst = &g_forge.live_instances[points[k]];
+
+			out->points[k][0] = inst->x;
+			out->points[k][1] = inst->y;
+			out->points[k][2] = inst->z;
+			out->waits[k] = (short)forge_ai_route_wait_seconds(inst->team_designator);
+			out->orders[k] = (short)k;
+		}
+		return 1;
+	}
+	for (k = 0; k < s_saved_goals.route_count; k++)
+	{
+		if (s_saved_goals.routes[k].number == number && s_saved_goals.routes[k].count > 0)
+		{
+			*out = s_saved_goals.routes[k];
+			return 1;
+		}
+	}
+	return 0;
+}
+
+/* the floors under (x, y) between top and bottom, highest first, that an actor
+can stand on: level, in the map, out of its kill volumes */
+static int forge_ai_ground_column(float x, float y, float top, float bottom, struct forge_ai_ground *out, int max)
+{
+	unsigned long const flags = FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit);
+	real_point3d start;
+	int count = 0, tries;
+
+	start.x = x;
+	start.y = y;
+	start.z = top;
+	for (tries = 0; tries < 6 && count < max && start.z > bottom; tries++)
+	{
+		struct collision_result collision;
+		real_vector3d vector;
+		struct location location;
+
+		vector.i = 0.0f;
+		vector.j = 0.0f;
+		vector.k = bottom - start.z;
+		memset(&collision, 0, sizeof(collision));
+		if (!collision_test_vector(flags, &start, &vector, NONE, &collision))
+			break;
+		start.z = collision.point.z - 0.3f;
+		if (collision.plane.n.k < 0.7f || collision.surface_index == NONE)
+			continue;
+		scenario_location_from_point(&location, &collision.point);
+		if (location.cluster_index == NONE || death_volume_column(&collision.point, 2.0f))
+			continue;
+		out[count].point = collision.point;
+		out[count].surface_index = collision.surface_index;
+		out[count].cluster_index = location.cluster_index;
+		count++;
+	}
+	return count;
+}
+
+/* the walkable ground at a point: just under it, else (it is under a hill,
+or over a drop) the ground nearest it above or below */
+static int forge_ai_point_ground(float x, float y, float z, struct forge_ai_ground *out)
+{
+	struct forge_ai_ground hits[6];
+	float best_distance = 1.0e30f;
+	int count, k, best = -1;
+
+	if (forge_ai_ground_column(x, y, z + 1.5f, z - 12.0f, hits, 1) == 1)
+	{
+		*out = hits[0];
+		return 1;
+	}
+	count = forge_ai_ground_column(x, y, z + 30.0f, z - 60.0f, hits, 6);
+	for (k = 0; k < count; k++)
+	{
+		float distance = (float)fabs((double)(hits[k].point.z - z));
+
+		if (distance < best_distance)
+		{
+			best_distance = distance;
+			best = k;
+		}
+	}
+	if (best < 0)
+		return 0;
+	*out = hits[best];
+	return 1;
+}
+
+int forge_ai_route_ground(float x, float y, float z, float *ground_z)
+{
+	struct forge_ai_ground ground;
+
+	if (!global_scenario_try_and_get() || !forge_ai_point_ground(x, y, z, &ground))
+		return 0;
+	*ground_z = ground.point.z;
+	return 1;
+}
+
+int forge_ai_route_place_toward(float const from[3], float const to[3], float out[3])
+{
+	float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
+	float length = (float)sqrt((double)(dx * dx + dy * dy));
+	int steps = (int)(length / 0.5f) + 1, i;
+	struct forge_ai_ground ground;
+
+	if (global_scenario_try_and_get())
+	{
+		/* (from the spot asked for back toward the point it is placed from:
+		the first with ground under it that point can see along the ground) */
+		for (i = steps; i >= 0; i--)
+		{
+			float t = (float)i / (float)steps;
+			real_point3d start;
+			real_vector3d vector;
+			struct collision_result collision;
+
+			if (!forge_ai_point_ground(from[0] + dx * t, from[1] + dy * t, from[2] + dz * t, &ground))
+				continue;
+			start.x = from[0];
+			start.y = from[1];
+			start.z = from[2] + 1.0f;
+			vector.i = ground.point.x - start.x;
+			vector.j = ground.point.y - start.y;
+			vector.k = ground.point.z + 1.0f - start.z;
+			memset(&collision, 0, sizeof(collision));
+			if (i > 0 && collision_test_vector(FLAG(_collision_test_structure_bit) |
+					FLAG(_collision_test_front_facing_surfaces_bit) | FLAG(_collision_test_back_facing_surfaces_bit),
+					&start, &vector, NONE, &collision))
+			{
+				continue;
+			}
+			out[0] = ground.point.x;
+			out[1] = ground.point.y;
+			out[2] = ground.point.z;
+			return 1;
+		}
+	}
+	out[0] = from[0];
+	out[1] = from[1];
+	out[2] = from[2];
+	return 0;
+}
+
+/* the ground in a volume (each side `margin` further out), spread: at most
+`max` of it, each as far from the others as can be */
+/* whether an object stands on a spot of the ground (a Forge block over
+the floor): the paths know only the structure, so a unit sent there walks into
+it and pushes for good. A ray down onto it and one up from it, both sides of
+the object's surfaces */
+static boolean forge_ai_ground_covered(real_point3d const *point)
+{
+	unsigned long const flags = FLAG(_collision_test_objects_bit) | FLAG(_collision_test_objects_scenery_bit) |
+		FLAG(_collision_test_objects_machines_bit) | FLAG(_collision_test_objects_vehicles_bit) |
+		FLAG(_collision_test_objects_light_fixtures_bit) | FLAG(_collision_test_objects_controls_bit);
+	struct collision_result collision;
+	real_point3d start;
+	real_vector3d vector;
+
+	start = *point;
+	start.z += 1.8f;
+	vector.i = vector.j = 0.0f;
+	vector.k = -1.65f;
+	memset(&collision, 0, sizeof(collision));
+	if (collision_test_vector(flags, &start, &vector, NONE, &collision))
+		return TRUE;
+	start = *point;
+	start.z += 0.15f;
+	vector.k = 1.65f;
+	memset(&collision, 0, sizeof(collision));
+	return collision_test_vector(flags, &start, &vector, NONE, &collision);
+}
+
+static int forge_ai_volume_ground(struct forge_ai_goal_volume const *volume, float margin, struct forge_ai_ground *out,
+	int max)
+{
+	static struct forge_ai_ground candidates[FORGE_AI_GOAL_CANDIDATES];
+	static float nearest[FORGE_AI_GOAL_CANDIDATES];
+	float reach = 0.5f * (float)sqrt((double)(volume->size[0] * volume->size[0] + volume->size[1] * volume->size[1] +
+		volume->size[2] * volume->size[2])) + margin;
+	float step = reach * 2.0f / 16.0f;
+	float gx, gy;
+	int count = 0, chosen = 0, k;
+
+	if (step < 1.25f)
+		step = 1.25f;
+	for (gx = -reach; gx <= reach + 0.01f; gx += step)
+	{
+		for (gy = -reach; gy <= reach + 0.01f; gy += step)
+		{
+			struct forge_ai_ground column[4];
+			int floors, f;
+
+			if (gx * gx + gy * gy > reach * reach)
+				continue;
+			floors = forge_ai_ground_column(volume->position[0] + gx, volume->position[1] + gy,
+				volume->position[2] + reach + 0.5f, volume->position[2] - reach - 0.5f, column, 4);
+			for (f = 0; f < floors && count < FORGE_AI_GOAL_CANDIDATES; f++)
+			{
+				float raised[3];
+
+				raised[0] = column[f].point.x;
+				raised[1] = column[f].point.y;
+				raised[2] = column[f].point.z + 0.3f;
+				if (forge_volume_shape_contains(volume->shape, volume->position, volume->yaw, volume->pitch,
+						volume->roll, volume->size, margin, raised) &&
+					!forge_ai_ground_covered(&column[f].point))
+				{
+					candidates[count++] = column[f];
+				}
+			}
+		}
+	}
+	if (count == 0)
+		return 0;
+	/* (the first nearest its middle; then each the farthest from those chosen) */
+	{
+		int best = 0;
+		float best_distance = 1.0e30f;
+
+		for (k = 0; k < count; k++)
+		{
+			float dx = candidates[k].point.x - volume->position[0], dy = candidates[k].point.y - volume->position[1];
+
+			if (dx * dx + dy * dy < best_distance)
+			{
+				best_distance = dx * dx + dy * dy;
+				best = k;
+			}
+		}
+		out[chosen++] = candidates[best];
+		for (k = 0; k < count; k++)
+			nearest[k] = distance_squared3d(&candidates[k].point, &candidates[best].point);
+	}
+	while (chosen < max && chosen < count)
+	{
+		int best = -1;
+		float best_distance = 0.25f;
+
+		for (k = 0; k < count; k++)
+		{
+			if (nearest[k] > best_distance)
+			{
+				best_distance = nearest[k];
+				best = k;
+			}
+		}
+		if (best < 0)
+			break;
+		out[chosen++] = candidates[best];
+		for (k = 0; k < count; k++)
+		{
+			float d = distance_squared3d(&candidates[k].point, &candidates[best].point);
+
+			if (d < nearest[k])
+				nearest[k] = d;
+		}
+	}
+	return chosen;
+}
+
+/* a firing position on the ground there */
+static void forge_ai_firing_position_set(struct firing_position_definition *position, struct forge_ai_ground const *ground)
+{
+	memset(position, 0, sizeof(*position));
+	position->position = ground->point;
+	position->group_index = 0;
+	position->cluster_index = ground->cluster_index;
+	position->surface_index = ground->surface_index;
+}
+
+/* `count` firing positions, all of them filled (the engine reads them by
+index, so a squad's never shrink): those found, again in turn after them, or
+the one point when none was found */
+static void forge_ai_firing_positions_fill(struct firing_position_definition *positions, int count,
+	struct forge_ai_ground const *found, int found_count, real_point3d const *fallback)
+{
+	int k;
+
+	for (k = 0; k < count; k++)
+	{
+		if (found_count > 0)
+		{
+			forge_ai_firing_position_set(&positions[k], &found[k % found_count]);
+		}
+		else
+		{
+			struct location location;
+
+			memset(&positions[k], 0, sizeof(positions[k]));
+			positions[k].position = *fallback;
+			scenario_location_from_point(&location, fallback);
+			positions[k].cluster_index = location.cluster_index;
+			positions[k].surface_index = NONE;
+		}
+	}
+}
+
+/* rings of firing positions round a point: the ground on them an actor
+could walk to in a straight line from it */
+static int forge_ai_rings_ground(float x, float y, float z, struct forge_ai_ground *out, int max)
+{
+	static float const radii[] = { 0.0f, 3.0f, 6.0f, 10.0f };
+	static short const counts[] = { 1, 6, 8, 10 };
+	unsigned long flags = FLAG(_collision_test_structure_bit);
+	int found = 0, ring, spot;
+
+	for (ring = 0; ring < (int)NUMBEROF(radii); ring++)
+	{
+		for (spot = 0; spot < counts[ring] && found < max; spot++)
+		{
+			float angle = (float)spot * (6.283185307f / (float)counts[ring]) + (float)ring * 0.4f;
+			float px = x + radii[ring] * (float)cos((double)angle);
+			float py = y + radii[ring] * (float)sin((double)angle);
+			struct collision_result collision;
+			real_point3d start;
+			real_vector3d vector;
+
+			start.x = x;
+			start.y = y;
+			start.z = z + 0.6f;
+			vector.i = px - x;
+			vector.j = py - y;
+			vector.k = 0.0f;
+			if (radii[ring] > 0.0f && collision_test_vector(flags, &start, &vector, NONE, &collision))
+				continue;
+			found += forge_ai_ground_column(px, py, z + 2.0f, z - 4.0f, &out[found], 1);
+		}
+	}
+	return found;
+}
+
+static void forge_ai_goal_rings_lay(struct forge_ai_goal_slot *slot, float x, float y, float z)
+{
+	struct forge_ai_ground found[FORGE_AI_FIRING_POSITIONS_PER_SPAWN];
+	real_point3d middle;
+	int count = forge_ai_rings_ground(x, y, z, found, FORGE_AI_FIRING_POSITIONS_PER_SPAWN);
+
+	middle.x = x;
+	middle.y = y;
+	middle.z = z;
+	forge_ai_firing_positions_fill(slot->firing, FORGE_AI_FIRING_POSITIONS_PER_SPAWN, found, count, &middle);
+	slot->ring_center[0] = x;
+	slot->ring_center[1] = y;
+	slot->ring_center[2] = z;
+}
+
+static void forge_ai_move_position_set(struct move_position_definition *move, real_point3d const *point,
+	long surface_index, short cluster_index, float wait_lower, float wait_upper)
+{
+	memset(move, 0, sizeof(*move));
+	move->position = *point;
+	move->weight = 1.0f;
+	move->time_lower_bound = wait_lower;
+	move->time_upper_bound = wait_upper;
+	move->animation_reference_index = NONE;
+	move->sequence_id = 0;
+	move->cluster_index = cluster_index;
+	move->surface_index = surface_index;
+}
+
+/* whether a spawn plays its goal: one with nothing to go by (a missing volume
+or route) has none */
+static int forge_ai_entry_goal_plays(struct forge_ai_spawn_entry const *entry)
+{
+	struct forge_ai_goal_volume volume;
+	struct forge_ai_goal_route route;
+
+	switch (entry->goal)
+	{
+	case _forge_ai_goal_patrol:
+		return forge_ai_goal_volume_get(entry->goal_link, &volume);
+	case _forge_ai_goal_route:
+		return forge_ai_goal_route_get(entry->goal_link, &route);
+	case _forge_ai_goal_hunt:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+/* a GOAL's squad: its move positions (`moves`, room for
+FORGE_AI_GOAL_MOVE_POSITIONS), its state and its encounter's firing positions
+(room for FORGE_AI_FIRING_POSITIONS_PER_SPAWN) */
+static void forge_ai_goal_squad_make(struct forge_ai_spawn_entry const *entry, short encounter_index,
+	struct squad_definition *squad, struct move_position_definition *moves, struct firing_position_definition *firing)
+{
+	struct forge_ai_goal_slot *slot;
+	real_point3d spawn_point;
+	int move_count = 0, k;
+
+	if (s_goal_count >= FORGE_AI_MAX_ADDED_ENCOUNTERS || encounter_index < 0 ||
+		encounter_index >= FORGE_AI_ENGINE_ENCOUNTERS)
+	{
+		return;
+	}
+	slot = &s_goals[s_goal_count];
+	memset(slot, 0, sizeof(*slot));
+	slot->goal = entry->goal;
+	slot->who = entry->goal_who;
+	slot->start = entry->goal_start;
+	slot->follow = entry->goal_follow;
+	slot->alert_ticks = (long)(entry->goal_alert ? entry->goal_alert : FORGE_AI_GOAL_ALERT_DEFAULT) * 30;
+	slot->friendly = entry->team == FORGE_AI_TEAM_RED || entry->team == FORGE_AI_TEAM_BLUE ||
+		entry->team == FORGE_AI_TEAM_ALL_PLAYERS;
+	slot->encounter_index = encounter_index;
+	slot->squad = squad;
+	slot->firing = firing;
+	slot->leader_unit = NONE;
+	slot->route_target = NONE;
+	slot->route_forward = 1;
+	spawn_point.x = entry->x;
+	spawn_point.y = entry->y;
+	spawn_point.z = entry->z;
+	switch (entry->goal)
+	{
+	case _forge_ai_goal_patrol:
+	{
+		struct forge_ai_ground found[FORGE_AI_GOAL_MOVE_POSITIONS];
+		int count;
+
+		if (!forge_ai_goal_volume_get(entry->goal_link, &slot->volume))
+			return;
+		count = forge_ai_volume_ground(&slot->volume, 0.0f, found, FORGE_AI_GOAL_MOVE_POSITIONS);
+		for (k = 0; k < count; k++)
+			forge_ai_move_position_set(&moves[move_count++], &found[k].point, found[k].surface_index,
+				found[k].cluster_index, 1.0f, 4.0f);
+		/* (their fight: the volume's ground and its PURSUIT RANGE's) */
+		count = forge_ai_volume_ground(&slot->volume, slot->volume.pursuit, found, FORGE_AI_FIRING_POSITIONS_PER_SPAWN);
+		forge_ai_firing_positions_fill(firing, FORGE_AI_FIRING_POSITIONS_PER_SPAWN, found, count, &spawn_point);
+		if (count == 0)
+			forge_ai_goal_rings_lay(slot, entry->x, entry->y, entry->z);
+		squad->initial_state = squad->default_state = 7; /* (moving randomly) */
+		error(_error_silent, "forge ai: a spawn patrols volume #%d: %d points on its ground, %d to fight from",
+			entry->goal_link, move_count, count);
+		break;
+	}
+	case _forge_ai_goal_route:
+	{
+		struct forge_ai_goal_route route;
+
+		if (!forge_ai_goal_route_get(entry->goal_link, &route))
+			return;
+		slot->behavior = route.behavior;
+		for (k = 0; k < route.count && move_count < FORGE_AI_GOAL_MOVE_POSITIONS; k++)
+		{
+			struct forge_ai_ground ground;
+			real_point3d point;
+			struct location location;
+
+			point.x = route.points[k][0];
+			point.y = route.points[k][1];
+			point.z = route.points[k][2];
+			if (forge_ai_point_ground(point.x, point.y, point.z, &ground))
+			{
+				forge_ai_move_position_set(&moves[move_count++], &ground.point, ground.surface_index,
+					ground.cluster_index, (float)route.waits[k], (float)route.waits[k]);
+			}
+			else
+			{
+				scenario_location_from_point(&location, &point);
+				forge_ai_move_position_set(&moves[move_count++], &point, NONE, location.cluster_index,
+					(float)route.waits[k], (float)route.waits[k]);
+			}
+		}
+		/* (round the spawn, where they stand: their fight is there until
+		they walk on, the rings following them; the route's first point may be
+		far off) */
+		forge_ai_goal_rings_lay(slot, entry->x, entry->y, entry->z);
+		/* (4: looping, 5: back and forth; STAY AT END loops, and stops at the
+		end: forge_ai_route_next_position) */
+		squad->initial_state = squad->default_state = route.behavior == _forge_ai_route_ping_pong ? 5 : 4;
+		error(_error_silent, "forge ai: a spawn walks route #%d: %d points, %s", entry->goal_link, move_count,
+			forge_ai_route_behavior_name(route.behavior));
+		break;
+	}
+	default:
+		forge_ai_goal_rings_lay(slot, entry->x, entry->y, entry->z);
+		break;
+	}
+	squad->move_positions.address = move_count > 0 ? moves : NULL;
+	squad->move_positions.count = move_count;
+	s_goal_of_encounter[encounter_index] = (short)s_goal_count;
+	s_goal_count++;
+}
+
+static struct forge_ai_goal_slot *forge_ai_goal_of_actor(struct actor_datum const *actor)
+{
+	long encounter;
+	short slot;
+
+	if (!actor || actor->meta.swarm || actor->meta.encounter_index == NONE || s_goal_count == 0)
+		return NULL;
+	encounter = DATUM_INDEX_TO_ABSOLUTE_INDEX(actor->meta.encounter_index);
+	if (encounter < 0 || encounter >= FORGE_AI_ENGINE_ENCOUNTERS)
+		return NULL;
+	slot = s_goal_of_encounter[encounter];
+	return slot >= 0 && slot < s_goal_count ? &s_goals[slot] : NULL;
+}
+
+/* whether a goal's squad is alarmed (forge_ai_goals_update) */
+static boolean forge_ai_goal_alarmed(struct forge_ai_goal_slot const *slot)
+{
+	return slot->alarm_until != 0 && game_time_get() < slot->alarm_until;
+}
+
+/* the route's next point from `at` the way it goes (`*forward`, turned at a
+PING PONG's ends), NONE past a STAY AT END's last */
+static short forge_ai_route_step(struct forge_ai_goal_slot const *slot, short at, short count, short *forward)
+{
+	if (count <= 1)
+		return NONE;
+	switch (slot->behavior)
+	{
+	case _forge_ai_route_ping_pong:
+		if (*forward && at >= count - 1)
+			*forward = 0;
+		else if (!*forward && at <= 0)
+			*forward = 1;
+		return (short)(*forward ? at + 1 : at - 1);
+	case _forge_ai_route_stay_at_end:
+		*forward = 1;
+		return at >= count - 1 ? NONE : (short)(at + 1);
+	default:
+		*forward = 1;
+		return (short)((at + 1) % count);
+	}
+}
+
+static short forge_ai_patrol_point_pick(struct forge_ai_goal_slot const *slot, real_point3d const *at);
+
+/* each ROUTE unit's own walk along its route: the point it goes to and
+which way it goes (a PING PONG's), by the actor (its unit: a slot used again
+starts again) */
+static struct
+{
+	long unit_index;
+	short target;
+	short forward;
+	boolean started;
+} s_route_walks[MAXIMUM_ACTORS];
+
+static void *forge_ai_route_walk_of(long actor_index, struct actor_datum const *actor)
+{
+	int index = DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index);
+
+	if (index < 0 || index >= MAXIMUM_ACTORS)
+		return NULL;
+	if (s_route_walks[index].unit_index != actor->meta.unit_index)
+	{
+		s_route_walks[index].unit_index = actor->meta.unit_index;
+		s_route_walks[index].target = NONE;
+		s_route_walks[index].forward = 1;
+		s_route_walks[index].started = FALSE;
+	}
+	return &s_route_walks[index];
+}
+
+/* a route unit that cannot reach its point: on to the next, its walk's own */
+static void forge_ai_route_walk_skip(struct forge_ai_goal_slot const *slot, long actor_index,
+	struct actor_datum const *actor)
+{
+	int index = DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index);
+	short count, next;
+
+	if (!slot || !slot->squad || !forge_ai_route_walk_of(actor_index, actor) || s_route_walks[index].target == NONE)
+		return;
+	count = (short)MIN(slot->squad->move_positions.count, FORGE_AI_GOAL_MOVE_POSITIONS);
+	next = forge_ai_route_step(slot, s_route_walks[index].target, count, &s_route_walks[index].forward);
+	error(_error_silent, "forge ai: a route unit cannot reach point %d: on to %d", (int)s_route_walks[index].target,
+		(int)next);
+	if (next != NONE && next >= 0 && next < count)
+		s_route_walks[index].target = next;
+}
+
+/* (from action_alert.c's next position) where a ROUTE's unit goes next. Each
+walks the route on its own, as a unit alone does (a squad following its
+leader crowded onto one point, and stood there in each other's way): the first
+point the first time; on from the point reached; and the point it was going to
+when it starts again after a fight, so none goes back to the first. None while
+the squad is alarmed, none past the end of a STAY AT END route */
+short forge_ai_route_next_position(long actor_index, short move_position_order, short current_position_index,
+	boolean *handled)
+{
+	struct actor_datum *actor = actor_try_and_get(actor_index);
+	struct forge_ai_goal_slot *slot = forge_ai_goal_of_actor(actor);
+	struct move_position_definition const *moves;
+	short count, next;
+	int index;
+
+	(void)move_position_order;
+	*handled = FALSE;
+	/* (a PATROL's next point: away from where its squadmates stand and go,
+	or they crowd one spot and stand in each other's way) */
+	if (slot && slot->goal == _forge_ai_goal_patrol && slot->squad && actor)
+	{
+		next = forge_ai_patrol_point_pick(slot, &actor->input.position.body_position);
+		*handled = next != NONE;
+		return next;
+	}
+	if (!slot || slot->goal != _forge_ai_goal_route || !slot->squad || !forge_ai_route_walk_of(actor_index, actor))
+		return NONE;
+	*handled = TRUE;
+	index = DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index);
+	count = (short)MIN(slot->squad->move_positions.count, FORGE_AI_GOAL_MOVE_POSITIONS);
+	if (count <= 0 || forge_ai_goal_alarmed(slot))
+		return NONE;
+	moves = (struct move_position_definition const *)slot->squad->move_positions.address;
+	if (!s_route_walks[index].started)
+	{
+		s_route_walks[index].started = TRUE;
+		s_route_walks[index].forward = 1;
+		s_route_walks[index].target = 0;
+		return 0;
+	}
+	/* (starting again: on to where its walk was going, unless that is where
+	it stands) */
+	if (current_position_index == NONE || current_position_index != s_route_walks[index].target)
+	{
+		short target = s_route_walks[index].target;
+
+		if (target == NONE || target < 0 || target >= count)
+			return NONE;
+		if (distance_squared3d(&actor->input.position.body_position, &moves[target].position) >
+			FORGE_AI_ARRIVE_DISTANCE * FORGE_AI_ARRIVE_DISTANCE)
+		{
+			return target;
+		}
+		current_position_index = target;
+	}
+	next = forge_ai_route_step(slot, current_position_index, count, &s_route_walks[index].forward);
+	if (next == NONE || next < 0 || next >= count)
+	{
+		/* (STAY AT END: there for good) */
+		return NONE;
+	}
+	s_route_walks[index].target = next;
+	return next;
+}
+
+/* (action_alert.c's control) whether a goal's unit goes at a fight's pace out
+of one: its SPEED's RUN, or its squad alarmed */
+boolean forge_ai_actor_runs(long actor_index)
+{
+	struct forge_ai_goal_slot const *slot = forge_ai_goal_of_actor(actor_try_and_get(actor_index));
+
+	return slot != NULL && (FORGE_AI_GOAL_RUNS(slot->who) || forge_ai_goal_alarmed(slot) ||
+		game_time_get() < slot->chasing_until);
+}
+
+/* (actor_moving.c) whether an actor that finds no path walks a straight line
+there, as Firefight's do: a goal's */
+boolean forge_ai_actor_walks_straight(long actor_index)
+{
+	struct forge_ai_goal_slot *slot = forge_ai_goal_of_actor(actor_try_and_get(actor_index));
+
+	return slot != NULL;
+}
+
+/* the nearest living player of a goal's (any, red, blue), NONE for none */
+static long forge_ai_goal_player(int who, real_point3d const *from, real_point3d *where)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+	long best = NONE;
+	float best_distance = 1.0e30f;
+	boolean teams = game_engine_running() && game_engine_has_teams();
+
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		struct unit_datum *unit = (struct unit_datum *)object_try_and_get_and_verify_type(player->unit_index,
+			_object_mask_unit);
+		union real_point3d origin;
+		float distance;
+
+		if (!unit || TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
+			continue;
+		if (teams && who != _forge_ai_goal_who_any && player->team_index != (who == _forge_ai_goal_who_red ? 0 : 1))
+			continue;
+		object_get_origin(player->unit_index, &origin);
+		distance = distance_squared3d((real_point3d const *)&origin, from);
+		if (distance < best_distance)
+		{
+			best_distance = distance;
+			best = player->unit_index;
+			where->x = origin.x;
+			where->y = origin.y;
+			where->z = origin.z;
+		}
+	}
+	return best;
+}
+
+/* an actor sent toward `target` (on the ground there), to stop `stop` short of
+it, a step aside by its place in the squad */
+static void forge_ai_goal_move_toward(long actor_index, struct actor_datum *actor, real_point3d const *target,
+	float stop, int place)
+{
+	real_point3d const *from = &actor->input.position.body_position;
+	float dx = from->x - target->x, dy = from->y - target->y;
+	float length = (float)sqrt((double)(dx * dx + dy * dy));
+	struct forge_ai_ground ground;
+	real_point3d destination;
+	long surface_index;
+
+	if (length < 0.01f)
+	{
+		dx = 1.0f;
+		dy = 0.0f;
+		length = 1.0f;
+	}
+	dx /= length;
+	dy /= length;
+	destination.x = target->x + dx * stop - dy * (float)((place % 5) - 2) * 1.2f * (stop > 0.0f ? 1.0f : 0.0f);
+	destination.y = target->y + dy * stop + dx * (float)((place % 5) - 2) * 1.2f * (stop > 0.0f ? 1.0f : 0.0f);
+	destination.z = target->z;
+	/* (the engine paths only to a point with its ground's surface: with
+	NONE it drops the order at once, and the actor stands, turned to it. No
+	ground there: its own surface, so the path it cannot find becomes the
+	straight walk goal actors have, actor_moving.c) */
+	if (forge_ai_point_ground(destination.x, destination.y, destination.z, &ground))
+	{
+		destination = ground.point;
+		surface_index = ground.surface_index;
+	}
+	else
+	{
+		surface_index = actor->input.pathfinding_surface_index;
+	}
+	actor_move_to_point(actor_index, &destination, surface_index, NONE);
+}
+
+
+/* a goal unit walking to its point (a PATROL's, a ROUTE's) that is within
+FORGE_AI_ARRIVE_DISTANCE of it and held there - not moving, or a squadmate on
+the point - has reached it: its point taken as where it stands, so its wait
+counts down and it goes on (action_alert_update), not pushing for the point */
+static float s_unit_last_at[MAXIMUM_ACTORS][3];
+
+static boolean forge_ai_goal_arrive_near(struct forge_ai_goal_slot const *slot, long actor_index,
+	struct actor_datum *actor)
+{
+	struct alert_state_data *alert = &actor->state.action_data.alert;
+	real_point3d const *at = &actor->input.position.body_position;
+	int index = DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index);
+	float to_point, dx, dy, dz;
+	boolean held, crowded = FALSE;
+
+	if (index < 0 || index >= MAXIMUM_ACTORS || actor->state.action != _actor_action_alert ||
+		alert->target_move_position_index == NONE || alert->pending_move_position_index != NONE)
+	{
+		return FALSE;
+	}
+	dx = at->x - s_unit_last_at[index][0];
+	dy = at->y - s_unit_last_at[index][1];
+	dz = at->z - s_unit_last_at[index][2];
+	s_unit_last_at[index][0] = at->x;
+	s_unit_last_at[index][1] = at->y;
+	s_unit_last_at[index][2] = at->z;
+	to_point = distance3d(at, &alert->target_position_definition.position);
+	if (to_point < 0.5f || to_point > FORGE_AI_ARRIVE_DISTANCE)
+		return FALSE;
+	held = dx * dx + dy * dy + dz * dz < 0.15f * 0.15f;
+	if (!held)
+	{
+		struct data_iterator mates;
+		struct actor_datum *mate;
+
+		data_iterator_new(&mates, actor_data);
+		while (!crowded && (mate = (struct actor_datum *)data_iterator_next(&mates)) != NULL)
+		{
+			if (mate != actor && forge_ai_goal_of_actor(mate) == slot &&
+				distance3d(&mate->input.position.body_position, &alert->target_position_definition.position) < 1.5f)
+			{
+				crowded = TRUE;
+			}
+		}
+	}
+	if (!held && !crowded)
+		return FALSE;
+	alert->target_position_definition.position = *at;
+	actor_move_halt(actor_index);
+	return TRUE;
+}
+
+/* any goal unit out of a fight but its route's leader (a PATROL's, a
+route's follower). The engine's alert walk can leave one standing for good:
+a failed path keeps its point's wait, which counts down only at the point
+(action_alert_update); one held short of its point (a Forge object, a
+squadmate on it) pushes there; one out of the walk (guarding, or a walk with no
+order or no point) waits for nothing. So a unit that has neither moved half a
+unit nor had its wait count down in FORGE_AI_UNIT_STUCK_TICKS is put back on its
+walk: the squad's walk again if it is out of it, else another point (a PATROL),
+or a step aside, then its point again (a follower). A failed path is given up
+in a second, and that PATROL point retired. Each logged with the unit's state */
+#define FORGE_AI_UNIT_STUCK_TICKS (4 * 30)
+static struct
+{
+	long unit_index;
+	long since;
+	float at[3];
+	short wait_ticks;
+	unsigned char tries;
+} s_unit_stuck[MAXIMUM_ACTORS];
+
+static void forge_ai_patrol_point_retire(struct forge_ai_goal_slot *slot, short index);
+/* (actor_moving.c's, in no header) */
+extern void actor_path_clear(long actor_index);
+static short forge_ai_patrol_point_pick(struct forge_ai_goal_slot const *slot, real_point3d const *at);
+
+/* a PATROL's point for a unit with none: by weight, a couple of units off */
+static short forge_ai_patrol_point_pick(struct forge_ai_goal_slot const *slot, real_point3d const *at)
+{
+	struct move_position_definition const *moves;
+	short count, k, chosen = NONE;
+	float total = 0.0f, roll;
+	char crowded[FORGE_AI_GOAL_MOVE_POSITIONS];
+
+	if (!slot || !slot->squad)
+		return NONE;
+	moves = (struct move_position_definition const *)slot->squad->move_positions.address;
+	count = (short)MIN(slot->squad->move_positions.count, FORGE_AI_GOAL_MOVE_POSITIONS);
+	/* (none where a squadmate stands or is going: they crowded one spot) */
+	{
+		struct data_iterator mates;
+		struct actor_datum *mate;
+
+		memset(crowded, 0, sizeof(crowded));
+		data_iterator_new(&mates, actor_data);
+		while ((mate = (struct actor_datum *)data_iterator_next(&mates)) != NULL)
+		{
+			if (forge_ai_goal_of_actor(mate) != slot || &mate->input.position.body_position == at)
+				continue;
+			if (mate->state.action == _actor_action_alert &&
+				mate->state.action_data.alert.target_move_position_index >= 0 &&
+				mate->state.action_data.alert.target_move_position_index < count)
+			{
+				crowded[mate->state.action_data.alert.target_move_position_index] = 1;
+			}
+			for (k = 0; k < count; k++)
+			{
+				if (distance_squared3d(&mate->input.position.body_position, &moves[k].position) < 9.0f)
+					crowded[k] = 1;
+			}
+		}
+	}
+	for (k = 0; k < count; k++)
+	{
+		if (moves[k].weight > 0.0f && !crowded[k] && distance_squared3d(at, &moves[k].position) > 4.0f)
+			total += moves[k].weight;
+	}
+	/* (all crowded: any) */
+	if (total <= 0.0f)
+	{
+		memset(crowded, 0, sizeof(crowded));
+		for (k = 0; k < count; k++)
+		{
+			if (moves[k].weight > 0.0f && distance_squared3d(at, &moves[k].position) > 4.0f)
+				total += moves[k].weight;
+		}
+	}
+	if (total <= 0.0f)
+		return NONE;
+	roll = real_random_range(0.0f, total);
+	for (k = 0; k < count; k++)
+	{
+		if (moves[k].weight > 0.0f && !crowded[k] && distance_squared3d(at, &moves[k].position) > 4.0f)
+		{
+			chosen = k;
+			roll -= moves[k].weight;
+			if (roll <= 0.0f)
+				break;
+		}
+	}
+	return chosen;
+}
+
+static void forge_ai_goal_unit_unstick(struct forge_ai_goal_slot *slot, long actor_index, struct actor_datum *actor,
+	int place, long now, int patrol)
+{
+	struct alert_state_data *alert = &actor->state.action_data.alert;
+	real_point3d const *at = &actor->input.position.body_position;
+	int slot_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index);
+	int walking = actor->state.action == _actor_action_alert;
+	short target = walking ? alert->target_move_position_index : NONE;
+	short wait = walking ? alert->wait_ticks : 0;
+	float dx, dy, dz, to_point;
+
+	if (slot_index < 0 || slot_index >= MAXIMUM_ACTORS)
+		return;
+	to_point = target == NONE ? 0.0f : distance3d(at, &alert->target_position_definition.position);
+	dx = at->x - s_unit_stuck[slot_index].at[0];
+	dy = at->y - s_unit_stuck[slot_index].at[1];
+	dz = at->z - s_unit_stuck[slot_index].at[2];
+	/* (moving, or its wait counting down at a point: well) */
+	if (s_unit_stuck[slot_index].unit_index != actor->meta.unit_index || dx * dx + dy * dy + dz * dz > 0.25f ||
+		(wait > 0 && wait < s_unit_stuck[slot_index].wait_ticks))
+	{
+		if (s_unit_stuck[slot_index].unit_index != actor->meta.unit_index)
+			s_unit_stuck[slot_index].tries = 0;
+		/* (a point reached: the tries over) */
+		if (target != NONE && to_point < 1.0f)
+			s_unit_stuck[slot_index].tries = 0;
+		s_unit_stuck[slot_index].unit_index = actor->meta.unit_index;
+		s_unit_stuck[slot_index].since = now;
+		s_unit_stuck[slot_index].at[0] = at->x;
+		s_unit_stuck[slot_index].at[1] = at->y;
+		s_unit_stuck[slot_index].at[2] = at->z;
+		s_unit_stuck[slot_index].wait_ticks = wait;
+		return;
+	}
+	s_unit_stuck[slot_index].wait_ticks = wait;
+	/* (a failed path: given up in a second, its point no PATROL's) */
+	if (walking && target != NONE && alert->pending_move_position_index == NONE && to_point > 1.0f &&
+		!actor_path_has_path(actor_index) && now - s_unit_stuck[slot_index].since >= 30)
+	{
+		error(_error_silent, "forge ai: a goal unit has no path to its point %d (%.1f away, standing on surface %ld): "
+			"another", (int)target, (double)to_point, (long)actor->input.pathfinding_surface_index);
+		/* (the point's fault only when the unit stands where paths start) */
+		if (patrol && actor->input.pathfinding_surface_index != NONE)
+			forge_ai_patrol_point_retire(slot, target);
+		alert->wait_ticks = 0;
+		action_alert_flush_position_indices(actor_index);
+		s_unit_stuck[slot_index].since = now;
+		return;
+	}
+	if (now - s_unit_stuck[slot_index].since < FORGE_AI_UNIT_STUCK_TICKS)
+		return;
+	s_unit_stuck[slot_index].since = now;
+	{
+		/* (the engine's own view of its walk, and its squad's nearness) */
+		struct path_result const *path = &actor->control.path.path;
+		real_point3d const *step = path->valid && path->step_index >= 0 && path->step_index < path->step_count ?
+			&path->steps[(int)path->step_index].point : at;
+		struct data_iterator mates;
+		struct actor_datum *mate;
+		float nearest = 1.0e9f;
+		int close = 0;
+
+		data_iterator_new(&mates, actor_data);
+		while ((mate = (struct actor_datum *)data_iterator_next(&mates)) != NULL)
+		{
+			float d;
+
+			if (mate == actor || forge_ai_goal_of_actor(mate) != slot)
+				continue;
+			d = distance3d(at, &mate->input.position.body_position);
+			if (d < nearest)
+				nearest = d;
+			if (d < 2.0f)
+				close++;
+		}
+		error(_error_silent, "forge ai: a %s unit stands at (%.1f %.1f %.1f): action %d, combat %d, order %d, point %d, "
+			"pending %d, wait %d, path %d (dest type %d, step %d/%d %.1f away, finishes %d), %.1f from its point, "
+			"moving %d, complete %d, thwarted %d, at dest %d, midair %d, emergency %.2f, throttle %.2f, "
+			"nearest mate %.1f, %d within 2, try %d",
+			patrol ? "patrol" : "route", (double)at->x, (double)at->y, (double)at->z, (int)actor->state.action,
+			(int)actor->state.combat_status, walking ? (int)alert->move_position_order : -1, (int)target,
+			walking ? (int)alert->pending_move_position_index : -1, (int)wait, (int)path->valid,
+			(int)actor->control.path.destination_orders.destination_type, (int)path->step_index, (int)path->step_count,
+			(double)distance3d(at, step), (int)path->steps_finish_path, (double)to_point, (int)actor->control.moving,
+			(int)actor->control.movement_complete, (int)actor->control.movement_thwarted,
+			(int)actor->control.path.at_destination, (int)actor->input.in_midair,
+			(double)actor->control.vector_avoidance_rotation_emergency_instantaneous,
+			(double)magnitude3d(&actor->output.throttle), nearest > 1.0e8f ? -1.0 : (double)nearest, close,
+			(int)s_unit_stuck[slot_index].tries);
+	}
+	/* (out of its walk, or on one with no order: the squad's walk again) */
+	if (!walking || alert->move_position_order == 0)
+	{
+		if (slot->squad)
+			actor_action_set_default_state(actor_index, slot->squad->default_state);
+		return;
+	}
+	alert->wait_ticks = 0;
+	if (patrol)
+	{
+		/* (another point, chosen here, for the walk may find none: its old
+		path gone with it) */
+		actor_path_clear(actor_index);
+		action_alert_flush_position_indices(actor_index);
+		alert->pending_move_position_index = forge_ai_patrol_point_pick(slot, at);
+		return;
+	}
+	if (target == NONE)
+	{
+		action_alert_flush_position_indices(actor_index);
+		return;
+	}
+	if ((s_unit_stuck[slot_index].tries++ & 1) == 0)
+	{
+		/* (a step aside, square to the way it was going, left or right in turn) */
+		real_point3d const *goal = &alert->target_position_definition.position;
+		float gx = goal->x - at->x, gy = goal->y - at->y;
+		float length = (float)sqrt((double)(gx * gx + gy * gy));
+		float side = ((s_unit_stuck[slot_index].tries >> 1) + place) & 1 ? 2.5f : -2.5f;
+		real_point3d aside;
+
+		if (length < 0.01f)
+		{
+			gx = 1.0f;
+			gy = 0.0f;
+			length = 1.0f;
+		}
+		aside.x = at->x - gy / length * side - gx / length;
+		aside.y = at->y + gx / length * side - gy / length;
+		aside.z = at->z;
+		forge_ai_goal_move_toward(actor_index, actor, &aside, 0.0f, place);
+	}
+	else
+	{
+		/* (its point again; a fourth time stuck, the next point instead) */
+		if (s_unit_stuck[slot_index].tries >= 4)
+		{
+			forge_ai_route_walk_skip(slot, actor_index, actor);
+			s_unit_stuck[slot_index].tries = 0;
+		}
+		action_alert_flush_position_indices(actor_index);
+	}
+}
+
+/* a PATROL's point a unit gave up on: weighed nothing from now on, so the
+random walk (action_alert_next_position) picks it no more - unless it is the
+last left */
+static void forge_ai_patrol_point_retire(struct forge_ai_goal_slot *slot, short index)
+{
+	struct move_position_definition *moves;
+	short count, k, left = 0;
+
+	if (!slot || !slot->squad || index < 0)
+		return;
+	moves = (struct move_position_definition *)slot->squad->move_positions.address;
+	count = (short)MIN(slot->squad->move_positions.count, FORGE_AI_GOAL_MOVE_POSITIONS);
+	if (index >= count)
+		return;
+	for (k = 0; k < count; k++)
+	{
+		if (k != index && moves[k].weight > 0.0f)
+			left++;
+	}
+	if (left > 0)
+	{
+		moves[index].weight = 0.0f;
+		error(_error_silent, "forge ai: patrol point %d retired, %d left", (int)index, (int)left);
+	}
+}
+
+/* whether a goal's unit is in a fight, or has just been hurt: what sounds its
+squad's alarm */
+static boolean forge_ai_goal_unit_alarmed(struct actor_datum const *actor)
+{
+	return actor->state.combat_status >= 2 || actor->state.action == _actor_action_fight ||
+		actor->state.action == _actor_action_search || actor->state.action == _actor_action_flee ||
+		actor->state.action == _actor_action_charge || actor->input.recent_body_damage > 0.0f ||
+		actor->input.recent_shield_damage > 0.0f;
+}
+
+/* each tick of the host's (forge_ai_units_update): the goals' units out of
+a fight sent on, a ROUTE's leader chosen again when it dies, a PATROL's
+units kept to its PURSUIT RANGE, and the others' firing positions laid again
+where they have gone.
+
+A squad's alarm: one unit of it fighting, hurt or killed alerts them all, for
+its ALERT TIME after the last of it. Meanwhile the route is held
+(forge_ai_route_next_position gives its leader nowhere), the leader stops
+where it is, and those not fighting go to where it was, at a run, which has
+them see what it saw; the fight's firing positions laid round there. Once it
+is over the leader walks on to the point it was going to */
+static void forge_ai_goals_update(long now)
+{
+	struct data_iterator iterator;
+	struct actor_datum *actor;
+	int k;
+
+	if (s_goal_count == 0 || s_ai_held || !actor_data)
+		return;
+	for (k = 0; k < s_goal_count; k++)
+	{
+		struct unit_datum *leader = s_goals[k].leader_unit == NONE ? NULL :
+			(struct unit_datum *)object_try_and_get_and_verify_type(s_goals[k].leader_unit, _object_mask_unit);
+
+		if (!leader || TEST_FLAG(leader->object.damage_flags, _object_dead_bit) || leader->unit.actor_index == NONE)
+			s_goals[k].leader_unit = NONE;
+		s_goals[k].sum[0] = s_goals[k].sum[1] = s_goals[k].sum[2] = 0.0f;
+		s_goals[k].sum_count = 0;
+		s_goals[k].alive_now = 0;
+		s_goals[k].alarm_seen = FALSE;
+	}
+	/* (first: which squads are alarmed, and where) */
+	data_iterator_new(&iterator, actor_data);
+	while ((actor = (struct actor_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		struct forge_ai_goal_slot *slot = forge_ai_goal_of_actor(actor);
+		struct unit_datum *unit;
+		real_point3d const *at;
+
+		if (!slot)
+			continue;
+		unit = (struct unit_datum *)object_try_and_get_and_verify_type(actor->meta.unit_index, _object_mask_unit);
+		if (!unit || TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
+			continue;
+		at = &actor->input.position.body_position;
+		slot->alive_now++;
+		slot->sum[0] += at->x;
+		slot->sum[1] += at->y;
+		slot->sum[2] += at->z;
+		slot->sum_count++;
+		if (forge_ai_goal_unit_alarmed(actor))
+		{
+			if (!slot->alarm_seen)
+			{
+				slot->alarm_point[0] = at->x;
+				slot->alarm_point[1] = at->y;
+				slot->alarm_point[2] = at->z;
+			}
+			slot->alarm_seen = TRUE;
+		}
+	}
+	for (k = 0; k < s_goal_count; k++)
+	{
+		struct forge_ai_goal_slot *slot = &s_goals[k];
+		boolean died = slot->alive_now < slot->alive_count;
+		boolean was_alarmed = slot->alarm_until != 0 && now < slot->alarm_until;
+
+		/* (a death with none of them fighting: about where they are) */
+		if (died && !slot->alarm_seen && slot->sum_count > 0)
+		{
+			slot->alarm_point[0] = slot->sum[0] / (float)slot->sum_count;
+			slot->alarm_point[1] = slot->sum[1] / (float)slot->sum_count;
+			slot->alarm_point[2] = slot->sum[2] / (float)slot->sum_count;
+		}
+		if (slot->alarm_seen || died)
+		{
+			slot->alarm_until = now + slot->alert_ticks;
+			/* (its fight round where it began, not where the rings were) */
+			if (!was_alarmed && slot->goal != _forge_ai_goal_patrol)
+				forge_ai_goal_rings_lay(slot, slot->alarm_point[0], slot->alarm_point[1], slot->alarm_point[2]);
+			if (!was_alarmed)
+				error(_error_silent, "forge ai: goal squad %d alarmed (%s), %d alive", k, died ? "a death" : "a fight",
+					slot->alive_now);
+		}
+		else if (was_alarmed && now + 1 >= slot->alarm_until)
+		{
+			error(_error_silent, "forge ai: goal squad %d calm again: back on its walk", k);
+		}
+		slot->alive_count = slot->alive_now;
+	}
+	data_iterator_new(&iterator, actor_data);
+	while ((actor = (struct actor_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		long actor_index = iterator.datum_index;
+		struct forge_ai_goal_slot *slot = forge_ai_goal_of_actor(actor);
+		struct unit_datum *unit;
+		real_point3d const *at;
+		boolean idle, alarmed;
+		int place = iterator.absolute_index;
+
+		if (!slot)
+			continue;
+		unit = (struct unit_datum *)object_try_and_get_and_verify_type(actor->meta.unit_index, _object_mask_unit);
+		if (!unit || TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
+			continue;
+		/* (they go on with no one near: the engine would let them sleep) */
+		actor->meta.force_active = TRUE;
+		actor->meta.dormant_desire = FALSE;
+		at = &actor->input.position.body_position;
+		alarmed = forge_ai_goal_alarmed(slot);
+		/* (a third of a second apart, each its own tick) */
+		if ((place + now) % 10 != 0 || unit->object.parent_object_index != NONE)
+			continue;
+		idle = actor->state.combat_status < 2 && (actor->state.action == _actor_action_alert ||
+			actor->state.action == _actor_action_guard || actor->state.action == _actor_action_none);
+		if (alarmed)
+		{
+			/* (the alarm: those not fighting to where it is, or held there) */
+			if (idle)
+			{
+				real_point3d alarm;
+
+				alarm.x = slot->alarm_point[0];
+				alarm.y = slot->alarm_point[1];
+				alarm.z = slot->alarm_point[2];
+				if (actor->state.action == _actor_action_alert)
+					action_alert_flush_position_indices(actor_index);
+				if (distance3d(at, &alarm) > FORGE_AI_GOAL_ALARM_JOIN + 1.5f)
+					forge_ai_goal_move_toward(actor_index, actor, &alarm, FORGE_AI_GOAL_ALARM_JOIN, place);
+				else
+					actor_move_halt(actor_index);
+			}
+			if (slot->goal == _forge_ai_goal_patrol)
+				actor->external_orders.disable_charging = TRUE;
+			continue;
+		}
+		switch (slot->goal)
+		{
+		case _forge_ai_goal_patrol:
+		{
+			float point[3];
+
+			if (idle && !forge_ai_goal_arrive_near(slot, actor_index, actor))
+				forge_ai_goal_unit_unstick(slot, actor_index, actor, place, now, 1);
+			actor->external_orders.disable_charging = TRUE;
+			point[0] = at->x;
+			point[1] = at->y;
+			point[2] = at->z + 0.3f;
+			/* (out past its PURSUIT RANGE and not fighting from where it may:
+			back to the patrol, which walks it in) */
+			if (!idle && actor->state.action != _actor_action_fight &&
+				!forge_volume_shape_contains(slot->volume.shape, slot->volume.position, slot->volume.yaw,
+					slot->volume.pitch, slot->volume.roll, slot->volume.size, slot->volume.pursuit + 1.0f, point))
+			{
+				actor_action_set_default_state(actor_index, NONE);
+			}
+			break;
+		}
+		case _forge_ai_goal_route:
+			/* (each on its own walk: forge_ai_route_next_position) */
+			if (idle && !forge_ai_goal_arrive_near(slot, actor_index, actor))
+				forge_ai_goal_unit_unstick(slot, actor_index, actor, place, now, 0);
+			break;
+		case _forge_ai_goal_hunt:
+			/* (GO TO PLAYER: the nearest player within RANGE - anywhere, 0 - is
+			gone to, seen or not. A team of players' stops STOP DISTANCE short
+			of them, at its SPEED; any other goes all the way, at a run, and
+			fights them as it comes on them) */
+			if (idle)
+			{
+				real_point3d where;
+
+				if (forge_ai_goal_player(FORGE_AI_GOAL_WHO(slot->who), at, &where) != NONE)
+				{
+					float distance = distance3d(at, &where);
+					float stop = slot->friendly ? (float)slot->follow : 0.0f;
+
+					if ((slot->start == 0 || distance <= (float)slot->start) && distance > stop + 1.0f)
+					{
+						if (!slot->friendly)
+							slot->chasing_until = now + 45;
+						forge_ai_goal_move_toward(actor_index, actor, &where, stop, place);
+					}
+				}
+			}
+			break;
+		}
+	}
+	/* (the firing positions laid again round where they have gone) */
+	if (now % 30 == 0)
+	{
+		for (k = 0; k < s_goal_count; k++)
+		{
+			struct forge_ai_goal_slot *slot = &s_goals[k];
+			float x, y, z, dx, dy, dz;
+
+			if (slot->goal == _forge_ai_goal_patrol || slot->sum_count == 0)
+				continue;
+			x = slot->sum[0] / (float)slot->sum_count;
+			y = slot->sum[1] / (float)slot->sum_count;
+			z = slot->sum[2] / (float)slot->sum_count;
+			dx = x - slot->ring_center[0];
+			dy = y - slot->ring_center[1];
+			dz = z - slot->ring_center[2];
+			if (dx * dx + dy * dy + dz * dz > FORGE_AI_GOAL_RING_MOVE * FORGE_AI_GOAL_RING_MOVE)
+				forge_ai_goal_rings_lay(slot, x, y, z);
+		}
+	}
+}
+
+/* ---------- the lines to the goals, in Forge mode */
+
+/* where a spawn's goal is drawn to: an AI PATROL volume's middle, a route's
+first point; and the live index that stands for it (-1: none) */
+static int forge_ai_goal_link_point(struct forge_ai_spawn_entry const *entry, float point[3], int32_t *target)
+{
+	int32_t points[1];
+
+	*target = -1;
+	if (entry->goal == _forge_ai_goal_patrol)
+		*target = forge_volume_patrol_find(entry->goal_link);
+	else if (entry->goal == _forge_ai_goal_route && forge_ai_route_points(entry->goal_link, points, 1) == 1)
+		*target = points[0];
+	if (*target < 0)
+		return 0;
+	point[0] = g_forge.live_instances[*target].x;
+	point[1] = g_forge.live_instances[*target].y;
+	point[2] = g_forge.live_instances[*target].z + 0.3f;
+	return 1;
+}
+
+/* whether a goal's volume or route is held or pointed at */
+static int forge_ai_goal_target_selected(struct forge_ai_spawn_entry const *entry, int32_t target)
+{
+	int32_t selected[2];
+	int k;
+
+	selected[0] = g_forge.grabbed_live_index;
+	selected[1] = g_forge.hovered_live_index;
+	for (k = 0; k < 2; k++)
+	{
+		struct forge_live_instance const *inst;
+
+		if (selected[k] < 0 || selected[k] >= g_forge.live_instance_count)
+			continue;
+		if (selected[k] == target)
+			return 1;
+		inst = &g_forge.live_instances[selected[k]];
+		if (entry->goal == _forge_ai_goal_route && forge_ai_route_is(inst) &&
+			FORGE_AI_ROUTE_NUMBER(inst->team_designator) == entry->goal_link)
+		{
+			return 1;
+		}
+	}
+	return 0;
+}
+
+void forge_ai_goal_links_render(void (*draw_line)(float const *from, float const *to))
+{
+	int32_t i;
+
+	if (!draw_line)
+		return;
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *inst = &g_forge.live_instances[i];
+		struct forge_ai_spawn_entry const *entry;
+		float from[3], to[3];
+		int32_t target;
+
+		if (!inst->active || inst->group_tag != FORGE_GROUP_AI_SPAWN)
+			continue;
+		entry = forge_ai_entry_of(inst);
+		if (!entry || (entry->goal != _forge_ai_goal_patrol && entry->goal != _forge_ai_goal_route) ||
+			!forge_ai_goal_link_point(entry, to, &target))
+		{
+			continue;
+		}
+		if (i != g_forge.grabbed_live_index && i != g_forge.hovered_live_index &&
+			!forge_ai_goal_target_selected(entry, target))
+		{
+			continue;
+		}
+		from[0] = inst->x;
+		from[1] = inst->y;
+		from[2] = inst->z + 0.5f;
+		draw_line(from, to);
+	}
+}
+
 static void forge_ai_encounters_build(void)
 {
 	struct scenario *scen = global_scenario_try_and_get();
@@ -873,6 +2542,9 @@ static void forge_ai_encounters_build(void)
 	struct forge_ai_added_encounter added[FORGE_AI_MAX_ADDED_ENCOUNTERS];
 	short *entry_added = NULL;
 	long *entry_variant = NULL;
+	/* (the spawns that play their GOAL, and the move positions they have) */
+	boolean *entry_goal = NULL;
+	long goal_squads = 0, move_cursor = 0;
 	long original_count = 0, original_palette_count = 0, palette_count;
 	long palette_room;
 	long own_squad_count = 0, squad_cursor = 0, location_cursor = 0, made_squads = 0, firing_cursor = 0;
@@ -889,6 +2561,18 @@ static void forge_ai_encounters_build(void)
 	original_palette = (struct tag_reference *)scen->ai_actor_palette.address;
 	original_palette_count = scen->ai_actor_palette.count;
 	entries = forge_ai_level_spawns(&entry_count, &replace_own);
+	s_ai_units_placed_logged = 0;
+	/* (diagnostic, debug.txt: why a level's Forge AI does or does not play) */
+	if (scen->type == _scenario_type_multiplayer && (entries || s_saved.has_spawns || g_forge_session_enabled))
+	{
+		error(_error_silent, "forge ai: building the level's AI: %d spawns (%s), replace own %d, map encounters %ld, "
+			"session %d, live %d, saved applied %d has %d count %d, engine running %d, engine %ld, firefight %d, connection %d",
+			entry_count, entries == NULL ? "none" : entries == s_saved.entries ? "saved map" : "Forge edits",
+			replace_own, original_count, g_forge_session_enabled, (int)g_forge.live_instance_count, s_saved.applied,
+			s_saved.has_spawns, s_saved.count, (int)game_engine_running(),
+			game_engine_running() ? (long)game_engine_get_variant()->game_engine_index : -1L, firefight,
+			(int)game_connection());
+	}
 	/* (a map that uses no AI is left alone, and a campaign level always is) */
 	if (scen->type != _scenario_type_multiplayer || (!entries && (!firefight || original_count == 0)))
 		return;
@@ -910,13 +2594,15 @@ static void forge_ai_encounters_build(void)
 	s_built.random_count = 0;
 	entry_added = (short *)malloc((size_t)(entry_count + 1) * sizeof(*entry_added));
 	entry_variant = (long *)malloc((size_t)(entry_count + 1) * sizeof(*entry_variant));
+	entry_goal = (boolean *)calloc((size_t)(entry_count + 1), sizeof(*entry_goal));
 	if (!s_built.encounters || !s_built.squads || !s_built.locations || !s_built.palette || !s_built.randoms ||
-		!entry_added || !entry_variant)
+		!entry_added || !entry_variant || !entry_goal)
 	{
 		platform_log("Forge: out of memory for the level's AI spawns");
 		forge_ai_scenario_restore(scen);
 		free(entry_added);
 		free(entry_variant);
+		free(entry_goal);
 		return;
 	}
 	if (original_palette_count > 0)
@@ -933,20 +2619,38 @@ static void forge_ai_encounters_build(void)
 		entry_added[i] = NONE;
 		entry_variant[i] = NONE;
 		if (!forge_ai_entry_plays(entry))
+		{
+			error(_error_silent, "forge ai: spawn %d (%s) does not play in this game (active %d, modes %04x)", i,
+				entry->actor_variant_path, (int)entry->active, forge_ai_entry_modes(entry));
 			continue;
+		}
 		entry_variant[i] = forge_ai_tag_need('actv', entry->actor_variant_path);
 		if (entry_variant[i] == NONE)
 		{
-			platform_log("Forge: an AI spawn's actor is not in this level: %s", entry->actor_variant_path);
+			error(_error_silent, "forge ai: spawn %d's actor is not in this level: %s", i, entry->actor_variant_path);
 			continue;
 		}
+		error(_error_silent, "forge ai: spawn %d plays: %s (tag %08lx), %d units, team %d, encounter %d, own squad %d", i,
+			entry->actor_variant_path, (unsigned long)entry_variant[i], (int)entry->unit_count, (int)entry->team,
+			(int)entry->encounter_index, forge_ai_entry_own_squad(entry));
 		if (!forge_ai_entry_own_squad(entry))
 			continue;
 		team = forge_ai_entry_team(entry, entry_variant[i]);
-		source = forge_ai_nearest_encounter(encounters, original_count, entry);
-		for (a = 0; a < added_count; a++)
+		/* (a GOAL's spawn: an encounter of its own, made here, while the
+		engine has room for one; else it stands as one with none) */
+		entry_goal[i] = forge_ai_entry_goal_plays(entry) && added_count < FORGE_AI_MAX_ADDED_ENCOUNTERS &&
+			original_count + added_count < FORGE_AI_ENGINE_ENCOUNTERS;
+		if (entry->goal != _forge_ai_goal_none && !entry_goal[i])
+			error(_error_silent, "forge ai: spawn %d's goal %d (#%d) has nothing to go by: it plays with none", i,
+				(int)entry->goal, (int)entry->goal_link);
+		source = entry_goal[i] ? NONE : forge_ai_nearest_encounter(encounters, original_count, entry);
+		/* (a GOAL's spawn never shares: it is a new encounter, past the
+		others - a loop it skipped left `a` 0, and every goal spawn after the
+		first went into the first encounter, one slot, one leader and one set
+		of firing positions for them all) */
+		for (a = entry_goal[i] ? added_count : 0; a < added_count; a++)
 		{
-			if (added[a].team == team && added[a].source_encounter == source &&
+			if (!added[a].goal && added[a].team == team && added[a].source_encounter == source &&
 				added[a].squad_count < (source == NONE ? FORGE_AI_MADE_SQUADS_PER_ENCOUNTER : MAXIMUM_SQUADS_PER_ENCOUNTER))
 			{
 				break;
@@ -954,13 +2658,16 @@ static void forge_ai_encounters_build(void)
 		}
 		if (a == added_count)
 		{
-			if (added_count >= FORGE_AI_MAX_ADDED_ENCOUNTERS)
+			if (added_count >= FORGE_AI_MAX_ADDED_ENCOUNTERS || original_count + added_count >= FORGE_AI_ENGINE_ENCOUNTERS)
 				continue;
 			memset(&added[a], 0, sizeof(added[a]));
 			added[a].team = team;
 			added[a].source_encounter = source;
+			added[a].goal = entry_goal[i];
 			added_count++;
 		}
+		if (entry_goal[i])
+			goal_squads++;
 		added[a].squad_count++;
 		added[a].respawns = added[a].respawns || entry->respawn_alive > 0;
 		entry_added[i] = (short)a;
@@ -971,12 +2678,16 @@ static void forge_ai_encounters_build(void)
 	{
 		s_built.firing_positions = (struct firing_position_definition *)calloc(
 			(size_t)made_squads * FORGE_AI_FIRING_POSITIONS_PER_SPAWN, sizeof(*s_built.firing_positions));
-		if (!s_built.firing_positions)
+		if (goal_squads > 0)
+			s_built.move_positions = (struct move_position_definition *)calloc(
+				(size_t)goal_squads * FORGE_AI_GOAL_MOVE_POSITIONS, sizeof(*s_built.move_positions));
+		if (!s_built.firing_positions || (goal_squads > 0 && !s_built.move_positions))
 		{
 			platform_log("Forge: out of memory for the level's AI spawns");
 			forge_ai_scenario_restore(scen);
 			free(entry_added);
 			free(entry_variant);
+			free(entry_goal);
 			return;
 		}
 	}
@@ -1104,7 +2815,8 @@ static void forge_ai_encounters_build(void)
 			squad->flags = FLAG(_squad_timer_starts_immediately_bit);
 			for (group = 0; group < FORGE_AI_SQUAD_POSITION_GROUP_COUNT; group++)
 				squad->firing_position_groups[group] = FORGE_AI_SQUAD_POSITION_GROUPS;
-			forge_ai_firing_positions_add(a, entry);
+			if (!entry_goal[i])
+				forge_ai_firing_positions_add(a, entry);
 		}
 		snprintf(squad->name, sizeof(squad->name), "forge_ai_%d", a->squads_filled);
 		a->squads_filled++;
@@ -1125,6 +2837,15 @@ static void forge_ai_encounters_build(void)
 		squad->respawn_total_count = entry->respawn_total;
 		squad->respawn_time_lower_bound = (real)entry->respawn_delay_seconds;
 		squad->respawn_time_upper_bound = (real)entry->respawn_delay_seconds;
+		/* (a GOAL's: its move positions, state and firing positions, the
+		encounter's whole FORGE_AI_FIRING_POSITIONS_PER_SPAWN) */
+		if (entry_goal[i] && a->firing_positions)
+		{
+			forge_ai_goal_squad_make(entry, (short)(original_count + entry_added[i]), squad,
+				&s_built.move_positions[move_cursor], a->firing_positions);
+			move_cursor += FORGE_AI_GOAL_MOVE_POSITIONS;
+			a->firing_position_count = FORGE_AI_FIRING_POSITIONS_PER_SPAWN;
+		}
 		memset(location, 0, sizeof(*location));
 		location->cluster_index = NONE;
 		location->noncombat_sequence_id = NONE;
@@ -1145,6 +2866,7 @@ static void forge_ai_encounters_build(void)
 	}
 	free(entry_added);
 	free(entry_variant);
+	free(entry_goal);
 
 	s_built.original_encounters = encounters;
 	s_built.original_encounter_count = original_count;
@@ -1154,6 +2876,8 @@ static void forge_ai_encounters_build(void)
 	scen->ai_encounters.count = original_count + added_count;
 	scen->ai_actor_palette.address = s_built.palette;
 	scen->ai_actor_palette.count = palette_count;
+	error(_error_silent, "forge ai: the level has %ld encounters (%d added, %ld firing positions made), palette %ld",
+		(long)scen->ai_encounters.count, added_count, firing_cursor, palette_count);
 }
 
 /* (from ai_initialize_for_new_map, the game's type known, every tag in) */
@@ -1177,6 +2901,8 @@ void forge_ai_encounters_apply(void)
 	forge_ai_encounters_build();
 	if (s_ai_held)
 	{
+		error(_error_silent, "forge ai: the AI is held (Forge mode): its %ld encounters hidden",
+			(long)scen->ai_encounters.count);
 		s_held_scenario = scen;
 		s_held_encounter_count = scen->ai_encounters.count;
 		scen->ai_encounters.count = 0;
@@ -1281,8 +3007,9 @@ static struct forge_ai_grid_layout *s_ai_grid_layouts;
 /* the next unit of each spawn to start: a spawn starts them all again each time
 the AI does, so this goes round */
 static short s_ai_grid_next[FORGE_MAX_AI_SPAWNS];
-/* the effect of the unit being placed */
+/* the effect of the unit being placed, and its spawn (-1: none of Forge's) */
 static int s_ai_placing_effect;
+static int s_ai_placing_entry = -1;
 
 static void forge_ai_grid_place(struct forge_ai_spawn_entry const *entry, int index, union real_point3d *point)
 {
@@ -1363,6 +3090,40 @@ static struct forge_ai_spawn_entry const *forge_ai_playing_spawns(int *count)
 	return s_saved.entries;
 }
 
+extern boolean tag_index_is_group(long tag_index, long group_tag);
+
+/* whether a spawn's actor is a biped that flies (sentinels, drones): HEIGHT's */
+static int forge_ai_entry_flies(struct forge_ai_spawn_entry const *entry)
+{
+	long unit_definition = forge_ai_actor_unit_definition(entry->actor_variant_path);
+
+	return unit_definition != NONE && tag_index_is_group(unit_definition, 'bipd') &&
+		TEST_FLAG(biped_definition_get(unit_definition)->biped.flags, _biped_flying_bit);
+}
+
+/* the point `height` over the ground under (x, y, z): 1 if there is ground */
+static int forge_ai_over_ground(float x, float y, float z, float height, union real_point3d *point)
+{
+	unsigned long const flags = FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit);
+	real_point3d start;
+	real_vector3d vector;
+	struct collision_result collision;
+
+	start.x = x;
+	start.y = y;
+	start.z = z + 0.5f;
+	vector.i = 0.0f;
+	vector.j = 0.0f;
+	vector.k = -100.0f;
+	memset(&collision, 0, sizeof(collision));
+	if (!collision_test_vector(flags, &start, &vector, NONE, &collision))
+		return 0;
+	point->x = x;
+	point->y = y;
+	point->z = collision.point.z + height;
+	return 1;
+}
+
 /* (from encounter_place_actor) where a unit of a squad starts: the location, or
 `place`, a copy of it where the spawn's layout has this one */
 struct actor_starting_location *forge_ai_location_for_unit(
@@ -1376,6 +3137,7 @@ struct actor_starting_location *forge_ai_location_for_unit(
 	int unit;
 
 	s_ai_placing_effect = _forge_ai_effect_none;
+	s_ai_placing_entry = -1;
 	if (!entries)
 		return location;
 	for (i = 0; i < count && i < FORGE_MAX_AI_SPAWNS; i++)
@@ -1389,18 +3151,192 @@ struct actor_starting_location *forge_ai_location_for_unit(
 	if (i == count || i == FORGE_MAX_AI_SPAWNS)
 		return location;
 	s_ai_placing_effect = entries[i].spawn_effect;
-	if (spawning || entries[i].unit_count < 2 || !forge_ai_entry_own_squad(&entries[i]))
-		return location;
-	unit = s_ai_grid_next[i] % entries[i].unit_count;
-	s_ai_grid_next[i] = (short)(unit + 1);
-	layout = forge_ai_grid_layout(&entries[i], i);
-	if (!unit || unit >= FORGE_AI_GRID_PLACES || !layout)
-		return location;
+	s_ai_placing_entry = i;
 	*place = *location;
-	place->position.x = layout->points[unit].x;
-	place->position.y = layout->points[unit].y;
-	place->position.z = layout->points[unit].z;
+	if (!spawning && entries[i].unit_count >= 2 && forge_ai_entry_own_squad(&entries[i]))
+	{
+		unit = s_ai_grid_next[i] % entries[i].unit_count;
+		s_ai_grid_next[i] = (short)(unit + 1);
+		layout = forge_ai_grid_layout(&entries[i], i);
+		if (unit && unit < FORGE_AI_GRID_PLACES && layout)
+		{
+			place->position.x = layout->points[unit].x;
+			place->position.y = layout->points[unit].y;
+			place->position.z = layout->points[unit].z;
+		}
+	}
+	/* (a flyer with a HEIGHT starts there, as Forge mode shows it:
+	forge_ai_spawn_hover_point) */
+	if (entries[i].hover_height && forge_ai_entry_flies(&entries[i]))
+	{
+		union real_point3d raised;
+
+		if (forge_ai_over_ground(place->position.x, place->position.y, place->position.z,
+				(float)entries[i].hover_height, &raised))
+		{
+			place->position.z = raised.z;
+		}
+	}
 	return place;
+}
+
+/* ---------- a spawn's units as they play: CLOAKED and HEIGHT
+
+A cloaked spawn's unit has the engine's cloak, as an actor variant with active
+camouflage has: it shimmers as it fires or is hit, and comes back (units.c),
+and the network carries it to the clients (network_actors.c). A spawn with a
+HEIGHT keeps its flying units (bipeds that fly: sentinels, drones) that high
+over the ground under them, pushed up as they sink and down as they climb far
+past it, the host's, each tick (forge_ai_units_update) */
+#define FORGE_AI_KEPT_UNITS 512
+/* (held there all the time, not pushed back once it strays, which made it
+bounce: its rise or fall is the height it is off by, times P, plus what it
+has been off by over time, times I, which takes up the engine's own pull
+down; world units a tick) */
+#define FORGE_AI_HOVER_P 0.06f
+#define FORGE_AI_HOVER_I 0.002f
+#define FORGE_AI_HOVER_BIAS (1.0f / (float)TICKS_PER_SECOND)
+/* (the fastest it is moved, world units a tick: 2.5 a second up, 1.5 down) */
+#define FORGE_AI_HOVER_RISE (2.5f / (float)TICKS_PER_SECOND)
+#define FORGE_AI_HOVER_SINK (1.5f / (float)TICKS_PER_SECOND)
+
+static struct
+{
+	long unit_index;
+	float height;
+	float bias;
+} s_ai_kept[FORGE_AI_KEPT_UNITS];
+static int s_ai_kept_count;
+static long s_ai_kept_tick = -1;
+
+/* HEIGHT's choices, world units over the ground (0: none, the unit starts at
+its marker and flies as the engine has it) */
+static int16_t const s_ai_hover_heights[] = { 0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25 };
+
+/* (a height from a saved map or a peer: one of the choices, else the nearest
+below it) */
+static int forge_ai_hover_height_valid(int height)
+{
+	int i, valid = 0;
+
+	for (i = 0; i < (int)NUMBEROF(s_ai_hover_heights); i++)
+	{
+		if (s_ai_hover_heights[i] <= height)
+			valid = s_ai_hover_heights[i];
+	}
+	return valid;
+}
+
+static void forge_ai_unit_keep(long unit_index, int entry_index)
+{
+	int count = 0;
+	struct forge_ai_spawn_entry const *entries = forge_ai_playing_spawns(&count);
+	struct forge_ai_spawn_entry const *entry;
+	struct unit_datum *unit;
+	struct biped_definition const *definition;
+
+	if (!entries || entry_index < 0 || entry_index >= count)
+		return;
+	entry = &entries[entry_index];
+	unit = (struct unit_datum *)object_try_and_get_and_verify_type(unit_index, _object_mask_unit);
+	if (!unit)
+		return;
+	if (entry->cloaked)
+	{
+		SET_FLAG(unit->unit.flags, _unit_active_camouflaged_bit, TRUE);
+		unit->unit.active_camouflage = 1.0f;
+	}
+	if (!entry->hover_height || !object_try_and_get_and_verify_type(unit_index, _object_mask_biped))
+		return;
+	definition = biped_definition_get(unit->definition_index);
+	if (!TEST_FLAG(definition->biped.flags, _biped_flying_bit))
+		return;
+	if (s_ai_kept_count == FORGE_AI_KEPT_UNITS)
+	{
+		int i, kept = 0;
+
+		/* (room made of those gone) */
+		for (i = 0; i < s_ai_kept_count; i++)
+		{
+			if (object_try_and_get_and_verify_type(s_ai_kept[i].unit_index, _object_mask_biped))
+				s_ai_kept[kept++] = s_ai_kept[i];
+		}
+		s_ai_kept_count = kept;
+		if (s_ai_kept_count == FORGE_AI_KEPT_UNITS)
+			return;
+	}
+	s_ai_kept[s_ai_kept_count].unit_index = unit_index;
+	s_ai_kept[s_ai_kept_count].height = (float)entry->hover_height;
+	s_ai_kept[s_ai_kept_count].bias = 0.0f;
+	s_ai_kept_count++;
+}
+
+/* 1 with how high the unit is over the ground (or the water's floor) under it */
+static int forge_ai_unit_altitude(long unit_index, float *altitude)
+{
+	unsigned long const flags = FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit);
+	union real_point3d origin;
+	real_vector3d vector;
+	struct collision_result collision;
+
+	object_get_origin(unit_index, &origin);
+	vector.i = 0.0f;
+	vector.j = 0.0f;
+	vector.k = -100.0f;
+	memset(&collision, 0, sizeof(collision));
+	if (!collision_test_vector(flags, (real_point3d *)&origin, &vector, NONE, &collision))
+		return 0;
+	*altitude = origin.z - collision.point.z;
+	return 1;
+}
+
+void forge_ai_units_update(void)
+{
+	long now = game_time_get();
+	int i, kept = 0;
+
+	if (s_ai_kept_tick >= 0 && now < s_ai_kept_tick)
+	{
+		/* (another level, or the same again: its units are gone) */
+		s_ai_kept_count = 0;
+	}
+	if (now == s_ai_kept_tick)
+		return;
+	s_ai_kept_tick = now;
+	if (game_connection() == _game_connection_network_client)
+	{
+		s_ai_kept_count = 0;
+		return;
+	}
+	forge_ai_goals_update(now);
+	for (i = 0; i < s_ai_kept_count; i++)
+	{
+		struct unit_datum *unit = (struct unit_datum *)object_try_and_get_and_verify_type(s_ai_kept[i].unit_index,
+			_object_mask_biped);
+		float altitude, target = s_ai_kept[i].height;
+		float error, rise;
+
+		/* (dead: let it fall) */
+		if (!unit || unit->unit.actor_index == NONE)
+			continue;
+		s_ai_kept[kept++] = s_ai_kept[i];
+		/* (held still: Forge mode's models, a vehicle's seat) */
+		if (unit->object.parent_object_index != NONE || !forge_ai_unit_altitude(s_ai_kept[i].unit_index, &altitude))
+			continue;
+		error = target - altitude;
+		s_ai_kept[kept - 1].bias += error * FORGE_AI_HOVER_I;
+		if (s_ai_kept[kept - 1].bias > FORGE_AI_HOVER_BIAS)
+			s_ai_kept[kept - 1].bias = FORGE_AI_HOVER_BIAS;
+		else if (s_ai_kept[kept - 1].bias < -FORGE_AI_HOVER_BIAS)
+			s_ai_kept[kept - 1].bias = -FORGE_AI_HOVER_BIAS;
+		rise = error * FORGE_AI_HOVER_P + s_ai_kept[kept - 1].bias;
+		if (rise > FORGE_AI_HOVER_RISE)
+			rise = FORGE_AI_HOVER_RISE;
+		else if (rise < -FORGE_AI_HOVER_SINK)
+			rise = -FORGE_AI_HOVER_SINK;
+		unit->object.translational_velocity.k = rise;
+	}
+	s_ai_kept_count = kept;
 }
 
 static void forge_ai_weapon_give(long unit_index, long weapon_definition)
@@ -1421,8 +3357,17 @@ void forge_ai_unit_placed(long unit_index, struct actor_starting_location const 
 {
 	short slot = (short)(location->flags >> FORGE_AI_LOCATION_WEAPON_SHIFT);
 
+	if (s_ai_units_placed_logged < 4)
+	{
+		s_ai_units_placed_logged++;
+		error(_error_silent, "forge ai: a unit placed at (%.1f %.1f %.1f)", location->position.x,
+			location->position.y, location->position.z);
+	}
+
 	if (slot > 0 && slot <= s_built.weapon_count)
 		forge_ai_weapon_give(unit_index, s_built.weapons[slot - 1]);
+	forge_ai_unit_keep(unit_index, s_ai_placing_entry);
+	s_ai_placing_entry = -1;
 	/* (not as the level loads: there is no one to see it, and no clients yet) */
 	if (s_ai_placing_effect != _forge_ai_effect_none && game_time_get() > 0)
 	{
@@ -1508,6 +3453,8 @@ void forge_ai_saved_parse(char const *text)
 	s_saved.actor_count = 0;
 	s_saved.has_spawns = 0;
 	s_saved.fresh = 1;
+	/* (the AI PATROL volumes and routes the spawns' goals go by) */
+	forge_ai_saved_goals_parse(text);
 	if (!s_saved.actors)
 		s_saved.actors = (struct forge_ai_actor_entry *)calloc(FORGE_MAX_AI_ACTORS, sizeof(*s_saved.actors));
 	forge_ai_saved_tags_parse(text, "AI_ACTOR|", 'actv');
@@ -1546,6 +3493,42 @@ void forge_ai_saved_parse(char const *text)
 					entry->spawn_effect = (uint8_t)index;
 			}
 		}
+		/* (after it: CLOAKED and HEIGHT, none on a map saved before them) */
+		{
+			char const *end = cur + strcspn(cur, "\r\n");
+			char const *cloaked = strstr(cur, "|ck=");
+			char const *height = strstr(cur, "|ht=");
+
+			if (cloaked && cloaked < end)
+				entry->cloaked = atoi(cloaked + 4) ? 1 : 0;
+			if (height && height < end)
+				entry->hover_height = (uint8_t)forge_ai_hover_height_valid(atoi(height + 4));
+		}
+		/* (after those: the GOAL, none on a map saved before it) */
+		{
+			static char const *const keys[6] = { "|gl=", "|gn=", "|gw=", "|gs=", "|gf=", "|ga=" };
+			uint8_t *fields[6];
+			char const *end = cur + strcspn(cur, "\r\n");
+			int k;
+
+			fields[0] = &entry->goal;
+			fields[1] = &entry->goal_link;
+			fields[2] = &entry->goal_who;
+			fields[3] = &entry->goal_start;
+			fields[4] = &entry->goal_follow;
+			fields[5] = &entry->goal_alert;
+			for (k = 0; k < 6; k++)
+			{
+				char const *at = strstr(cur, keys[k]);
+
+				if (at && at < end)
+					*fields[k] = (uint8_t)PIN(atoi(at + 4), 0, 255);
+			}
+			if (entry->goal == FORGE_AI_GOAL_LEGACY_FOLLOW)
+				entry->goal = _forge_ai_goal_hunt;
+			if (entry->goal >= NUMBER_OF_FORGE_AI_GOALS)
+				entry->goal = _forge_ai_goal_none;
+		}
 		entry->team = (int16_t)team;
 		entry->unit_count = (int16_t)count;
 		entry->respawn_alive = (int16_t)alive;
@@ -1566,6 +3549,7 @@ void forge_ai_saved_parse(char const *text)
 /* a level that is no saved map */
 void forge_ai_saved_clear(void)
 {
+	memset(&s_saved_goals, 0, sizeof(s_saved_goals));
 	s_saved.count = 0;
 	s_saved.actor_count = 0;
 	s_saved.has_spawns = 0;
@@ -1782,6 +3766,8 @@ int forge_ai_spawn_entry_new(int32_t live_idx, char const *variant_path, float x
 	entry->team = team;
 	entry->unit_count = 1;
 	entry->respawn_delay_seconds = 30;
+	entry->goal_start = FORGE_AI_GOAL_START_DEFAULT;
+	entry->goal_follow = FORGE_AI_GOAL_FOLLOW_DEFAULT;
 	entry->encounter_index = -1;
 	entry->squad_index = -1;
 	entry->location_index = -1;
@@ -1868,6 +3854,14 @@ void forge_ai_spawn_copy_settings(int source_entry, int32_t live_idx)
 	entry->respawn_total = source->respawn_total;
 	entry->gametype_flags = source->gametype_flags;
 	entry->spawn_effect = source->spawn_effect;
+	entry->cloaked = source->cloaked;
+	entry->hover_height = source->hover_height;
+	entry->goal = source->goal;
+	entry->goal_link = source->goal_link;
+	entry->goal_who = source->goal_who;
+	entry->goal_start = source->goal_start;
+	entry->goal_follow = source->goal_follow;
+	entry->goal_alert = source->goal_alert;
 	g_forge.live_instances[live_idx].team_designator = entry->team;
 	forge_ai_preview_update(live_idx);
 	forge_network_send_ai_spawn(live_idx);
@@ -1902,9 +3896,19 @@ static char const *forge_ai_team_name(int team)
 	case _game_team_covenant: return "COVENANT";
 	case _game_team_flood:    return "FLOOD";
 	case _game_team_sentinel: return "SENTINEL";
+	case FORGE_AI_TEAM_ALL_PLAYERS: return "ALL PLAYERS";
+	case FORGE_AI_TEAM_RED:   return "RED TEAM";
+	case FORGE_AI_TEAM_BLUE:  return "BLUE TEAM";
 	default:                  return "OTHER";
 	}
 }
+
+/* the TEAM row's order: the players' teams beside PLAYER */
+static int16_t const s_ai_team_order[] =
+{
+	_game_team_default, _game_team_player, FORGE_AI_TEAM_RED, FORGE_AI_TEAM_BLUE, FORGE_AI_TEAM_ALL_PLAYERS,
+	_game_team_human, _game_team_covenant, _game_team_flood, _game_team_sentinel
+};
 
 static uint16_t const s_ai_gametypes[] =
 {
@@ -1942,6 +3946,126 @@ static void forge_ai_entry_name(struct forge_ai_spawn_entry const *entry, char *
 		forge_ai_upper_copy(text, text_size, forge_ai_path_leaf(entry->actor_variant_path));
 }
 
+/* ---------- an AI spawn's GOAL, as its panel shows and sets it */
+
+static char const *const s_ai_goal_names[NUMBER_OF_FORGE_AI_GOALS] =
+{
+	"NONE", "PATROL VOLUME", "ROUTE", "GO TO PLAYER"
+};
+static char const *const s_ai_goal_who_names[NUMBER_OF_FORGE_AI_GOAL_WHO] = { "ANY PLAYER", "RED TEAM", "BLUE TEAM" };
+static int16_t const s_ai_goal_distances[] = { 0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100 };
+/* ALERT TIME's seconds */
+static int16_t const s_ai_goal_alerts[] = { 3, 5, 8, 10, 12, 15, 20, 30, 45, 60, 90, 120 };
+
+/* the panel's page (a FORGE_AI_PAGE_*) and the spawn it is open for (-1: the
+first page), and the page row a BACK returned to */
+enum
+{
+	FORGE_AI_PAGE_MAIN = 0,
+	FORGE_AI_PAGE_UNIT,
+	FORGE_AI_PAGE_SPAWN,
+	FORGE_AI_PAGE_GOAL
+};
+static int32_t s_page_live_idx = -1;
+static int s_page = FORGE_AI_PAGE_MAIN;
+static int s_page_return_row = _forge_ai_row_unit_page;
+
+/* whether a spawn's team is a players' (red, blue, all players): its GO TO
+PLAYER has a STOP DISTANCE */
+static int forge_ai_entry_friendly(struct forge_ai_spawn_entry const *entry)
+{
+	return entry->team == FORGE_AI_TEAM_RED || entry->team == FORGE_AI_TEAM_BLUE ||
+		entry->team == FORGE_AI_TEAM_ALL_PLAYERS;
+}
+
+static int forge_ai_entry_alert_seconds(struct forge_ai_spawn_entry const *entry)
+{
+	return entry->goal_alert ? entry->goal_alert : FORGE_AI_GOAL_ALERT_DEFAULT;
+}
+
+/* whether a spawn's PATROL VOLUME or ROUTE is there, in Forge */
+static int forge_ai_goal_link_exists(struct forge_ai_spawn_entry const *entry)
+{
+	int32_t points[1];
+
+	if (entry->goal == _forge_ai_goal_patrol)
+		return forge_volume_patrol_find(entry->goal_link) >= 0;
+	if (entry->goal == _forge_ai_goal_route)
+		return forge_ai_route_points(entry->goal_link, points, 1) > 0;
+	return 1;
+}
+
+static void forge_ai_goal_summary(struct forge_ai_spawn_entry const *entry, char *text, size_t size)
+{
+	switch (entry->goal)
+	{
+	case _forge_ai_goal_patrol:
+		snprintf(text, size, "PATROL #%d%s", (int)entry->goal_link, forge_ai_goal_link_exists(entry) ? "" : "?");
+		break;
+	case _forge_ai_goal_route:
+		snprintf(text, size, "ROUTE #%d%s", (int)entry->goal_link, forge_ai_goal_link_exists(entry) ? "" : "?");
+		break;
+	case _forge_ai_goal_hunt:
+		snprintf(text, size, "GO TO %s", s_ai_goal_who_names[FORGE_AI_GOAL_WHO(entry->goal_who)]);
+		break;
+	default:
+		snprintf(text, size, "NONE");
+		break;
+	}
+}
+
+/* the GOAL row stepped: PATROL VOLUME only while there is an AI PATROL
+volume, ROUTE while there is a route (each then linked to the first); 0 when
+there is nothing to step to */
+static int forge_ai_goal_step(struct forge_ai_spawn_entry *entry, int dir)
+{
+	int goal = entry->goal;
+	int tries;
+
+	for (tries = 0; tries < NUMBER_OF_FORGE_AI_GOALS; tries++)
+	{
+		int numbers[FORGE_AI_ROUTE_MAX];
+		int count = 0;
+
+		goal = (goal + NUMBER_OF_FORGE_AI_GOALS + dir) % NUMBER_OF_FORGE_AI_GOALS;
+		if (goal == _forge_ai_goal_patrol)
+			count = forge_volumes_patrol_numbers(numbers, FORGE_AI_ROUTE_MAX);
+		else if (goal == _forge_ai_goal_route)
+			count = forge_ai_route_numbers(numbers, FORGE_AI_ROUTE_MAX);
+		else
+			break;
+		if (count > 0)
+		{
+			/* (the one it had, if it is still there) */
+			int k, keep = 0;
+
+			for (k = 0; k < count; k++)
+				keep = keep || (goal == entry->goal && numbers[k] == entry->goal_link);
+			if (!keep)
+				entry->goal_link = (uint8_t)numbers[0];
+			break;
+		}
+	}
+	if (goal == entry->goal)
+		return 0;
+	entry->goal = (uint8_t)goal;
+	if (goal == _forge_ai_goal_none)
+		entry->goal_link = 0;
+	if (!entry->goal_start && !entry->goal_follow)
+	{
+		entry->goal_start = FORGE_AI_GOAL_START_DEFAULT;
+		entry->goal_follow = FORGE_AI_GOAL_FOLLOW_DEFAULT;
+	}
+	/* (goal_start is GO TO PLAYER's RANGE: its default as it is chosen) */
+	if (goal == _forge_ai_goal_hunt)
+		entry->goal_start = FORGE_AI_GOAL_HUNT_RANGE_DEFAULT;
+	forge_set_status("%s", goal == _forge_ai_goal_patrol ? "Patrol: each unit roams the volume's ground, point to point" :
+		goal == _forge_ai_goal_route ? "Route: a leader walks it, the rest follow the leader" :
+		goal == _forge_ai_goal_hunt ? "Go to player: they go to the nearest player in their RANGE" :
+		"No goal: they stand, and fight from around the spawn");
+	return 1;
+}
+
 void forge_ai_spawn_row_text(int32_t live_idx, int row, char *label, size_t label_size, char *value, size_t value_size)
 {
 	struct forge_ai_spawn_entry const *entry = forge_ai_entry_live(live_idx);
@@ -1958,7 +4082,7 @@ void forge_ai_spawn_row_text(int32_t live_idx, int row, char *label, size_t labe
 		forge_ai_entry_name(entry, value, value_size);
 		break;
 	case _forge_ai_row_weapon:
-		snprintf(label, label_size, "WEAPON:");
+		snprintf(label, label_size, "LOADOUT:");
 		if (entry->weapon_path[0])
 			forge_ai_upper_copy(value, value_size, forge_ai_path_leaf(entry->weapon_path));
 		else
@@ -2001,6 +4125,64 @@ void forge_ai_spawn_row_text(int32_t live_idx, int row, char *label, size_t labe
 		snprintf(label, label_size, "SPAWN EFFECT:");
 		snprintf(value, value_size, "%s", s_ai_spawn_effects[entry->spawn_effect < NUMBEROF(s_ai_spawn_effects) ?
 			entry->spawn_effect : 0].label);
+		break;
+	case _forge_ai_row_cloaked:
+		snprintf(label, label_size, "CLOAKED:");
+		snprintf(value, value_size, "%s", entry->cloaked ? "ON" : "OFF");
+		break;
+	case _forge_ai_row_hover_height:
+		snprintf(label, label_size, "FLYING HEIGHT:");
+		/* (0: where it starts, at the marker, and not held) */
+		snprintf(value, value_size, "%d UNITS", (int)entry->hover_height);
+		break;
+	case _forge_ai_row_unit_page:
+		snprintf(label, label_size, "UNIT SETTINGS");
+		forge_ai_entry_name(entry, value, value_size);
+		break;
+	case _forge_ai_row_spawn_page:
+		snprintf(label, label_size, "SPAWN SETTINGS");
+		if (entry->respawn_alive > 0)
+			snprintf(value, value_size, "%d, KEEP %d", (int)entry->unit_count, (int)entry->respawn_alive);
+		else
+			snprintf(value, value_size, "%d AT START", (int)entry->unit_count);
+		break;
+	case _forge_ai_row_goal_page:
+		snprintf(label, label_size, "GOAL SETTINGS");
+		forge_ai_goal_summary(entry, value, value_size);
+		break;
+	case _forge_ai_row_goal:
+		snprintf(label, label_size, "GOAL:");
+		snprintf(value, value_size, "%s", s_ai_goal_names[entry->goal < NUMBER_OF_FORGE_AI_GOALS ? entry->goal : 0]);
+		break;
+	case _forge_ai_row_goal_target:
+		snprintf(label, label_size, entry->goal == _forge_ai_goal_route ? "ROUTE:" : "PATROL VOLUME:");
+		snprintf(value, value_size, "#%d%s", (int)entry->goal_link, forge_ai_goal_link_exists(entry) ? "" : " (MISSING)");
+		break;
+	case _forge_ai_row_goal_who:
+		snprintf(label, label_size, "PLAYER:");
+		snprintf(value, value_size, "%s", s_ai_goal_who_names[FORGE_AI_GOAL_WHO(entry->goal_who)]);
+		break;
+	case _forge_ai_row_goal_speed:
+		snprintf(label, label_size, "SPEED:");
+		snprintf(value, value_size, "%s", FORGE_AI_GOAL_RUNS(entry->goal_who) ? "RUN" : "WALK");
+		break;
+	case _forge_ai_row_goal_start:
+		snprintf(label, label_size, "RANGE:");
+		if (entry->goal_start == 0)
+			snprintf(value, value_size, "ANYWHERE");
+		else
+			snprintf(value, value_size, "%d UNITS", (int)entry->goal_start);
+		break;
+	case _forge_ai_row_goal_follow:
+		snprintf(label, label_size, "STOP DISTANCE:");
+		snprintf(value, value_size, "%d UNITS", (int)entry->goal_follow);
+		break;
+	case _forge_ai_row_goal_alert:
+		snprintf(label, label_size, "ALERT TIME:");
+		snprintf(value, value_size, "%d SECONDS", forge_ai_entry_alert_seconds(entry));
+		break;
+	case _forge_ai_row_goal_back:
+		snprintf(label, label_size, "< BACK");
 		break;
 	}
 }
@@ -2094,14 +4276,29 @@ static void forge_ai_variant_step(struct forge_ai_spawn_entry *entry, int dir)
 	}
 }
 
-void forge_ai_spawn_row_step(int32_t live_idx, int row, int dir)
+int forge_ai_spawn_row_step(int32_t live_idx, int row, int dir)
 {
 	struct forge_ai_spawn_entry *entry = forge_ai_entry_live(live_idx);
 	struct forge_live_instance *inst;
 	int index;
 
 	if (!entry || !dir)
-		return;
+		return 0;
+	/* (the pages, opened and closed) */
+	if (row == _forge_ai_row_unit_page || row == _forge_ai_row_spawn_page || row == _forge_ai_row_goal_page)
+	{
+		s_page_live_idx = live_idx;
+		s_page = row == _forge_ai_row_unit_page ? FORGE_AI_PAGE_UNIT :
+			row == _forge_ai_row_spawn_page ? FORGE_AI_PAGE_SPAWN : FORGE_AI_PAGE_GOAL;
+		s_page_return_row = row;
+		return FORGE_AI_ROUTE_PRESS_PAGE_OPENED;
+	}
+	if (row == _forge_ai_row_goal_back)
+	{
+		s_page_live_idx = -1;
+		s_page = FORGE_AI_PAGE_MAIN;
+		return FORGE_AI_ROUTE_PRESS_PAGE_CLOSED;
+	}
 	inst = &g_forge.live_instances[live_idx];
 	switch (row)
 	{
@@ -2113,12 +4310,19 @@ void forge_ai_spawn_row_step(int32_t live_idx, int row, int dir)
 		forge_ai_tag_step('weap', entry->weapon_path, sizeof(entry->weapon_path), dir, 1);
 		break;
 	case _forge_ai_row_team:
-		index = entry->team + dir;
-		entry->team = (int16_t)(index < _game_team_default ? _game_team_sentinel :
-			index > _game_team_sentinel ? _game_team_default : index);
+	{
+		int count = (int)NUMBEROF(s_ai_team_order);
+		int at = 0;
+
+		while (at < count && s_ai_team_order[at] != entry->team)
+			at++;
+		if (at == count)
+			at = 0;
+		entry->team = s_ai_team_order[(at + count + dir) % count];
 		inst->team_designator = entry->team;
 		entry->detached = 1;
 		break;
+	}
 	case _forge_ai_row_start_count:
 		entry->unit_count = (int16_t)((entry->unit_count + 17 + dir) % 17);
 		entry->detached = 1;
@@ -2153,12 +4357,170 @@ void forge_ai_spawn_row_step(int32_t live_idx, int row, int dir)
 		if (s_ai_spawn_effects[entry->spawn_effect].path)
 			forge_ai_tag_need('effe', s_ai_spawn_effects[entry->spawn_effect].path);
 		break;
+	case _forge_ai_row_cloaked:
+		entry->cloaked = (uint8_t)!entry->cloaked;
+		break;
+	case _forge_ai_row_hover_height:
+		index = forge_ai_table_index(s_ai_hover_heights, NUMBEROF(s_ai_hover_heights), entry->hover_height);
+		entry->hover_height = (uint8_t)s_ai_hover_heights[(index + (int)NUMBEROF(s_ai_hover_heights) + dir) %
+			(int)NUMBEROF(s_ai_hover_heights)];
+		break;
+	case _forge_ai_row_goal:
+		if (!forge_ai_goal_step(entry, dir))
+			return 0;
+		break;
+	case _forge_ai_row_goal_target:
+	{
+		int numbers[FORGE_AI_ROUTE_MAX];
+		int count = entry->goal == _forge_ai_goal_route ? forge_ai_route_numbers(numbers, FORGE_AI_ROUTE_MAX) :
+			forge_volumes_patrol_numbers(numbers, FORGE_AI_ROUTE_MAX);
+		int at = 0;
+
+		if (count == 0)
+			return 0;
+		while (at < count && numbers[at] != entry->goal_link)
+			at++;
+		entry->goal_link = (uint8_t)numbers[at == count ? 0 : (at + count + dir) % count];
+		break;
+	}
+	case _forge_ai_row_goal_who:
+		entry->goal_who = (uint8_t)((entry->goal_who & ~FORGE_AI_GOAL_WHO_MASK) |
+			((FORGE_AI_GOAL_WHO(entry->goal_who) + NUMBER_OF_FORGE_AI_GOAL_WHO + dir) % NUMBER_OF_FORGE_AI_GOAL_WHO));
+		break;
+	case _forge_ai_row_goal_speed:
+		entry->goal_who ^= FORGE_AI_GOAL_RUN_BIT;
+		forge_set_status("%s", FORGE_AI_GOAL_RUNS(entry->goal_who) ?
+			"Run: they go at full speed out of a fight too" : "Walk: they go at an easy, alert pace out of a fight");
+		break;
+	case _forge_ai_row_goal_start:
+		index = forge_ai_table_index(s_ai_goal_distances, NUMBEROF(s_ai_goal_distances), entry->goal_start);
+		entry->goal_start = (uint8_t)s_ai_goal_distances[(index + (int)NUMBEROF(s_ai_goal_distances) + dir) %
+			(int)NUMBEROF(s_ai_goal_distances)];
+		forge_set_status("They go to the nearest player this near them, seen or not (0: anywhere on the map)");
+		break;
+	case _forge_ai_row_goal_follow:
+		index = forge_ai_table_index(s_ai_goal_distances, NUMBEROF(s_ai_goal_distances), entry->goal_follow);
+		entry->goal_follow = (uint8_t)s_ai_goal_distances[(index + (int)NUMBEROF(s_ai_goal_distances) + dir) %
+			(int)NUMBEROF(s_ai_goal_distances)];
+		forge_set_status("They stop this far from their player");
+		break;
+	case _forge_ai_row_goal_alert:
+		index = forge_ai_table_index(s_ai_goal_alerts, NUMBEROF(s_ai_goal_alerts), forge_ai_entry_alert_seconds(entry));
+		entry->goal_alert = (uint8_t)s_ai_goal_alerts[(index + (int)NUMBEROF(s_ai_goal_alerts) + dir) %
+			(int)NUMBEROF(s_ai_goal_alerts)];
+		forge_set_status("Once one of them fights, is hurt or dies, all stay alert %d seconds after", (int)entry->goal_alert);
+		break;
 	default:
-		return;
+		return 0;
 	}
 	g_forge.edit_state.ai_spawns_edited = 1;
 	forge_ai_preview_update(live_idx);
 	forge_network_send_ai_spawn(live_idx);
+	return 0;
+}
+
+int forge_ai_spawn_rows(int32_t live_idx, int *rows)
+{
+	struct forge_ai_spawn_entry const *entry = forge_ai_entry_live(live_idx);
+	int count = 0;
+
+	if (!entry)
+		return 0;
+	if (s_page_live_idx >= 0 && s_page_live_idx != live_idx)
+	{
+		s_page_live_idx = -1;
+		s_page = FORGE_AI_PAGE_MAIN;
+	}
+	if (s_page_live_idx != live_idx || s_page == FORGE_AI_PAGE_MAIN)
+	{
+		rows[count++] = _forge_ai_row_unit_page;
+		rows[count++] = _forge_ai_row_spawn_page;
+		rows[count++] = _forge_ai_row_goal_page;
+		rows[count++] = _forge_ai_row_rot_snap;
+		rows[count++] = _forge_ai_row_floor;
+		rows[count++] = _forge_ai_row_delete;
+		return count;
+	}
+	switch (s_page)
+	{
+	case FORGE_AI_PAGE_UNIT:
+		rows[count++] = _forge_ai_row_variant;
+		rows[count++] = _forge_ai_row_team;
+		rows[count++] = _forge_ai_row_weapon;
+		rows[count++] = _forge_ai_row_cloaked;
+		rows[count++] = _forge_ai_row_game_mode;
+		/* (a flying unit's alone: sentinels, drones) */
+		if (forge_ai_entry_flies(entry))
+			rows[count++] = _forge_ai_row_hover_height;
+		break;
+	case FORGE_AI_PAGE_SPAWN:
+		rows[count++] = _forge_ai_row_start_count;
+		rows[count++] = _forge_ai_row_respawn_alive;
+		rows[count++] = _forge_ai_row_respawn_delay;
+		rows[count++] = _forge_ai_row_respawn_total;
+		rows[count++] = _forge_ai_row_spawn_effect;
+		break;
+	default:
+		rows[count++] = _forge_ai_row_goal;
+		if (entry->goal == _forge_ai_goal_patrol || entry->goal == _forge_ai_goal_route)
+			rows[count++] = _forge_ai_row_goal_target;
+		if (entry->goal == _forge_ai_goal_hunt)
+		{
+			rows[count++] = _forge_ai_row_goal_who;
+			rows[count++] = _forge_ai_row_goal_start;
+			/* (a team of players' stops short of them; others go all the way) */
+			if (forge_ai_entry_friendly(entry))
+				rows[count++] = _forge_ai_row_goal_follow;
+		}
+		if (entry->goal != _forge_ai_goal_none)
+		{
+			rows[count++] = _forge_ai_row_goal_speed;
+			rows[count++] = _forge_ai_row_goal_alert;
+		}
+		break;
+	}
+	rows[count++] = _forge_ai_row_goal_back;
+	return count;
+}
+
+int forge_ai_spawn_page_return_row(void)
+{
+	return s_page_return_row;
+}
+
+int forge_ai_spawn_page_back(int32_t live_idx)
+{
+	if (s_page_live_idx != live_idx || s_page == FORGE_AI_PAGE_MAIN)
+		return 0;
+	s_page_live_idx = -1;
+	s_page = FORGE_AI_PAGE_MAIN;
+	return 1;
+}
+
+char const *forge_ai_spawn_panel_title(int32_t live_idx)
+{
+	if (s_page_live_idx != live_idx)
+		return "AI SPAWN";
+	return s_page == FORGE_AI_PAGE_UNIT ? "AI UNIT SETTINGS" : s_page == FORGE_AI_PAGE_SPAWN ? "AI SPAWN SETTINGS" :
+		s_page == FORGE_AI_PAGE_GOAL ? "AI GOAL SETTINGS" : "AI SPAWN";
+}
+
+void forge_ai_spawn_goal_apply(int32_t live_idx, int goal, int link, int who, int start, int follow, int alert)
+{
+	struct forge_ai_spawn_entry *entry = forge_ai_entry_live(live_idx);
+
+	if (goal == FORGE_AI_GOAL_LEGACY_FOLLOW)
+		goal = _forge_ai_goal_hunt;
+	if (!entry || goal < 0 || goal >= NUMBER_OF_FORGE_AI_GOALS)
+		return;
+	if (alert >= 0)
+		entry->goal_alert = (uint8_t)PIN(alert, 0, 255);
+	entry->goal = (uint8_t)goal;
+	entry->goal_link = (uint8_t)link;
+	entry->goal_who = (uint8_t)((who & FORGE_AI_GOAL_RUN_BIT) | (who >= 0 ? FORGE_AI_GOAL_WHO(who) : 0));
+	entry->goal_start = (uint8_t)start;
+	entry->goal_follow = (uint8_t)follow;
+	g_forge.edit_state.ai_spawns_edited = 1;
 }
 
 void forge_ai_spawn_label(struct forge_live_instance const *inst, char *text, size_t text_size)
@@ -2180,7 +4542,8 @@ void forge_ai_spawn_label(struct forge_live_instance const *inst, char *text, si
 int forge_ai_palette_entry_allowed(struct forge_catalog_entry const *entry)
 {
 	return forge_ai_map_editable() &&
-		(entry->group_tag == FORGE_GROUP_AI_SPAWN || entry->group_tag == FORGE_GROUP_AI_MENU);
+		(entry->group_tag == FORGE_GROUP_AI_SPAWN || entry->group_tag == FORGE_GROUP_AI_MENU ||
+		entry->group_tag == FORGE_GROUP_AI_ROUTE);
 }
 
 static void forge_ai_saved_tag_add(uint32_t group_tag, char const *path, char const *known_map)
@@ -2305,11 +4668,20 @@ void forge_ai_spawn_net_apply(
 	entry->respawn_delay_seconds = (int16_t)respawn_delay_seconds;
 	entry->respawn_total = (int16_t)respawn_total;
 	entry->gametype_flags = (uint16_t)gametype_flags;
-	if (spawn_effect >= 0 && spawn_effect < (int)NUMBEROF(s_ai_spawn_effects))
-		entry->spawn_effect = (uint8_t)spawn_effect;
+	/* (CLOAKED and HEIGHT ride with the effect: forge_ai_spawn_effect_packed) */
+	if ((spawn_effect & FORGE_AI_PACKED_EFFECT_MASK) < (int)NUMBEROF(s_ai_spawn_effects))
+		entry->spawn_effect = (uint8_t)(spawn_effect & FORGE_AI_PACKED_EFFECT_MASK);
+	entry->cloaked = (spawn_effect & FORGE_AI_PACKED_CLOAKED) ? 1 : 0;
+	entry->hover_height = (uint8_t)forge_ai_hover_height_valid(spawn_effect >> FORGE_AI_PACKED_HEIGHT_SHIFT);
 	entry->detached = (uint8_t)detached;
 	g_forge.edit_state.ai_spawns_edited = 1;
 	forge_ai_preview_update(live_idx);
+}
+
+int forge_ai_spawn_effect_packed(struct forge_ai_spawn_entry const *entry)
+{
+	return (entry->spawn_effect & FORGE_AI_PACKED_EFFECT_MASK) | (entry->cloaked ? FORGE_AI_PACKED_CLOAKED : 0) |
+		(forge_ai_hover_height_valid(entry->hover_height) << FORGE_AI_PACKED_HEIGHT_SHIFT);
 }
 
 int forge_ai_spawn_grid_count(int32_t live_idx)
@@ -2331,6 +4703,24 @@ int forge_ai_spawn_grid_point(int32_t live_idx, int index, union real_point3d *p
 		return 0;
 	*point = layout->points[index];
 	return 1;
+}
+
+int forge_ai_spawn_hover_point(int32_t live_idx, int index, union real_point3d *point)
+{
+	struct forge_ai_spawn_entry const *entry = forge_ai_entry_live(live_idx);
+	union real_point3d base;
+
+	if (!entry || !entry->hover_height || !forge_ai_entry_flies(entry))
+		return 0;
+	if (index == 0 || !forge_ai_spawn_grid_point(live_idx, index, &base))
+	{
+		if (index != 0)
+			return 0;
+		base.x = entry->x;
+		base.y = entry->y;
+		base.z = entry->z;
+	}
+	return forge_ai_over_ground(base.x, base.y, base.z, (float)entry->hover_height, point);
 }
 
 void forge_ai_spawn_net_settings(

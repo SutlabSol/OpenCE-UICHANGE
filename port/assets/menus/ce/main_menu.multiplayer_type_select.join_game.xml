@@ -42,6 +42,7 @@
 	<widget name="main_menu/multiplayer_type_select/join_game/join_game_button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
 		<child widget="main_menu/multiplayer_type_select/join_game/join_game_button_refresh" y="1" platform="desktop android web"/>
 		<child widget="main_menu/multiplayer_type_select/join_game/button_clipboard" x="128" y="1"/>
+		<child widget="main_menu/multiplayer_type_select/join_game/button_favorite" x="128" y="1" platform="desktop android web"/>
 		<child widget="main_menu/multiplayer_type_select/join_game/join_game_button_filters" x="256" y="1" platform="desktop android web"/>
 		<child widget="main_menu/multiplayer_type_select/join_game/join_game_button_join" x="384" y="1" platform="desktop android web"/>
 		<child widget="common_button_back" x="512" y="1" platform="desktop android web"/>
@@ -86,6 +87,7 @@
 		<on event="right" run="port browser column next"/>
 		<on event="right_stick_up" run="port browser sort increasing"/>
 		<on event="right_stick_down" run="port browser sort decreasing"/>
+		<on event="left_trigger" run="port browser favorite"/>
 		<child widget="main_menu/multiplayer_type_select/join_game/op_browser_mode" x="10" y="55"/>
 		<child widget="main_menu/multiplayer_type_select/join_game/join_game_header" y="83"/>
 		<child widget="main_menu/multiplayer_type_select/join_game/scroll_up_button" x="20" y="102"/>

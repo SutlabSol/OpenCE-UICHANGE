@@ -115,6 +115,15 @@ void area_of_effect_cause_damage(
 	struct damage_data *damage,
 	long unused_object_index);
 
+/* port: a melee blow being dealt (units.c's, and a client's the host deals:
+network_damage.c), a melee one whatever its damage's category is (a map's
+melee damage can be of none); begin returns the blow it was in, end takes
+it back */
+long damage_melee_blow_begin(
+	long definition_index);
+void damage_melee_blow_end(
+	long previous_definition_index);
+
 void object_cause_damage(
 	struct damage_data *damage,
 	long object_index,

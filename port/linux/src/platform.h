@@ -107,6 +107,18 @@ cache_files_decompress_windows.c) read ahead by a thread of its own, so that the
 game works on what it has (xbox_files.c); its other reads, and every other file's, are as before */
 void platform_file_read_ahead(HANDLE file);
 const char *platform_data_root(void);
+/* the desktop's IMPORT (Mods > CUSTOM EDITION MAPS and MASTER CHIEF
+COLLECTION MAPS): a .map or .zip file the player picks with the system's
+file dialog, copied into the import inbox (mcc_import.h's inbox, which takes
+it in) on a thread, as <name>.part until it is whole; its file name in
+`picked`. FALSE when none was picked, or no dialog could be shown (why, in
+`picked`); always FALSE where the game has no such dialog (Android, the
+consoles and the web, which import their own ways) */
+BOOL platform_import_file_pick(const char *inbox, char *picked, int size);
+/* whether this build has that dialog */
+BOOL platform_import_file_pick_available(void);
+/* the folder holding mcc_maps: game.mcc.path's, else the data root (xbox_files.c) */
+const char *platform_mcc_root(void);
 /* the Halo Custom Edition install the Xbox drive h:\ is (paths.custom_edition),
 or "" when none is set or it has no maps folder */
 const char *platform_custom_edition_root(void);
@@ -176,7 +188,7 @@ large as the largest */
 extern unsigned long platform_contiguous_size;
 #define PLATFORM_CONTIGUOUS_SIZE (platform_contiguous_size)
 #define PLATFORM_CONTIGUOUS_MAXIMUM 0x20000000UL
-#elif defined(HALO_WEB) || (defined(HALO_GUEST) && defined(__aarch64__))
+#elif defined(HALO_WEB) || (defined(HALO_GUEST) && defined(__aarch64__) && !defined(HALO_MACOS))
 /* 128 MB, a development kit's: 64-bit ARM Linux's guest image is linked
 just above the window, and the web build's WebAssembly memory ends with it
 (tools/web_build.py). The guests' host reserves HALO_GUEST_WINDOW_SIZE
@@ -187,7 +199,9 @@ halo_port_capacity.h's test of the same builds. */
 #else
 /* 512 MB on the desktop builds, whose caches outgrow the Xbox's (Custom
 Edition maps' textures and geometry: halo_port_capacity.h), the x86-64
-guest's too, whose image is linked below the window. Its pages are backed
+guest's too, whose image is linked below the window, and macOS's AArch64
+guest's, whose host reserves HALO_GUEST_WINDOW_MAXIMUM
+(port/macos/host/host_memory_macos.c). Its pages are backed
 as they are used. port/windows/src/win32_memory_watch.c has the same
 size. */
 #define PLATFORM_CONTIGUOUS_SIZE 0x20000000UL

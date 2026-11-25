@@ -28,6 +28,13 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
     <!-- installing a new version of the game (Updater) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- offering to uninstall the old app (com.halo.decomp) once its files are moved here (Migration) -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+
+    <!-- the old app, the bridge (port/android/bridge), whose files this app takes over on its first start (Migration) -->
+    <queries>
+        <package android:name="${legacyPackage}" />
+    </queries>
 
     <!-- enableOnBackInvokedCallback: the back button and the back gesture
          stay KEYCODE_BACK, which SDL passes to the game as B; with
@@ -61,6 +68,7 @@
             android:exported="true"
             android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode">
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/mcc_shortcuts" />
             <meta-data
                 android:name="android.app.category"
                 android:value="game" />
@@ -77,6 +85,12 @@
                 <data android:scheme="halo" android:host="join" />
             </intent-filter>
         </activity>
+
+        <!-- the launcher's static shortcut (res/xml/mcc_shortcuts.xml) starts it
+             as this app, so other apps need not reach it -->
+        <activity android:name=".MccImportActivity" android:exported="false"
+            android:launchMode="singleTask" android:label="@string/mcc_import_label"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode" />
 
         <!-- in a process of its own, with a fresh Java heap (HaloApplication) -->
         <activity

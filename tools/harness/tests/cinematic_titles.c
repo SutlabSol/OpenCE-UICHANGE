@@ -33,6 +33,8 @@ static struct cinematic_global_data *cinematic_globals = &globals_data;
 /* a menu (any local player's widget) is up or not */
 static boolean menu_up;
 static boolean ui_widgets_active(void) { return menu_up; }
+/* a custom campaign's titles' log (no campaign here) */
+static void cinematic_title_note(short title_index, char const *problem) { (void)title_index; (void)problem; }
 
 /* the game's clock: one tick a frame */
 static long ticks;
@@ -93,6 +95,9 @@ static long halo_screen_width(void) { return screen_width; }
 /* draw_string.c's justifications, as a title's tag has them */
 enum { justified_left, justified_right, justified_center };
 
+/* MCC title adaptation is inactive for these Xbox/CE cases. */
+static boolean mcc_cache_tags_loaded(void) { return FALSE; }
+static void mcc_hud_title_bounds(rectangle2d *bounds, short justification, unsigned long flags) { }
 #include "under_test.inc"
 
 /* the title in its slot, at its start: up for up_time ticks, then fading out for fade_out_time */

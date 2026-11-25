@@ -77,13 +77,21 @@ machine's, and a network game's machines must have the same tag table.
 #include "tag_files/tag_files.h"
 #include "tag_files/tag_groups.h"
 #include "game/game.h"
+#include "game/game_globals.h"
 #include "game/players.h"
 #include "memory/data.h"
 #include "cutscene/cinematics.h"
+#include "effects/effect_definitions.h"
+#include "effects/particle_system_definitions.h"
+#include "effects/particles.h"
 #include "interface/hud_messaging.h"
+#include "interface/unit_hud_interface_definition.h"
 #include "cache_file_formats.h"
 #include "custom_edition_cache.h"
 #include "custom_edition_maps.h"
+#include "mcc_cache.h"
+#include "mcc_maps.h"
+#include "mcc_tag_bundle.h"
 #include "tag_schema.h"
 #include "tag_bundle.h"
 #include "tag_editor.h"
@@ -113,15 +121,42 @@ enum
 	LIGHT_FIXTURE_GROUP_TAG = 'lifi',
 	SHADER_MODEL_GROUP_TAG = 'soso',
 	SHADER_ENVIRONMENT_GROUP_TAG = 'senv',
+	SHADER_TRANSPARENT_GENERIC_GROUP_TAG = 'sotr',
+	SHADER_TRANSPARENT_CHICAGO_GROUP_TAG = 'schi',
+	SHADER_TRANSPARENT_CHICAGO_EXTENDED_GROUP_TAG = 'scex',
+	SHADER_TRANSPARENT_WATER_GROUP_TAG = 'swat',
+	SKY_GROUP_TAG = 'sky ',
+	/* (an effect's and a decal's: drawn as a card, a sprite of their
+	bitmap, preview_card_build) */
+	DECAL_GROUP_TAG = 'deca',
+	PARTICLE_GROUP_TAG = 'part',
+	PARTICLE_SYSTEM_GROUP_TAG = 'pctl',
+	GARBAGE_GROUP_TAG = 'garb',
+	PROJECTILE_GROUP_TAG = 'proj',
+	PLACEHOLDER_GROUP_TAG = 'plac',
+	SOUND_SCENERY_GROUP_TAG = 'ssce',
+	/* (a decal's, decals.c's: its blend function, and its map) */
+	DECAL_DEFINITION_BYTES = 0x10C,
+	DECAL_BLEND_FUNCTION_OFFSET = 0xC0,
+	DECAL_MAP_OFFSET = 0xD8,
+	/* (an effect event's particles, tag_schema_effects.c's: their size, and
+	their particle) */
+	EFFECT_PARTICLES_BYTES = 0xE8,
+	EFFECT_PARTICLES_PARTICLE_OFFSET = 0x54,
+	/* how deep an effect's effects are looked into for what it shows */
+	PREVIEW_MAXIMUM_EFFECT_DEPTH = 3,
 
-	/* the most maps listed, and tags of a category */
-	MAXIMUM_TAG_INJECTOR_MAPS = 512,
+	/* the most maps listed (Custom Edition's, then MCC's), and tags of a
+	category */
+	MAXIMUM_TAG_INJECTOR_MAPS = 512 + MCC_MAPS_MAXIMUM,
 	/* the most bytes of bundles' tags a level holds (their pixels, samples
 	and vertices are read from their files), and bundles */
 	MAXIMUM_INJECTED_BYTES = 0x8000000,
 	/* the weapons tag_injector_tag_objective remembers */
 	OBJECTIVE_KNOWN_TAGS = 256,
 	MAXIMUM_INJECTED_BUNDLES = 128,
+	/* the most first-person hands a map's globals name */
+	MAXIMUM_MENU_HANDS = 16,
 	/* the tags of a level, as datum indices count them */
 	MAXIMUM_TAG_COUNT = 0xFFFF,
 	MAXIMUM_WALK_DEPTH = 32,
@@ -164,6 +199,29 @@ enum
 	SHADER_MODEL_CHANGE_COLOR_SOURCE_OFFSET = 0x4C,
 	SHADER_MODEL_MULTIPURPOSE_MAP_OFFSET = 0xBC,
 	SHADER_ENVIRONMENT_BASE_MAP_OFFSET = 0x88,
+	/* a transparent shader's framebuffer blend function and its maps (a
+	generic's, a chicago's, and a chicago extended's four-stage maps), and
+	in a map, its scales and bitmap: a generic's map, and a chicago's
+	(rasterizer_xbox_transparent_geometry.c's struct
+	shader_transparent_generic_map and struct shader_transparent_chicago_map) */
+	SHADER_TRANSPARENT_BLEND_FUNCTION_OFFSET = 0x2C,
+	SHADER_TRANSPARENT_MAPS_OFFSET = 0x54,
+	SHADER_TRANSPARENT_GENERIC_MAP_BYTES = 0x64,
+	SHADER_TRANSPARENT_GENERIC_MAP_U_SCALE_OFFSET = 0x04,
+	SHADER_TRANSPARENT_GENERIC_MAP_OFFSET = 0x1C,
+	SHADER_TRANSPARENT_CHICAGO_MAP_BYTES = 0xDC,
+	SHADER_TRANSPARENT_CHICAGO_MAP_U_SCALE_OFFSET = 0x54,
+	SHADER_TRANSPARENT_CHICAGO_MAP_OFFSET = 0x6C,
+	/* a chicago's map's flags (alpha replicate, its second bit), and its
+	color and alpha functions (shader_transparent_chicago_preprocessor.c's) */
+	SHADER_TRANSPARENT_CHICAGO_MAP_FLAGS_OFFSET = 0x00,
+	SHADER_TRANSPARENT_CHICAGO_MAP_ALPHA_REPLICATE_FLAG = 0x2,
+	SHADER_TRANSPARENT_CHICAGO_MAP_COLOR_FUNCTION_OFFSET = 0x2C,
+	SHADER_TRANSPARENT_CHICAGO_MAP_ALPHA_FUNCTION_OFFSET = 0x2E,
+	/* a water shader's base map (rasterizer_xbox_water.c's) */
+	SHADER_TRANSPARENT_WATER_BASE_MAP_OFFSET = 0x4C,
+	/* the most of a transparent shader's maps looked through */
+	PREVIEW_MAXIMUM_TRANSPARENT_MAPS = 8,
 	/* a preview's mesh (tag_injector_mesh): the most of it read, as
 	object_mesh.c's, a part's strip at most, the regions read, and the
 	models' detail levels (models.c's NUMBER_OF_DETAIL_LEVELS_PER_MODEL) */
@@ -180,6 +238,11 @@ enum
 	PREVIEW_MATERIAL_UNMADE = -2,
 	PREVIEW_CHANGE_COLORS = 4,
 	PREVIEW_TEXTURE_SIZE = 128,
+	/* (a sky's: it is seen from inside, filling the preview) */
+	PREVIEW_SKY_TEXTURE_SIZE = 512,
+	/* (a card's or a particle's: a sprite is a part of its sheet, the sheet
+	read large enough that the sprite is not blurred) */
+	PREVIEW_CARD_TEXTURE_SIZE = 1024,
 	PREVIEW_MAXIMUM_BITMAP_SIZE = 4096,
 };
 
@@ -231,6 +294,9 @@ enum
 /* the farthest from its origin a preview's vertex is taken to be (one
 farther is taken to be at it: a vertex that is not a number) */
 #define PREVIEW_MAXIMUM_COORDINATE 1000.0f
+/* (a sky's: its models are tens of thousands of units across, drawn about
+the eye whatever their size) */
+#define PREVIEW_MAXIMUM_SKY_COORDINATE 10000000.0f
 /* the largest map scale read (a larger one, or none, is taken to be 1) */
 #define PREVIEW_MAXIMUM_MAP_SCALE 1000.0f
 
@@ -383,11 +449,15 @@ typedef char verify_preview_actor_variant_change_colors_size[
 typedef char verify_injector_tag_instance_size[sizeof(struct injector_tag_instance) == 0x20 ? 1 : -1];
 typedef char verify_injector_map_header_size[sizeof(struct injector_map_header) == 0x28 ? 1 : -1];
 
-/* a map of the menu's list */
+/* a map of the menu's list: a Custom Edition map (its display index of
+custom_edition_maps.c's), or an MCC map (its index of mcc_maps.c's catalog:
+mcc_tag_bundle.c opens it) */
 struct injector_map
 {
 	short display_index;
 	boolean campaign;
+	boolean mcc;
+	short mcc_index;
 };
 
 /* a bundle of a profile added to the level: its file, open while the level
@@ -470,6 +540,10 @@ static struct
 	{ "BIPEDS", 'bipd', TRUE },
 	{ "SCENERY", 'scen', TRUE },
 	{ "DOORS & DEVICES", 'mach', TRUE },
+	{ "SKIES", 'sky ', TRUE },
+	{ "FIRST PERSON HANDS", 'mod2', TRUE },
+	{ "EFFECTS", 'effe', TRUE },
+	{ "DECALS", 'deca', TRUE },
 };
 
 boolean tag_injector_group_in_category(
@@ -492,6 +566,8 @@ static struct
 	struct injector_map maps[MAXIMUM_TAG_INJECTOR_MAPS];
 	short map_count;
 	short opened;
+	/* (the map open is an MCC map's: mcc_tag_bundle.c) */
+	boolean mcc_open;
 	char path[MAP_PATH_SIZE];
 	char map_name[64];
 	struct injector_map_header *header;
@@ -500,6 +576,10 @@ static struct
 	long *problems[NUMBER_OF_TAG_INJECTOR_CATEGORIES];
 	long tag_counts[NUMBER_OF_TAG_INJECTOR_CATEGORIES];
 	unsigned char *names_made;
+	/* the open map's first-person hands (its globals', then the models that
+	can be arms as they are: menu_hands_find), by absolute index */
+	long hands[MAXIMUM_MENU_HANDS];
+	short hand_count;
 } tag_injector_menu = { { { 0 } }, 0, NONE };
 
 /* the level's: the bundles read (of which profile, and their tags' bytes),
@@ -515,6 +595,10 @@ static struct
 	(tag_injector_tags_baked_set), when there is one */
 	boolean has_baked;
 	long baked_profile;
+	/* the game's own props (tag_injector_tags_props_set), read after the
+	bake and before the profile, when there are */
+	boolean has_props;
+	long props_profile;
 	unsigned long read_bytes;
 	struct injector_tag_instance *saved_instances;
 	long saved_count;
@@ -540,6 +624,7 @@ static struct
 } tag_injector_level;
 
 #define LEVEL_BAKED (tag_injector_level.has_baked ? tag_injector_level.baked_profile : NONE)
+#define LEVEL_PROPS (tag_injector_level.has_props ? tag_injector_level.props_profile : NONE)
 
 /* ---------- private code */
 
@@ -634,6 +719,10 @@ static long menu_tag(
 	if (tag_injector_menu.opened == NONE || category < 0 || category >= NUMBER_OF_TAG_INJECTOR_CATEGORIES ||
 		index < 0 || index >= tag_injector_menu.tag_counts[category])
 		return NONE;
+	/* (an MCC map's let go under the menu: an MCC level loads in its tag
+	window, mcc_cache_tags_load) */
+	if (tag_injector_menu.mcc_open && !mcc_tag_bundle_opened())
+		return NONE;
 	return tag_injector_menu.tags[category][index];
 }
 
@@ -658,7 +747,8 @@ static void menu_names_restore(
 			"names made from what they are", count, tag_injector_menu.path);
 }
 
-/* the map's file in the Custom Edition maps folders, into path */
+/* the map's file in the Custom Edition maps folders, into path; an MCC
+map's level name ("mcc_maps\\..."), which mcc_tag_bundle.c opens it by */
 static boolean menu_map_path(
 	short map,
 	char *path)
@@ -667,8 +757,50 @@ static boolean menu_map_path(
 
 	if (map < 0 || map >= tag_injector_menu.map_count)
 		return FALSE;
+	if (tag_injector_menu.maps[map].mcc)
+	{
+		level_name = mcc_maps_level_name(tag_injector_menu.maps[map].mcc_index);
+		if (!level_name || strlen(level_name) >= MAP_PATH_SIZE)
+			return FALSE;
+		snprintf(path, MAP_PATH_SIZE, "%s", level_name);
+		return TRUE;
+	}
 	level_name = custom_edition_maps_level_name(tag_injector_menu.maps[map].display_index);
 	return level_name && custom_edition_map_file_path(level_name, path);
+}
+
+/* the map open's tags opened again (sounds: of the tags a bundle will hold,
+decoded; NULL for none), a Custom Edition map's or an MCC map's; its tag
+header, or NULL */
+static struct injector_map_header *menu_bundle_open(
+	byte const *wanted,
+	long wanted_count)
+{
+	if (tag_injector_menu.mcc_open)
+		return mcc_tag_bundle_open(tag_injector_menu.path, wanted, wanted_count);
+	return custom_edition_cache_bundle_open(tag_injector_menu.path, wanted, wanted_count);
+}
+
+/* the map open, as tag_bundle_write reads it */
+static void menu_bundle_source(
+	struct tag_bundle_source *source)
+{
+	if (tag_injector_menu.mcc_open)
+		mcc_tag_bundle_source(source);
+	else
+		custom_edition_cache_bundle_source(source);
+}
+
+/* a bundle of the map open's tags (as tag_bundle_tags lists them) written
+with what it is: an MCC map's says whether it holds MCC's own content */
+static void menu_bundle_source_for(
+	struct tag_bundle_source *source,
+	long const *indices,
+	long count)
+{
+	menu_bundle_source(source);
+	if (tag_injector_menu.mcc_open && mcc_tag_bundle_own_content(indices, count))
+		source->flags |= FLAG(_tag_bundle_mcc_own_content_bit);
 }
 
 /* writes a bundle into a growing buffer (tag_bundle_write's) */
@@ -746,6 +878,41 @@ static long level_tag(
 	return name && name[0] ? tag_loaded((long)played_group(group_tag), name) : NONE;
 }
 
+/* a profile's hands added beside the level's own tags of their paths: the
+model named as its profile names it (a name with the map's in it, `root`),
+or, a hands tag the profile names by its path alone that the level has, as
+that path and the map's; and the tags they name that the level has, each as
+its path and the map's. The map's name (the names' part after '#'), NULL for
+a bundle added as any other (one that replaces the level's, too) */
+static char const *level_hands_alias(
+	struct injected_bundle const *bundle,
+	char const **root)
+{
+	char const *entry;
+	char const *hash;
+	char const *map;
+
+	*root = NULL;
+	/* (its model a gbxmodel, or a model once bundle_models_convert made it
+	this build's) */
+	if (bundle->refused || bundle->replace || bundle->loaded.tag_count <= 0 || bundle->profile == NONE ||
+		played_group(bundle_tag_group(&bundle->loaded, 0)) != MODEL_GROUP_TAG)
+	{
+		return NULL;
+	}
+	entry = port_tag_profiles_tag_name(bundle->profile, bundle->profile_tag);
+	hash = entry ? strchr(entry, '#') : NULL;
+	if (hash && hash[1])
+	{
+		*root = entry;
+		return hash + 1;
+	}
+	map = port_tag_profiles_tag_map(bundle->profile, bundle->profile_tag);
+	if (!map || !map[0] || level_tag(GBXMODEL_GROUP_TAG, bundle_tag_name(&bundle->loaded, 0)) == NONE)
+		return NULL;
+	return map;
+}
+
 /* the tags the level does not keep from another map: a scenario, a
 structure, the globals (randomizer.c's) */
 static boolean group_left_out(
@@ -761,7 +928,11 @@ static boolean bundle_tag_kept(
 	unsigned long group_tag,
 	char const *name)
 {
-	return !bundle->replace && level_tag(group_tag, name) != NONE;
+	char const *alias_root;
+
+	/* (a map's hands' tags the level has are added beside its own, by
+	another name: level_hands_alias) */
+	return !bundle->replace && level_tag(group_tag, name) != NONE && !level_hands_alias(bundle, &alias_root);
 }
 
 /* whether every bitmap of a bundle's bitmap tags can be drawn from Halo
@@ -1005,6 +1176,96 @@ static void sound_permutations_retarget(
 
 			permutation->unknown2 = (unsigned long)datum;
 			permutation->unknown3 = (unsigned long)datum;
+		}
+	}
+}
+
+/* (port) an MCC map's bundle's (mcc_tag_bundle.c) model shaders of MCC's
+flag 6 and HUD meters of its flag 5, whose bitmaps' channels are in Xbox
+order already, which no Custom Edition map's are: drawn as they are, not
+as Halo PC keeps them (custom_edition_loaded_reordered_bitmaps_find has
+found every multipurpose map and meter), as an MCC level draws them
+(mcc_bitmaps.c's mcc_bitmap_model_usage and mcc_meter_usage). Of the tags
+it added, after the level's are found */
+enum
+{
+	MCC_SHADER_MODEL_FLAGS_OFFSET = 0x28,
+	MCC_SHADER_MODEL_XBOX_MULTIPURPOSE_BIT = 0x40,
+	MCC_SHADER_MODEL_MULTIPURPOSE_MAP_INDEX_OFFSET = 0xC8,
+	MCC_METER_XBOX_CHANNELS_BIT = 0x20,
+	MCC_WEAPON_HUD_METERS_OFFSET = 0x6C,
+	MCC_WEAPON_HUD_ELEMENT_BYTES = 0xB4,
+	MCC_WEAPON_HUD_ELEMENT_METER_OFFSET = 0x24,
+};
+
+static void mcc_meter_channels_keep(
+	struct meter_hud_element_definition const *meter)
+{
+	if (meter->meter_flags & MCC_METER_XBOX_CHANNELS_BIT)
+	{
+		custom_edition_reordered_bitmaps_override(meter->meter_bitmap.index, meter->sequence_index,
+			_custom_edition_channels_hud_meter_xbox);
+	}
+}
+
+static void mcc_bundles_channels_keep(
+	long existing)
+{
+	long bundle_index;
+
+	for (bundle_index = 0; bundle_index < tag_injector_level.bundle_count; bundle_index++)
+	{
+		struct injected_bundle *bundle = &tag_injector_level.bundles[bundle_index];
+		long tag;
+
+		if (bundle->refused || !bundle->bytes ||
+			!(read_unsigned_long(bundle->bytes + TAG_BUNDLE_HEADER_FLAGS_OFFSET) & FLAG(_tag_bundle_mcc_bit)))
+			continue;
+		for (tag = 0; tag < bundle->loaded.tag_count; tag++)
+		{
+			long datum = bundle->datums[tag];
+			long absolute = datum == NONE ? NONE : DATUM_INDEX_TO_ABSOLUTE_INDEX(datum);
+			unsigned long group_tag = bundle_tag_group(&bundle->loaded, tag);
+			byte *root = bundle_tag_root(&bundle->loaded, tag);
+
+			/* (the bundle's own: added by it) */
+			if (absolute == NONE || absolute < existing ||
+				tag_injector_level.grown_instances[absolute].base_address != root)
+				continue;
+			if (group_tag == SHADER_MODEL_GROUP_TAG)
+			{
+				word flags;
+				long multipurpose;
+
+				memcpy(&flags, root + MCC_SHADER_MODEL_FLAGS_OFFSET, sizeof(flags));
+				memcpy(&multipurpose, root + MCC_SHADER_MODEL_MULTIPURPOSE_MAP_INDEX_OFFSET, sizeof(multipurpose));
+				if ((flags & MCC_SHADER_MODEL_XBOX_MULTIPURPOSE_BIT) && multipurpose != NONE)
+					custom_edition_reordered_bitmaps_override(multipurpose, NONE, _custom_edition_channels_xbox);
+			}
+			else if (group_tag == UNIT_HUD_INTERFACE_DEFINITION_TAG)
+			{
+				struct unit_hud_interface_definition const *hud = (struct unit_hud_interface_definition const *)root;
+				long meter_index;
+
+				mcc_meter_channels_keep(&hud->shield_meter.meter);
+				mcc_meter_channels_keep(&hud->health_meter.meter);
+				for (meter_index = 0; meter_index < hud->auxilary_meters.count; meter_index++)
+				{
+					mcc_meter_channels_keep(&TAG_BLOCK_GET_ELEMENT(&hud->auxilary_meters, meter_index,
+						struct auxilary_meter_definition)->panel.meter);
+				}
+			}
+			else if (group_tag == WEAPON_HUD_INTERFACE_GROUP_TAG)
+			{
+				struct tag_block const *meters = (struct tag_block const *)(root + MCC_WEAPON_HUD_METERS_OFFSET);
+				long meter_index;
+
+				for (meter_index = 0; meters->address && meter_index < meters->count; meter_index++)
+				{
+					mcc_meter_channels_keep((struct meter_hud_element_definition const *)((byte const *)meters->address +
+						meter_index * MCC_WEAPON_HUD_ELEMENT_BYTES + MCC_WEAPON_HUD_ELEMENT_METER_OFFSET));
+				}
+			}
 		}
 	}
 }
@@ -1475,6 +1736,20 @@ boolean tag_injector_maps_available(
 	char *reason,
 	long reason_size)
 {
+	/* (MCC maps' tags are taken out in their own tag window, while no MCC
+	map is played: mcc_tag_bundle.c) */
+	if (!mcc_cache_tags_loaded())
+	{
+		reason_set(reason, reason_size, "");
+		return TRUE;
+	}
+	return tag_injector_custom_edition_maps_available(reason, reason_size);
+}
+
+boolean tag_injector_custom_edition_maps_available(
+	char *reason,
+	long reason_size)
+{
 	if (!halo_custom_edition_tag_cache())
 	{
 		reason_set(reason, reason_size, "Custom Edition maps are off (game.custom_edition in config.toml), or cannot run here.");
@@ -1483,6 +1758,20 @@ boolean tag_injector_maps_available(
 	if (custom_edition_cache_tags_loaded())
 	{
 		reason_set(reason, reason_size, "A Custom Edition map is being played.");
+		return FALSE;
+	}
+	reason_set(reason, reason_size, "");
+
+	return TRUE;
+}
+
+boolean tag_injector_mcc_maps_available(
+	char *reason,
+	long reason_size)
+{
+	if (mcc_cache_tags_loaded())
+	{
+		reason_set(reason, reason_size, "An MCC map is being played.");
 		return FALSE;
 	}
 	reason_set(reason, reason_size, "");
@@ -1509,8 +1798,30 @@ short tag_injector_maps_find(
 
 			map->display_index = custom_edition_maps_display_index_of(campaign, index);
 			map->campaign = campaign;
+			map->mcc = FALSE;
+			map->mcc_index = NONE;
 			/* (Halo PC's own multiplayer maps are Custom Edition maps too) */
 			if (map->display_index != NONE && custom_edition_maps_level_name(map->display_index))
+				tag_injector_menu.map_count++;
+		}
+	}
+	/* (and MCC's maps, each of its catalog, campaign or not) */
+	mcc_maps_rescan();
+	for (pass = 0; pass < 2; pass++)
+	{
+		boolean campaign = pass == 0;
+		short count = mcc_maps_type_count(campaign);
+		short index;
+
+		for (index = 0; index < count && tag_injector_menu.map_count < MAXIMUM_TAG_INJECTOR_MAPS; index++)
+		{
+			struct injector_map *map = &tag_injector_menu.maps[tag_injector_menu.map_count];
+
+			map->display_index = NONE;
+			map->campaign = campaign;
+			map->mcc = TRUE;
+			map->mcc_index = mcc_maps_type_index(index, campaign);
+			if (map->mcc_index != NONE && mcc_maps_level_name(map->mcc_index))
 				tag_injector_menu.map_count++;
 		}
 	}
@@ -1527,9 +1838,13 @@ short tag_injector_map_count(
 wchar_t const *tag_injector_map_name(
 	short map)
 {
-	wchar_t const *name = map >= 0 && map < tag_injector_menu.map_count ?
-		custom_edition_maps_name(tag_injector_menu.maps[map].display_index) : NULL;
+	wchar_t const *name = NULL;
 
+	if (map >= 0 && map < tag_injector_menu.map_count)
+	{
+		name = tag_injector_menu.maps[map].mcc ? mcc_maps_name(tag_injector_menu.maps[map].mcc_index) :
+			custom_edition_maps_name(tag_injector_menu.maps[map].display_index);
+	}
 	return name ? name : L"";
 }
 
@@ -1540,7 +1855,7 @@ char const *tag_injector_map_folder(
 	short count;
 	short index;
 
-	if (map < 0 || map >= tag_injector_menu.map_count)
+	if (map < 0 || map >= tag_injector_menu.map_count || tag_injector_menu.maps[map].mcc)
 		return "";
 	found = &tag_injector_menu.maps[map];
 	count = custom_edition_maps_count(found->campaign);
@@ -1566,17 +1881,231 @@ short tag_injector_map_of(
 
 	for (map = 0; display_index != NONE && map < tag_injector_menu.map_count; map++)
 	{
-		if (tag_injector_menu.maps[map].display_index == display_index && tag_injector_menu.maps[map].campaign == campaign)
+		if (!tag_injector_menu.maps[map].mcc && tag_injector_menu.maps[map].display_index == display_index &&
+			tag_injector_menu.maps[map].campaign == campaign)
 			return map;
 	}
 
 	return NONE;
 }
 
+short tag_injector_map_of_mcc(
+	short catalog_index)
+{
+	short map;
+
+	for (map = 0; catalog_index != NONE && map < tag_injector_menu.map_count; map++)
+	{
+		if (tag_injector_menu.maps[map].mcc && tag_injector_menu.maps[map].mcc_index == catalog_index)
+			return map;
+	}
+
+	return NONE;
+}
+
+boolean tag_injector_map_mcc(
+	short map)
+{
+	return map >= 0 && map < tag_injector_menu.map_count && tag_injector_menu.maps[map].mcc;
+}
+
 boolean tag_injector_map_campaign(
 	short map)
 {
 	return map >= 0 && map < tag_injector_menu.map_count && tag_injector_menu.maps[map].campaign;
+}
+
+/* the open map's model at a tag index (NULL: none, or no model) */
+static struct model const *menu_model(
+	struct injector_map_header const *header,
+	long tag_index)
+{
+	long absolute = tag_index == NONE ? NONE : (long)(unsigned short)tag_index;
+
+	if (absolute == NONE || absolute >= header->tag_count || header->instances[absolute].tag_index != tag_index ||
+		(unsigned long)header->instances[absolute].group_tag != GBXMODEL_GROUP_TAG ||
+		!header->instances[absolute].base_address)
+	{
+		return NULL;
+	}
+	return (struct model const *)header->instances[absolute].base_address;
+}
+
+/* how many of a model's nodes another has, by name */
+static long menu_model_nodes_shared(
+	struct model const *model,
+	struct model const *other)
+{
+	long shared = 0;
+	short node;
+
+	if (!model->nodes.address || !other->nodes.address)
+		return 0;
+	for (node = 0; node < model->nodes.count; node++)
+	{
+		struct model_node const *named = TAG_BLOCK_GET_ELEMENT(&model->nodes, node, struct model_node);
+		short other_node;
+
+		for (other_node = 0; other_node < other->nodes.count; other_node++)
+		{
+			if (!_strnicmp(named->name, TAG_BLOCK_GET_ELEMENT(&other->nodes, other_node, struct model_node)->name,
+				TAG_STRING_LENGTH))
+			{
+				shared++;
+				break;
+			}
+		}
+	}
+	return shared;
+}
+
+static void menu_hands_add(
+	long absolute)
+{
+	short other;
+
+	for (other = 0; other < tag_injector_menu.hand_count && tag_injector_menu.hands[other] != absolute; other++)
+	{
+	}
+	if (other == tag_injector_menu.hand_count && tag_injector_menu.hand_count < MAXIMUM_MENU_HANDS)
+		tag_injector_menu.hands[tag_injector_menu.hand_count++] = absolute;
+}
+
+/* the open map's first-person hands (tag_injector_menu.hands): the model its
+globals draw a player's arms with, first, then every other model that can be
+arms as they are: one no object is drawn with (nor a weapon in first person)
+whose nodes are mostly the globals' hands' (a map with an elite's or an
+ODST's arms beside the cyborg's: its players' bipeds' hands) */
+static void menu_hands_find(
+	struct injector_map_header const *header)
+{
+	struct model const *globals_hands = NULL;
+	unsigned char *used;
+	long absolute;
+
+	tag_injector_menu.hand_count = 0;
+	for (absolute = 0; absolute < header->tag_count; absolute++)
+	{
+		struct game_globals const *globals;
+		struct game_globals_first_person_interface const *interface;
+
+		if ((unsigned long)header->instances[absolute].group_tag != 'matg' || !header->instances[absolute].base_address)
+			continue;
+		globals = (struct game_globals const *)header->instances[absolute].base_address;
+		if (!globals->first_person_interface.address || globals->first_person_interface.count <= 0)
+			continue;
+		interface = (struct game_globals_first_person_interface const *)globals->first_person_interface.address;
+		if (menu_model(header, interface->hands.index))
+		{
+			globals_hands = menu_model(header, interface->hands.index);
+			menu_hands_add((long)(unsigned short)interface->hands.index);
+		}
+	}
+	if (!globals_hands || globals_hands->nodes.count < 3)
+		return;
+	/* (the models objects are drawn with, and weapons in first person) */
+	used = malloc((unsigned long)header->tag_count);
+	if (!used)
+		return;
+	memset(used, 0, (unsigned long)header->tag_count);
+	for (absolute = 0; absolute < header->tag_count; absolute++)
+	{
+		struct injector_tag_instance const *instance = &header->instances[absolute];
+		boolean object = (unsigned long)instance->group_tag == 'obje' ||
+			(unsigned long)instance->parent_group_tags[0] == 'obje' ||
+			(unsigned long)instance->parent_group_tags[1] == 'obje';
+		long model_tag;
+
+		if (!object || !instance->base_address)
+			continue;
+		model_tag = ((struct object_definition const *)instance->base_address)->object.model.index;
+		if (menu_model(header, model_tag))
+			used[(unsigned short)model_tag] = TRUE;
+		if ((unsigned long)instance->group_tag == WEAPON_DEFINITION_TAG)
+		{
+			model_tag = ((struct weapon_definition const *)instance->base_address)->weapon.interface_definition.
+				first_person_model.index;
+			if (menu_model(header, model_tag))
+				used[(unsigned short)model_tag] = TRUE;
+		}
+	}
+	for (absolute = 0; absolute < header->tag_count && tag_injector_menu.hand_count < MAXIMUM_MENU_HANDS; absolute++)
+	{
+		struct model const *model = menu_model(header, header->instances[absolute].tag_index);
+
+		if (!model || used[absolute] || model == globals_hands || model->nodes.count < 3)
+			continue;
+		if (menu_model_nodes_shared(model, globals_hands) * 2 >= model->nodes.count)
+			menu_hands_add(absolute);
+	}
+	free(used);
+}
+
+/* how many of the first parts of two paths (to each '\\') are the same */
+static short path_folders_shared(
+	char const *path,
+	char const *other)
+{
+	short shared = 0;
+	long index;
+
+	for (index = 0; path[index] && other[index]; index++)
+	{
+		char a = path[index] >= 'A' && path[index] <= 'Z' ? (char)(path[index] - 'A' + 'a') : path[index];
+		char b = other[index] >= 'A' && other[index] <= 'Z' ? (char)(other[index] - 'A' + 'a') : other[index];
+
+		if (a != b)
+			break;
+		if (a == '\\')
+			shared++;
+	}
+	return shared;
+}
+
+/* the open map's hands a biped of it is drawn with: the hands whose path
+is most its own (characters\\elite\\fp\\fp_arms for characters\\elite\\elite_mp),
+else the globals' */
+static long menu_biped_hands(
+	long biped)
+{
+	short best = 0;
+	short best_shared = 1;
+	short hand;
+
+	if (!tag_injector_menu.hand_count)
+		return NONE;
+	for (hand = 1; hand < tag_injector_menu.hand_count; hand++)
+	{
+		short shared = path_folders_shared(menu_tag_name(biped), menu_tag_name(tag_injector_menu.hands[hand]));
+
+		if (shared > best_shared)
+		{
+			best = hand;
+			best_shared = shared;
+		}
+	}
+	return tag_injector_menu.hands[best];
+}
+
+/* whether the open map's tag is listed in a category: by its group, and a
+model only when it is the map's first-person hands */
+static boolean menu_tag_in_category(
+	struct injector_map_header const *header,
+	long absolute,
+	short category)
+{
+	short hand;
+
+	if (!tag_injector_group_in_category((unsigned long)header->instances[absolute].group_tag, category))
+		return FALSE;
+	if (category != _tag_injector_hands)
+		return TRUE;
+	for (hand = 0; hand < tag_injector_menu.hand_count; hand++)
+	{
+		if (tag_injector_menu.hands[hand] == absolute)
+			return TRUE;
+	}
+	return FALSE;
 }
 
 boolean tag_injector_map_open(
@@ -1593,20 +2122,26 @@ boolean tag_injector_map_open(
 		error(_error_silent, "tag injector: map %d has no file", map);
 		return FALSE;
 	}
-	header = custom_edition_cache_bundle_open(tag_injector_menu.path, NULL, 0);
+	tag_injector_menu.mcc_open = tag_injector_menu.maps[map].mcc;
+	header = menu_bundle_open(NULL, 0);
 	if (!header)
+	{
+		tag_injector_menu.mcc_open = FALSE;
 		return FALSE;
+	}
 	tag_injector_menu.header = header;
 	tag_injector_menu.opened = map;
-	level_name = custom_edition_maps_level_name(tag_injector_menu.maps[map].display_index);
+	level_name = tag_injector_menu.mcc_open ? mcc_maps_level_name(tag_injector_menu.maps[map].mcc_index) :
+		custom_edition_maps_level_name(tag_injector_menu.maps[map].display_index);
 	snprintf(tag_injector_menu.map_name, sizeof(tag_injector_menu.map_name), "%s", tag_name_strip_path(level_name));
 	menu_names_restore(header);
+	menu_hands_find(header);
 	for (category = 0; category < NUMBER_OF_TAG_INJECTOR_CATEGORIES; category++)
 	{
 		long count = 0;
 
 		for (absolute = 0; absolute < header->tag_count; absolute++)
-			count += tag_injector_group_in_category((unsigned long)header->instances[absolute].group_tag, category);
+			count += menu_tag_in_category(header, absolute, category);
 		tag_injector_menu.tags[category] = malloc((unsigned long)(count + 1) * sizeof(long));
 		tag_injector_menu.sizes[category] = malloc((unsigned long)(count + 1) * sizeof(long));
 		tag_injector_menu.problems[category] = malloc((unsigned long)(count + 1) * sizeof(long));
@@ -1618,7 +2153,7 @@ boolean tag_injector_map_open(
 		}
 		for (absolute = 0; absolute < header->tag_count; absolute++)
 		{
-			if (tag_injector_group_in_category((unsigned long)header->instances[absolute].group_tag, category))
+			if (menu_tag_in_category(header, absolute, category))
 			{
 				long index = tag_injector_menu.tag_counts[category]++;
 
@@ -1641,13 +2176,20 @@ void tag_injector_map_close(
 {
 	menu_tags_free();
 	if (tag_injector_menu.opened != NONE)
-		custom_edition_cache_bundle_close();
+	{
+		if (tag_injector_menu.mcc_open)
+			mcc_tag_bundle_close();
+		else
+			custom_edition_cache_bundle_close();
+	}
+	tag_injector_menu.mcc_open = FALSE;
 	tag_names_dispose();
 	if (tag_injector_menu.names_made)
 		free(tag_injector_menu.names_made);
 	tag_injector_menu.names_made = NULL;
 	tag_injector_menu.opened = NONE;
 	tag_injector_menu.header = NULL;
+	tag_injector_menu.hand_count = 0;
 	tag_injector_menu.path[0] = 0;
 	tag_injector_menu.map_name[0] = 0;
 }
@@ -1656,6 +2198,25 @@ short tag_injector_map_opened(
 	void)
 {
 	return tag_injector_menu.opened;
+}
+
+short tag_injector_map_named(
+	char const *level_name)
+{
+	char wanted[MAP_PATH_SIZE];
+	char path[MAP_PATH_SIZE];
+	short map;
+
+	if (!level_name || !level_name[0] || !custom_edition_map_file_path(level_name, wanted))
+		return NONE;
+	if (tag_injector_menu.map_count == 0)
+		tag_injector_maps_find();
+	for (map = 0; map < tag_injector_menu.map_count; map++)
+	{
+		if (menu_map_path(map, path) && !_stricmp(path, wanted))
+			return map;
+	}
+	return NONE;
 }
 
 char const *tag_injector_category_name(
@@ -1722,7 +2283,7 @@ long tag_injector_tag_size(
 		long problem = NONE;
 		enum tag_bundle_status status;
 
-		custom_edition_cache_bundle_source(&source);
+		menu_bundle_source(&source);
 		status = tag_bundle_tags(&source, absolute, &indices, &count, &problem);
 		/* (the bundle's tags were taken from the game's malloc) */
 		if (indices)
@@ -1763,6 +2324,18 @@ boolean tag_injector_tag_stock(
 		randomizer_stock_tag_exists((long)group_tag, port_tag_profiles_tag_name(profile, tag));
 }
 
+/* the name a profile keeps a map's first-person hands by: their path and
+the map's name ("characters\\cyborg\\fp\\fp#bigass"), so that maps' arms of
+one path (most keep the stock arms' path) are each a tag of their own, and
+a level adds each beside its own (level_hands_alias) */
+static void menu_hands_entry_name(
+	long absolute,
+	char *name,
+	unsigned long size)
+{
+	snprintf(name, size, "%s#%s", menu_tag_name(absolute), tag_injector_menu.map_name);
+}
+
 long tag_injector_tag_in_profile(
 	long profile,
 	short category,
@@ -1770,11 +2343,20 @@ long tag_injector_tag_in_profile(
 {
 	long absolute = menu_tag(category, index);
 	unsigned long group_tag;
+	long found;
 
 	if (absolute == NONE || !tag_injector_menu.header)
 		return NONE;
 	group_tag = (unsigned long)tag_injector_menu.header->instances[absolute].group_tag;
-	return port_tag_profiles_tag_find(profile, group_tag, menu_tag_name(absolute));
+	found = port_tag_profiles_tag_find(profile, group_tag, menu_tag_name(absolute));
+	if (found == NONE && category == _tag_injector_hands)
+	{
+		char entry[320];
+
+		menu_hands_entry_name(absolute, entry, sizeof(entry));
+		found = port_tag_profiles_tag_find(profile, group_tag, entry);
+	}
+	return found;
 }
 
 boolean tag_injector_tag_add(
@@ -1815,8 +2397,9 @@ boolean tag_injector_tag_add(
 	tag_count = tag_injector_menu.header->tag_count;
 
 	/* the map again, with the sounds of the tags the bundle holds decoded
-	(the tags are the same, at the same indices) */
-	custom_edition_cache_bundle_source(&source);
+	(the tags are the same, at the same indices; an MCC map's, its bitmaps'
+	pixels too, of those alone) */
+	menu_bundle_source(&source);
 	tag_bundle_tags(&source, absolute, &indices, &count, &problem);
 	sounds = malloc((unsigned long)tag_count);
 	if (!sounds || !indices)
@@ -1831,10 +2414,30 @@ boolean tag_injector_tag_add(
 	memset(sounds, 0, (unsigned long)tag_count);
 	for (tag = 0; tag < count; tag++)
 	{
-		if ((unsigned long)tag_injector_menu.header->instances[indices[tag]].group_tag == SOUND_DEFINITION_TAG)
+		if (tag_injector_menu.mcc_open ||
+			(unsigned long)tag_injector_menu.header->instances[indices[tag]].group_tag == SOUND_DEFINITION_TAG)
 			sounds[indices[tag]] = TRUE;
 	}
-	header = custom_edition_cache_bundle_open(tag_injector_menu.path, sounds, tag_count);
+	/* (a biped's hands, taken out with it below: an MCC map's pixels of
+	theirs too) */
+	for (tag = 0; tag_injector_menu.mcc_open && category == _tag_injector_bipeds && tag < 1 &&
+		menu_biped_hands(absolute) != NONE; tag++)
+	{
+		long *hands_indices = NULL;
+		long hands_count = 0;
+		long hands_problem = NONE;
+		long hands_tag;
+
+		if (tag_bundle_tags(&source, menu_biped_hands(absolute), &hands_indices, &hands_count, &hands_problem) ==
+			_tag_bundle_status_ok)
+		{
+			for (hands_tag = 0; hands_tag < hands_count; hands_tag++)
+				sounds[hands_indices[hands_tag]] = TRUE;
+		}
+		if (hands_indices)
+			free(hands_indices);
+	}
+	header = menu_bundle_open(sounds, tag_count);
 	free(sounds);
 	tag_injector_menu.header = header;
 	/* (its names made again: the same) */
@@ -1851,11 +2454,20 @@ boolean tag_injector_tag_add(
 		return FALSE;
 	}
 
-	custom_edition_cache_bundle_source(&source);
+	menu_bundle_source_for(&source, indices, count);
 	tag_bundle_write(&source, absolute, bundle_buffer_write, &buffer, &report);
-	added = report.status == _tag_bundle_status_ok &&
-		profile_bundle_add(profile, tag_injector_menu.map_name, (unsigned long)header->instances[absolute].group_tag,
-			name, buffer.bytes, buffer.size);
+	{
+		char entry[320];
+
+		/* (hands, by their path and map: menu_hands_entry_name) */
+		if (category == _tag_injector_hands)
+			menu_hands_entry_name(absolute, entry, sizeof(entry));
+		else
+			snprintf(entry, sizeof(entry), "%s", name);
+		added = report.status == _tag_bundle_status_ok &&
+			profile_bundle_add(profile, tag_injector_menu.map_name, (unsigned long)header->instances[absolute].group_tag,
+				entry, buffer.bytes, buffer.size);
+	}
 	if (report.status != _tag_bundle_status_ok)
 	{
 		error(_error_silent, "tag injector: %s cannot be taken out: %s", name, tag_bundle_status_describe(report.status));
@@ -1890,6 +2502,21 @@ boolean tag_injector_tag_add(
 				"not added", carried_name, name);
 			continue;
 		}
+		/* (what it holds of MCC's own: its own tags') */
+		{
+			long *carried_indices = NULL;
+			long carried_count = 0;
+			long carried_problem = NONE;
+
+			menu_bundle_source(&source);
+			if (tag_bundle_tags(&source, indices[tag], &carried_indices, &carried_count, &carried_problem) ==
+				_tag_bundle_status_ok)
+				menu_bundle_source_for(&source, carried_indices, carried_count);
+			else
+				menu_bundle_source_for(&source, indices, count);
+			if (carried_indices)
+				free(carried_indices);
+		}
 		tag_bundle_write(&source, indices[tag], bundle_buffer_write, &carried_buffer, &report);
 		if (report.status == _tag_bundle_status_ok && profile_bundle_add(profile, tag_injector_menu.map_name, group_tag,
 			carried_name, carried_buffer.bytes, carried_buffer.size))
@@ -1907,6 +2534,51 @@ boolean tag_injector_tag_add(
 		}
 		if (carried_buffer.bytes)
 			free(carried_buffer.bytes);
+	}
+	/* a biped's first-person hands, its map's (its globals'): a tag of the
+	profile of its own, as a player's arms (Forge's map settings choose them
+	with the biped), unless the profile has one of that path */
+	for (tag = 0; added && category == _tag_injector_bipeds && tag < 1; tag++)
+	{
+		long hands = menu_biped_hands(absolute);
+		struct bundle_buffer hands_buffer = { NULL, 0, 0 };
+		long *hands_indices = NULL;
+		long hands_count = 0;
+		long hands_problem = NONE;
+		char hands_name[320];
+
+		if (hands == NONE)
+			continue;
+		menu_hands_entry_name(hands, hands_name, sizeof(hands_name));
+		if (port_tag_profiles_tag_find(profile, GBXMODEL_GROUP_TAG, hands_name) != NONE)
+			continue;
+		menu_bundle_source(&source);
+		if (tag_bundle_tags(&source, hands, &hands_indices, &hands_count, &hands_problem) != _tag_bundle_status_ok)
+		{
+			if (hands_indices)
+				free(hands_indices);
+			error(_error_silent, "tag injector: %s's hands %s cannot be taken out", name, hands_name);
+			continue;
+		}
+		menu_bundle_source_for(&source, hands_indices, hands_count);
+		free(hands_indices);
+		tag_bundle_write(&source, hands, bundle_buffer_write, &hands_buffer, &report);
+		if (report.status == _tag_bundle_status_ok && profile_bundle_add(profile, tag_injector_menu.map_name,
+			GBXMODEL_GROUP_TAG, hands_name, hands_buffer.bytes, hands_buffer.size))
+		{
+			error(_error_silent, "tag injector: took %s's hands %s out of %s: %ld tags, %lu bytes", name, hands_name,
+				tag_injector_menu.map_name, report.tag_count, report.size);
+			if (carried)
+				(*carried)++;
+		}
+		else
+		{
+			error(_error_silent, "tag injector: %s's hands %s cannot be taken out: %s", name, hands_name,
+				report.status == _tag_bundle_status_ok ? "the profile cannot be written" :
+				tag_bundle_status_describe(report.status));
+		}
+		if (hands_buffer.bytes)
+			free(hands_buffer.bytes);
 	}
 	free(indices);
 
@@ -1937,6 +2609,13 @@ struct preview_build
 	float colors[PREVIEW_CHANGE_COLORS][3];
 	short shader_materials[PREVIEW_MAXIMUM_SHADERS];
 	long texture_tags[TAG_INJECTOR_MESH_MAXIMUM_TEXTURES];
+	/* (and which of its bitmaps: a card's sprite may be on any) */
+	short texture_bitmaps[TAG_INJECTOR_MESH_MAXIMUM_TEXTURES];
+	/* (a sky's model: its transparent shaders' parts too, and its textures
+	larger) */
+	boolean sky;
+	/* (a card's or an effect's particles': their sprite sheets larger) */
+	boolean card;
 };
 
 /* what of a preview's tags' files is read: a gbxmodel part's vertices or
@@ -2124,9 +2803,10 @@ static void preview_change_colors(
 /* The texture of a bitmap tag a shader names (its index in the mesh's
 textures, read the first time one names it); NONE for none (no bitmap the
 preview draws). */
-static short preview_texture(
+static short preview_texture_bitmap(
 	struct preview_build *build,
 	struct tag_reference const *reference,
+	short bitmap_index,
 	struct tag_injector_mesh *mesh)
 {
 	unsigned long group_tag = 0;
@@ -2144,16 +2824,16 @@ static short preview_texture(
 		return NONE;
 	for (index = 0; index < mesh->texture_count; index++)
 	{
-		if (build->texture_tags[index] == reference->index)
+		if (build->texture_tags[index] == reference->index && build->texture_bitmaps[index] == bitmap_index)
 			return index;
 	}
 	group = (struct bitmap_group const *)preview_tag(build->source, reference->index, &group_tag);
-	if (!group || group_tag != BITMAP_GROUP_TAG || group->bitmaps.count <= 0 ||
+	if (!group || group_tag != BITMAP_GROUP_TAG || bitmap_index < 0 || bitmap_index >= group->bitmaps.count ||
 		mesh->texture_count >= TAG_INJECTOR_MESH_MAXIMUM_TEXTURES)
 	{
 		return NONE;
 	}
-	bitmap = TAG_BLOCK_GET_ELEMENT(&group->bitmaps, 0, struct bitmap_data);
+	bitmap = TAG_BLOCK_GET_ELEMENT(&group->bitmaps, bitmap_index, struct bitmap_data);
 	width = bitmap->width;
 	height = bitmap->height;
 	if (bitmap->type != _preview_bitmap_type_2d || width <= 0 || height <= 0 ||
@@ -2164,7 +2844,9 @@ static short preview_texture(
 	}
 	/* (its largest level no larger than the preview draws: Halo PC's
 	levels one after another, the largest first) */
-	for (level = 0; level < bitmap->mipmap_count && MAX(width, height) > PREVIEW_TEXTURE_SIZE; level++)
+	for (level = 0; level < bitmap->mipmap_count &&
+		MAX(width, height) > (build->card ? PREVIEW_CARD_TEXTURE_SIZE : build->sky ? PREVIEW_SKY_TEXTURE_SIZE :
+		PREVIEW_TEXTURE_SIZE); level++)
 	{
 		offset += preview_level_size(bitmap->format, width, height);
 		width = MAX(1, width >> 1);
@@ -2192,8 +2874,18 @@ static short preview_texture(
 	texture->height = (short)height;
 	texture->size = size;
 	build->texture_tags[mesh->texture_count] = reference->index;
+	build->texture_bitmaps[mesh->texture_count] = bitmap_index;
 
 	return mesh->texture_count++;
+}
+
+/* (a shader's map: its bitmap tag's first bitmap) */
+static short preview_texture(
+	struct preview_build *build,
+	struct tag_reference const *reference,
+	struct tag_injector_mesh *mesh)
+{
+	return preview_texture_bitmap(build, reference, 0, mesh);
 }
 
 /* The material of a model's shader (its index in the mesh's materials,
@@ -2214,11 +2906,58 @@ static short preview_material(
 	short source = 0;
 	short index;
 
+	boolean transparent = group_tag == SHADER_TRANSPARENT_GENERIC_GROUP_TAG ||
+		group_tag == SHADER_TRANSPARENT_CHICAGO_GROUP_TAG || group_tag == SHADER_TRANSPARENT_CHICAGO_EXTENDED_GROUP_TAG;
+	byte const *map = NULL;
+
 	scale[0] = scale[1] = 1.0f;
 	if (!shader || shader_index >= PREVIEW_MAXIMUM_SHADERS ||
-		(group_tag != SHADER_MODEL_GROUP_TAG && group_tag != SHADER_ENVIRONMENT_GROUP_TAG))
+		(group_tag != SHADER_MODEL_GROUP_TAG && group_tag != SHADER_ENVIRONMENT_GROUP_TAG &&
+		group_tag != SHADER_TRANSPARENT_WATER_GROUP_TAG && !transparent))
 	{
 		return NONE;
+	}
+	/* (a generic's map drawn: of its maps that name a bitmap, the one
+	repeated least, the first of those: its picture, where the others are
+	details tiled over it; a chicago's are all drawn, as layers, each
+	repeated as it says, below) */
+	if (group_tag == SHADER_TRANSPARENT_GENERIC_GROUP_TAG)
+	{
+		struct tag_block const *maps = (struct tag_block const *)(shader + SHADER_TRANSPARENT_MAPS_OFFSET);
+		boolean generic = group_tag == SHADER_TRANSPARENT_GENERIC_GROUP_TAG;
+		long map_bytes = generic ? SHADER_TRANSPARENT_GENERIC_MAP_BYTES : SHADER_TRANSPARENT_CHICAGO_MAP_BYTES;
+		long scale_offset = generic ? SHADER_TRANSPARENT_GENERIC_MAP_U_SCALE_OFFSET :
+			SHADER_TRANSPARENT_CHICAGO_MAP_U_SCALE_OFFSET;
+		long map_offset = generic ? SHADER_TRANSPARENT_GENERIC_MAP_OFFSET : SHADER_TRANSPARENT_CHICAGO_MAP_OFFSET;
+		float least = 1.0e30f;
+		long index;
+
+		for (index = 0; index < MIN(maps->count, PREVIEW_MAXIMUM_TRANSPARENT_MAPS); index++)
+		{
+			byte const *candidate = (byte const *)tag_block_get_element_fast(maps, index, map_bytes);
+			float u_scale;
+			float v_scale;
+
+			if (!candidate || ((struct tag_reference const *)(candidate + map_offset))->index == NONE)
+				continue;
+			memcpy(&u_scale, candidate + scale_offset, sizeof(u_scale));
+			memcpy(&v_scale, candidate + scale_offset + sizeof(u_scale), sizeof(v_scale));
+			/* (repeated as much mirrored, a negative scale; none, or not a
+			number: 1) */
+			u_scale = fabsf(u_scale);
+			v_scale = fabsf(v_scale);
+			if (!(u_scale > 0.0f && u_scale < PREVIEW_MAXIMUM_MAP_SCALE))
+				u_scale = 1.0f;
+			if (!(v_scale > 0.0f && v_scale < PREVIEW_MAXIMUM_MAP_SCALE))
+				v_scale = 1.0f;
+			if (u_scale * v_scale < least)
+			{
+				least = u_scale * v_scale;
+				scale[0] = u_scale;
+				scale[1] = v_scale;
+				map = candidate + map_offset;
+			}
+		}
 	}
 	if (group_tag == SHADER_MODEL_GROUP_TAG)
 	{
@@ -2241,7 +2980,63 @@ static short preview_material(
 	material = &mesh->materials[mesh->material_count];
 	material->mask_texture = NONE;
 	material->tinted = FALSE;
-	if (group_tag == SHADER_MODEL_GROUP_TAG)
+	material->blend = _tag_injector_blend_opaque;
+	material->layer_count = 0;
+	if (transparent)
+	{
+		short function = 0;
+
+		memcpy(&function, shader + SHADER_TRANSPARENT_BLEND_FUNCTION_OFFSET, sizeof(function));
+		material->blend = (short)(_tag_injector_blend_alpha + PIN(function, 0, _tag_injector_blend_count -
+			_tag_injector_blend_alpha - 1));
+		material->base_texture = map ? preview_texture(build, (struct tag_reference const *)map, mesh) : NONE;
+		/* (a chicago's maps, a chicago extended's four-stage ones: each
+		folded into what the ones before it made, by its function) */
+		if (group_tag != SHADER_TRANSPARENT_GENERIC_GROUP_TAG)
+		{
+			struct tag_block const *maps = (struct tag_block const *)(shader + SHADER_TRANSPARENT_MAPS_OFFSET);
+
+			for (index = 0; index < MIN(maps->count, TAG_INJECTOR_MESH_MAXIMUM_LAYERS); index++)
+			{
+				byte const *chicago_map = (byte const *)tag_block_get_element_fast(maps, index,
+					SHADER_TRANSPARENT_CHICAGO_MAP_BYTES);
+				struct tag_injector_mesh_layer *layer = &material->layers[material->layer_count];
+				unsigned short flags = 0;
+				float layer_scale[2];
+				short axis;
+
+				if (!chicago_map)
+					break;
+				memcpy(&flags, chicago_map + SHADER_TRANSPARENT_CHICAGO_MAP_FLAGS_OFFSET, sizeof(flags));
+				memcpy(&layer->color_function, chicago_map + SHADER_TRANSPARENT_CHICAGO_MAP_COLOR_FUNCTION_OFFSET,
+					sizeof(layer->color_function));
+				memcpy(&layer->alpha_function, chicago_map + SHADER_TRANSPARENT_CHICAGO_MAP_ALPHA_FUNCTION_OFFSET,
+					sizeof(layer->alpha_function));
+				memcpy(layer_scale, chicago_map + SHADER_TRANSPARENT_CHICAGO_MAP_U_SCALE_OFFSET, sizeof(layer_scale));
+				for (axis = 0; axis < 2; axis++)
+				{
+					/* (as the generic's, above) */
+					layer->scale[axis] = fabsf(layer_scale[axis]);
+					if (!(layer->scale[axis] > 0.0f && layer->scale[axis] < PREVIEW_MAXIMUM_MAP_SCALE))
+						layer->scale[axis] = 1.0f;
+				}
+				layer->alpha_replicate = (flags & SHADER_TRANSPARENT_CHICAGO_MAP_ALPHA_REPLICATE_FLAG) != 0;
+				layer->texture = preview_texture(build,
+					(struct tag_reference const *)(chicago_map + SHADER_TRANSPARENT_CHICAGO_MAP_OFFSET), mesh);
+				material->layer_count++;
+			}
+			if (material->layer_count > 0)
+				material->base_texture = material->layers[0].texture;
+		}
+	}
+	else if (group_tag == SHADER_TRANSPARENT_WATER_GROUP_TAG)
+	{
+		/* (its base map alone, opaque: its reflection and ripples are not
+		drawn) */
+		material->base_texture = preview_texture(build,
+			(struct tag_reference const *)(shader + SHADER_TRANSPARENT_WATER_BASE_MAP_OFFSET), mesh);
+	}
+	else if (group_tag == SHADER_MODEL_GROUP_TAG)
 	{
 		material->base_texture = preview_texture(build,
 			(struct tag_reference const *)(shader + SHADER_MODEL_BASE_MAP_OFFSET), mesh);
@@ -2313,6 +3108,7 @@ static void preview_mesh_part(
 			float *position = mesh->positions[first_vertex + index];
 			float *normal = mesh->normals[first_vertex + index];
 			float *texcoord = mesh->texcoords[first_vertex + index];
+			float farthest = build->sky ? PREVIEW_MAXIMUM_SKY_COORDINATE : PREVIEW_MAXIMUM_COORDINATE;
 			short axis;
 
 			memcpy(position, vertex + GBXMODEL_VERTEX_POSITION_OFFSET, 3 * sizeof(float));
@@ -2321,7 +3117,7 @@ static void preview_mesh_part(
 			/* (a NaN fails every comparison) */
 			for (axis = 0; axis < 3; axis++)
 			{
-				if (!(position[axis] >= -PREVIEW_MAXIMUM_COORDINATE && position[axis] <= PREVIEW_MAXIMUM_COORDINATE))
+				if (!(position[axis] >= -farthest && position[axis] <= farthest))
 					position[axis] = 0.0f;
 				if (!(normal[axis] >= -2.0f && normal[axis] <= 2.0f))
 					normal[axis] = 0.0f;
@@ -2365,6 +3161,563 @@ static void preview_mesh_part(
 		free(strip);
 }
 
+/* whether a group's tags are objects (an object_definition first), those
+whose model a preview draws */
+static boolean preview_object_group(
+	unsigned long group_tag)
+{
+	return group_tag == WEAPON_DEFINITION_TAG || group_tag == EQUIPMENT_GROUP_TAG || group_tag == VEHICLE_GROUP_TAG ||
+		group_tag == BIPED_GROUP_TAG || group_tag == SCENERY_GROUP_TAG || group_tag == MACHINE_GROUP_TAG ||
+		group_tag == CONTROL_GROUP_TAG || group_tag == LIGHT_FIXTURE_GROUP_TAG || group_tag == GARBAGE_GROUP_TAG ||
+		group_tag == PROJECTILE_GROUP_TAG || group_tag == PLACEHOLDER_GROUP_TAG || group_tag == SOUND_SCENERY_GROUP_TAG;
+}
+
+/* A sprite sequence of a bitmap tag: the texture of the bitmap of its
+first sprite (NONE when it cannot be drawn), the bounds of each of its
+sprites on that bitmap (u0, u1, v0, v1; at most `maximum`; the sequence's
+first bitmap whole when it has no sprites, else the tag's first), and its
+first frame's width over its height. */
+static short preview_sprite_sequence(
+	struct preview_build *build,
+	struct tag_reference const *reference,
+	short sequence_index,
+	float (*frames)[4],
+	short maximum,
+	short *frame_count,
+	float *aspect,
+	struct tag_injector_mesh *mesh)
+{
+	struct bitmap_group const *group;
+	unsigned long group_tag = 0;
+	short bitmap_index = 0;
+	short count = 0;
+	short texture;
+
+	*frame_count = 0;
+	*aspect = 1.0f;
+	if (!reference || reference->index == NONE || maximum <= 0)
+		return NONE;
+	group = (struct bitmap_group const *)preview_tag(build->source, reference->index, &group_tag);
+	if (!group || group_tag != BITMAP_GROUP_TAG || group->bitmaps.count <= 0)
+		return NONE;
+	if (group->sequences.count > 0)
+	{
+		struct bitmap_group_sequence const *sequence = TAG_BLOCK_GET_ELEMENT(&group->sequences,
+			PIN(sequence_index, 0, group->sequences.count - 1), struct bitmap_group_sequence);
+		long sprite_index;
+
+		for (sprite_index = 0; sprite_index < sequence->sprites.count && count < maximum; sprite_index++)
+		{
+			struct bitmap_group_sprite const *sprite = TAG_BLOCK_GET_ELEMENT(&sequence->sprites, sprite_index,
+				struct bitmap_group_sprite);
+			float bounds[4] = { sprite->bounds.x0, sprite->bounds.x1, sprite->bounds.y0, sprite->bounds.y1 };
+			short corner;
+			boolean usable = TRUE;
+
+			/* (the first sprite's bitmap's alone: one texture a sequence) */
+			if (count == 0)
+				bitmap_index = sprite->bitmap_index;
+			else if (sprite->bitmap_index != bitmap_index)
+				continue;
+			/* (a NaN fails every comparison) */
+			for (corner = 0; corner < 4; corner++)
+				usable = usable && bounds[corner] >= 0.0f && bounds[corner] <= 1.0f;
+			if (!usable || !(bounds[1] > bounds[0]) || !(bounds[3] > bounds[2]))
+				continue;
+			memcpy(frames[count++], bounds, sizeof(bounds));
+		}
+		if (count == 0 && sequence->bitmap_count > 0)
+			bitmap_index = sequence->first_bitmap_index;
+	}
+	if (bitmap_index < 0 || bitmap_index >= group->bitmaps.count)
+	{
+		bitmap_index = 0;
+		count = 0;
+	}
+	if (count == 0)
+	{
+		frames[0][0] = frames[0][2] = 0.0f;
+		frames[0][1] = frames[0][3] = 1.0f;
+		count = 1;
+	}
+	{
+		struct bitmap_data const *bitmap = TAG_BLOCK_GET_ELEMENT(&group->bitmaps, bitmap_index, struct bitmap_data);
+		float width = (frames[0][1] - frames[0][0]) * (float)MAX(bitmap->width, 1);
+		float height = (frames[0][3] - frames[0][2]) * (float)MAX(bitmap->height, 1);
+
+		*aspect = PIN(width / MAX(height, 0.001f), 0.05f, 20.0f);
+	}
+	build->card = TRUE;
+	texture = preview_texture_bitmap(build, reference, bitmap_index, mesh);
+	if (texture == NONE)
+		return NONE;
+	*frame_count = count;
+	return texture;
+}
+
+/* a material of a texture drawn by a blend function (shader_transparent_
+generic's order); NONE when there is no room */
+static short preview_sprite_material(
+	short texture,
+	short blend_function,
+	struct tag_injector_mesh *mesh)
+{
+	struct tag_injector_mesh_material *material;
+
+	if (mesh->material_count >= TAG_INJECTOR_MESH_MAXIMUM_MATERIALS)
+		return NONE;
+	material = &mesh->materials[mesh->material_count];
+	memset(material, 0, sizeof(*material));
+	material->base_texture = texture;
+	material->mask_texture = NONE;
+	material->blend = (short)(_tag_injector_blend_alpha + PIN(blend_function, 0, _tag_injector_blend_count -
+		_tag_injector_blend_alpha - 1));
+	return mesh->material_count++;
+}
+
+/* A card's mesh (tag_injector_mesh's card): a sprite of a bitmap tag, the
+first of the sequence it names (preview_sprite_sequence's), drawn flat
+facing the eye by the blend function it is drawn with in a game; FALSE when
+its bitmap cannot be drawn (the mesh is then let go). */
+static boolean preview_card_build(
+	struct preview_source const *source,
+	struct tag_reference const *reference,
+	short sequence_index,
+	short blend_function,
+	struct tag_injector_mesh *mesh)
+{
+	struct preview_build build;
+	float frame[1][4];
+	short frame_count;
+	float aspect;
+	short texture;
+	short corner;
+
+	memset(&build, 0, sizeof(build));
+	build.source = source;
+	texture = preview_sprite_sequence(&build, reference, sequence_index, frame, 1, &frame_count, &aspect, mesh);
+	if (texture == NONE)
+	{
+		tag_injector_mesh_free(mesh);
+		return FALSE;
+	}
+	mesh->positions = malloc(4 * sizeof(*mesh->positions));
+	mesh->normals = malloc(4 * sizeof(*mesh->normals));
+	mesh->texcoords = malloc(4 * sizeof(*mesh->texcoords));
+	mesh->triangles = malloc(2 * sizeof(*mesh->triangles));
+	mesh->triangle_materials = malloc(2 * sizeof(*mesh->triangle_materials));
+	if (!mesh->positions || !mesh->normals || !mesh->texcoords || !mesh->triangles || !mesh->triangle_materials)
+	{
+		tag_injector_mesh_free(mesh);
+		return FALSE;
+	}
+	/* (its corners across and down, the first its top left: y across, z
+	up, as a model's front) */
+	for (corner = 0; corner < 4; corner++)
+	{
+		boolean right = corner == 1 || corner == 2;
+		boolean bottom = corner >= 2;
+
+		mesh->positions[corner][0] = 0.0f;
+		mesh->positions[corner][1] = (right ? 0.5f : -0.5f) * aspect;
+		mesh->positions[corner][2] = bottom ? -0.5f : 0.5f;
+		mesh->normals[corner][0] = 1.0f;
+		mesh->normals[corner][1] = 0.0f;
+		mesh->normals[corner][2] = 0.0f;
+		mesh->texcoords[corner][0] = right ? frame[0][1] : frame[0][0];
+		mesh->texcoords[corner][1] = bottom ? frame[0][3] : frame[0][2];
+	}
+	mesh->vertex_count = 4;
+	mesh->triangles[0][0] = 0;
+	mesh->triangles[0][1] = 1;
+	mesh->triangles[0][2] = 2;
+	mesh->triangles[1][0] = 0;
+	mesh->triangles[1][1] = 2;
+	mesh->triangles[1][2] = 3;
+	mesh->triangle_materials[0] = mesh->triangle_materials[1] =
+		preview_sprite_material(texture, blend_function, mesh);
+	mesh->triangle_count = 2;
+	mesh->card = TRUE;
+
+	return TRUE;
+}
+
+/* (an effect event's particles, tag_schema_effects.c's) */
+struct preview_effect_particles
+{
+	short environment;
+	short disposition;
+	short camera_mode;
+	short unused006;
+	short location_index;
+	short unused00a;
+	real_euler_angles2d direction;
+	real_vector3d offset;
+	real_vector3d runtime_direction;
+	long unused02c[10];
+	struct tag_reference particle;
+	unsigned long flags;
+	short distribution_function;
+	short unused06a;
+	short count_lower_bound;
+	short count_upper_bound;
+	real distribution_radius_lower_bound;
+	real distribution_radius_upper_bound;
+	long unused078[3];
+	real velocity_lower_bound;
+	real velocity_upper_bound;
+	real velocity_cone_angle;
+	real angular_velocity_lower_bound;
+	real angular_velocity_upper_bound;
+	long unused098[2];
+	real radius_lower_bound;
+	real radius_upper_bound;
+	long unused0a8[2];
+	real_argb_color tint_lower_bound;
+	real_argb_color tint_upper_bound;
+	long unused0d0[4];
+	unsigned long scale_a_flags;
+	unsigned long scale_b_flags;
+};
+typedef char verify_preview_effect_particles_size[sizeof(struct preview_effect_particles) == 0xE8 ? 1 : -1];
+typedef char verify_preview_effect_particles_particle_offset[
+	offsetof(struct preview_effect_particles, particle) == 0x54 ? 1 : -1];
+
+/* a float read from a tag, or `otherwise` when it is not one between the
+bounds */
+static float preview_float(
+	float value,
+	float minimum,
+	float maximum,
+	float otherwise)
+{
+	return value >= minimum && value <= maximum ? value : otherwise;
+}
+
+/* (two bounds read, the lower not above the upper) */
+static void preview_bounds(
+	float lower,
+	float upper,
+	float minimum,
+	float maximum,
+	float otherwise,
+	float *bounds)
+{
+	bounds[0] = preview_float(lower, minimum, maximum, otherwise);
+	bounds[1] = preview_float(upper, minimum, maximum, bounds[0]);
+	if (bounds[1] < bounds[0])
+	{
+		float swap = bounds[0];
+
+		bounds[0] = bounds[1];
+		bounds[1] = swap;
+	}
+}
+
+/* An emitter of an effect event's particles (or a particle system's
+first particle state, made to drift about where it is) onto the mesh;
+FALSE when it cannot be drawn, or there is no room. An effect's particles
+at its "normal" marker (where it hits a surface) go up from the ground. */
+static boolean preview_emitter_add(
+	struct preview_source const *source,
+	struct effect_definition const *effect,
+	struct effect_event_definition const *event,
+	struct preview_effect_particles const *particles,
+	byte *system_root,
+	struct preview_build *build,
+	struct tag_injector_mesh *mesh)
+{
+	struct tag_injector_mesh_emitter *emitter;
+	struct tag_reference const *bitmap;
+	struct particle_definition const *particle = NULL;
+	short sequence_index = 0;
+	short blend_function = 0;
+	short texture;
+	short channel;
+
+	if (mesh->emitter_count >= TAG_INJECTOR_MESH_MAXIMUM_EMITTERS)
+		return FALSE;
+	emitter = &mesh->emitters[mesh->emitter_count];
+	memset(emitter, 0, sizeof(*emitter));
+	if (particles)
+	{
+		unsigned long group_tag = 0;
+
+		particle = particles->particle.index == NONE ? NULL :
+			(struct particle_definition const *)preview_tag(source, particles->particle.index, &group_tag);
+		if (!particle || group_tag != PARTICLE_GROUP_TAG)
+			return FALSE;
+		bitmap = &particle->bitmap;
+		sequence_index = particle->first_sequence_index;
+		blend_function = particle->shader.framebuffer_blend_function;
+	}
+	else
+	{
+		struct particle_system_definition const *system = (struct particle_system_definition const *)system_root;
+		struct particle_system_type const *type;
+		struct particle_system_type_particle_state const *state;
+
+		if (!system || system->types.count <= 0)
+			return FALSE;
+		type = TAG_BLOCK_GET_ELEMENT(&system->types, 0, struct particle_system_type);
+		if (type->particle_states.count <= 0)
+			return FALSE;
+		state = TAG_BLOCK_GET_ELEMENT(&type->particle_states, 0, struct particle_system_type_particle_state);
+		bitmap = &state->bitmaps;
+		sequence_index = state->sequence_index;
+		blend_function = state->shader.framebuffer_blend_function;
+	}
+	/* (the build the effect's emitters share: a texture each bitmap) */
+	texture = preview_sprite_sequence(build, bitmap, sequence_index, emitter->frames,
+		TAG_INJECTOR_MESH_MAXIMUM_FRAMES, &emitter->frame_count, &emitter->aspect, mesh);
+	if (texture == NONE)
+		return FALSE;
+	emitter->material = preview_sprite_material(texture, blend_function, mesh);
+	if (emitter->material == NONE)
+		return FALSE;
+	if (particles)
+	{
+		float yaw = preview_float(particles->direction.yaw, -100.0f, 100.0f, 0.0f);
+		float pitch = preview_float(particles->direction.pitch, -100.0f, 100.0f, 0.0f);
+		float direction[3] = { cosf(pitch) * cosf(yaw), cosf(pitch) * sinf(yaw), sinf(pitch) };
+		float offset[3] = {
+			preview_float(particles->offset.i, -100.0f, 100.0f, 0.0f),
+			preview_float(particles->offset.j, -100.0f, 100.0f, 0.0f),
+			preview_float(particles->offset.k, -100.0f, 100.0f, 0.0f) };
+		boolean normal = FALSE;
+
+		if (particles->location_index >= 0 && particles->location_index < effect->locations.count)
+		{
+			char const *marker = (char const *)tag_block_get_element_fast(&effect->locations,
+				particles->location_index, 32);
+
+			normal = marker && !_strnicmp(marker, "normal", 32);
+		}
+		/* (a surface's: its forward, x, the surface's normal, up) */
+		if (normal)
+		{
+			float swap = direction[0];
+
+			direction[0] = -direction[2];
+			direction[2] = swap;
+			swap = offset[0];
+			offset[0] = -offset[2];
+			offset[2] = swap;
+		}
+		memcpy(emitter->direction, direction, sizeof(direction));
+		memcpy(emitter->offset, offset, sizeof(offset));
+		emitter->count[0] = (short)PIN(particles->count_lower_bound, 0, 64);
+		emitter->count[1] = (short)PIN(particles->count_upper_bound, emitter->count[0], 64);
+		if (emitter->count[1] <= 0)
+			emitter->count[0] = emitter->count[1] = 1;
+		emitter->distribution = particles->distribution_function;
+		preview_bounds(particles->distribution_radius_lower_bound, particles->distribution_radius_upper_bound, 0.0f,
+			50.0f, 0.0f, emitter->distribution_radius);
+		preview_bounds(particles->velocity_lower_bound, particles->velocity_upper_bound, 0.0f, 200.0f, 0.0f,
+			emitter->velocity);
+		emitter->cone = preview_float(particles->velocity_cone_angle, 0.0f, 7.0f, 0.0f);
+		preview_bounds(particles->angular_velocity_lower_bound, particles->angular_velocity_upper_bound, -100.0f,
+			100.0f, 0.0f, emitter->angular_velocity);
+		/* (its own radius, else its particle's) */
+		preview_bounds(particles->radius_lower_bound, particles->radius_upper_bound, 0.0f, 50.0f, 0.0f,
+			emitter->radius);
+		if (!(emitter->radius[1] > 0.0f))
+		{
+			preview_bounds(particle->radius_lower_bound, particle->radius_upper_bound, 0.0f, 50.0f, 0.1f,
+				emitter->radius);
+		}
+		emitter->tint[0][0] = particles->tint_lower_bound.alpha;
+		emitter->tint[0][1] = particles->tint_lower_bound.red;
+		emitter->tint[0][2] = particles->tint_lower_bound.green;
+		emitter->tint[0][3] = particles->tint_lower_bound.blue;
+		emitter->tint[1][0] = particles->tint_upper_bound.alpha;
+		emitter->tint[1][1] = particles->tint_upper_bound.red;
+		emitter->tint[1][2] = particles->tint_upper_bound.green;
+		emitter->tint[1][3] = particles->tint_upper_bound.blue;
+		preview_bounds(particle->life_span_lower_bound, particle->life_span_upper_bound, 0.01f, 30.0f, 1.0f,
+			emitter->life);
+		emitter->fade_in = preview_float(particle->fade_in_time, 0.0f, 30.0f, 0.0f);
+		emitter->fade_out = preview_float(particle->fade_out_time, 0.0f, 30.0f, 0.0f);
+		preview_bounds(particle->frames_per_second_lower_bound, particle->frames_per_second_upper_bound, 0.0f,
+			120.0f, 0.0f, emitter->frames_per_second);
+	}
+	else
+	{
+		/* (a particle system: some drifting about where it is) */
+		emitter->direction[2] = 1.0f;
+		emitter->count[0] = emitter->count[1] = 24;
+		emitter->distribution = 2;
+		emitter->distribution_radius[1] = 1.0f;
+		emitter->velocity[0] = 0.05f;
+		emitter->velocity[1] = 0.3f;
+		emitter->cone = 3.14159265f;
+		emitter->angular_velocity[0] = -1.0f;
+		emitter->angular_velocity[1] = 1.0f;
+		emitter->radius[0] = 0.05f;
+		emitter->radius[1] = 0.15f;
+		emitter->life[0] = 1.0f;
+		emitter->life[1] = 2.0f;
+		emitter->fade_in = 0.3f;
+		emitter->fade_out = 0.5f;
+	}
+	/* (no tint, or one not a number: white) */
+	for (channel = 0; channel < 4; channel++)
+	{
+		emitter->tint[0][channel] = preview_float(emitter->tint[0][channel], 0.0f, 1.0f, 0.0f);
+		emitter->tint[1][channel] = preview_float(emitter->tint[1][channel], 0.0f, 1.0f, emitter->tint[0][channel]);
+	}
+	if (emitter->tint[0][0] + emitter->tint[1][0] + emitter->tint[0][1] + emitter->tint[1][1] + emitter->tint[0][2] +
+		emitter->tint[1][2] + emitter->tint[0][3] + emitter->tint[1][3] <= 0.0f)
+	{
+		for (channel = 0; channel < 4; channel++)
+			emitter->tint[0][channel] = emitter->tint[1][channel] = 1.0f;
+	}
+	else if (emitter->tint[0][0] + emitter->tint[1][0] <= 0.0f)
+		emitter->tint[0][0] = emitter->tint[1][0] = 1.0f;
+	if (event)
+	{
+		preview_bounds(event->delay_lower_bound, event->delay_upper_bound, 0.0f, 10.0f, 0.0f, emitter->delay);
+		preview_bounds(event->duration_lower_bound, event->duration_upper_bound, 0.0f, 10.0f, 0.0f, emitter->duration);
+	}
+	else
+	{
+		emitter->duration[0] = emitter->duration[1] = 2.0f;
+	}
+	mesh->emitter_count++;
+	return TRUE;
+}
+
+static boolean preview_mesh_build(
+	struct preview_source const *source,
+	byte *root,
+	unsigned long group_tag,
+	struct tag_injector_mesh *mesh);
+
+/* the card of a particle's, a particle system's (its first type's first
+particle state's) or a decal's bitmap; FALSE for another tag, or one whose
+bitmap cannot be drawn */
+static boolean preview_sprite_build(
+	struct preview_source const *source,
+	byte *root,
+	unsigned long group_tag,
+	struct tag_injector_mesh *mesh)
+{
+	if (!root)
+		return FALSE;
+	if (group_tag == PARTICLE_GROUP_TAG)
+	{
+		struct particle_definition const *particle = (struct particle_definition const *)root;
+
+		return preview_card_build(source, &particle->bitmap, particle->first_sequence_index,
+			particle->shader.framebuffer_blend_function, mesh);
+	}
+	if (group_tag == PARTICLE_SYSTEM_GROUP_TAG)
+	{
+		struct particle_system_definition const *system = (struct particle_system_definition const *)root;
+		long type_index;
+
+		for (type_index = 0; type_index < system->types.count; type_index++)
+		{
+			struct particle_system_type const *type = TAG_BLOCK_GET_ELEMENT(&system->types, type_index,
+				struct particle_system_type);
+			long state_index;
+
+			for (state_index = 0; state_index < type->particle_states.count; state_index++)
+			{
+				struct particle_system_type_particle_state const *state = TAG_BLOCK_GET_ELEMENT(
+					&type->particle_states, state_index, struct particle_system_type_particle_state);
+
+				if (preview_card_build(source, &state->bitmaps, state->sequence_index,
+					state->shader.framebuffer_blend_function, mesh))
+				{
+					return TRUE;
+				}
+			}
+		}
+		return FALSE;
+	}
+	if (group_tag == DECAL_GROUP_TAG)
+	{
+		short blend_function = 0;
+
+		memcpy(&blend_function, root + DECAL_BLEND_FUNCTION_OFFSET, sizeof(blend_function));
+		return preview_card_build(source, (struct tag_reference const *)(root + DECAL_MAP_OFFSET), 0, blend_function,
+			mesh);
+	}
+	return FALSE;
+}
+
+/* What an effect is seen as: the particles of all its events, and of the
+particle systems of their parts, played (tag_injector_mesh's emitters);
+else the first sprite of its parts (a particle or a decal: a card), else
+the first object of its parts (its model: debris, a projectile), else the
+first effect of its parts' (as deep as PREVIEW_MAXIMUM_EFFECT_DEPTH); FALSE
+for none (its sounds, lights and damage are not drawn). */
+static boolean preview_effect_build(
+	struct preview_source const *source,
+	byte *root,
+	short depth,
+	struct tag_injector_mesh *mesh)
+{
+	struct effect_definition const *effect = (struct effect_definition const *)root;
+	struct preview_build build;
+	short pass;
+
+	if (!root || depth >= PREVIEW_MAXIMUM_EFFECT_DEPTH)
+		return FALSE;
+	memset(&build, 0, sizeof(build));
+	build.source = source;
+	for (pass = 0; pass < 4; pass++)
+	{
+		long event_index;
+
+		for (event_index = 0; event_index < MIN(effect->events.count, MAXIMUM_EFFECT_EVENTS); event_index++)
+		{
+			struct effect_event_definition const *event = TAG_BLOCK_GET_ELEMENT(&effect->events, event_index,
+				struct effect_event_definition);
+			long index;
+
+			if (pass == 0)
+			{
+				for (index = 0; index < MIN(event->particles.count, MAXIMUM_EFFECT_PARTICLES_PER_EVENT); index++)
+				{
+					preview_emitter_add(source, effect, event, (struct preview_effect_particles const *)
+						tag_block_get_element_fast(&event->particles, index, sizeof(struct preview_effect_particles)),
+						NULL, &build, mesh);
+				}
+			}
+			for (index = 0; index < MIN(event->parts.count, MAXIMUM_EFFECT_PARTS_PER_EVENT); index++)
+			{
+				struct effect_part_definition const *part = TAG_BLOCK_GET_ELEMENT(&event->parts, index,
+					struct effect_part_definition);
+				unsigned long group_tag = 0;
+				byte *tag = part->reference.index == NONE ? NULL :
+					preview_tag(source, part->reference.index, &group_tag);
+
+				if (!tag)
+					continue;
+				if (pass == 0 && group_tag == PARTICLE_SYSTEM_GROUP_TAG)
+					preview_emitter_add(source, effect, event, NULL, tag, &build, mesh);
+				if (pass == 1 && preview_sprite_build(source, tag, group_tag, mesh))
+					return TRUE;
+				if (pass == 2 && preview_object_group(group_tag) && preview_mesh_build(source, tag, group_tag, mesh))
+					return TRUE;
+				if (pass == 3 && group_tag == EFFECT_DEFINITION_TAG && tag != root &&
+					preview_effect_build(source, tag, (short)(depth + 1), mesh))
+				{
+					return TRUE;
+				}
+			}
+		}
+		if (pass == 0 && mesh->emitter_count > 0)
+			return TRUE;
+		/* (none: its textures let go, for what is tried next) */
+		if (pass == 0)
+			tag_injector_mesh_free(mesh);
+	}
+	return FALSE;
+}
+
 /* the mesh of the model of a tag of a preview's source (tag_injector_mesh's),
 as the game draws an object of it: its change colors too (an actor
 variant's, its unit's); FALSE when it has none (the mesh is then let go) */
@@ -2379,19 +3732,35 @@ static boolean preview_mesh_build(
 	short pass;
 	short index;
 
+	/* (an effect's and a decal's: a card of what they show) */
+	if (root && group_tag == EFFECT_DEFINITION_TAG)
+		return preview_effect_build(source, root, 0, mesh);
+	if (root && group_tag == DECAL_GROUP_TAG)
+		return preview_sprite_build(source, root, group_tag, mesh);
 	memset(&build, 0, sizeof(build));
 	build.source = source;
-	preview_change_colors(source, root, group_tag, &build);
+	build.sky = group_tag == SKY_GROUP_TAG;
+	/* (an object's or an actor variant's alone: another tag's fields are
+	not an object's, a decal's read as its change colors walked off its
+	data) */
+	if (root && (group_tag == ACTOR_VARIANT_GROUP_TAG || preview_object_group(group_tag)))
+		preview_change_colors(source, root, group_tag, &build);
 	if (root && group_tag == ACTOR_VARIANT_GROUP_TAG)
 		root = preview_tag(source, ((struct actor_variant_definition const *)root)->unit_reference.index, &group_tag);
-	if (!root || (group_tag != WEAPON_DEFINITION_TAG && group_tag != EQUIPMENT_GROUP_TAG && group_tag != VEHICLE_GROUP_TAG &&
-		group_tag != BIPED_GROUP_TAG && group_tag != SCENERY_GROUP_TAG &&
-		group_tag != MACHINE_GROUP_TAG && group_tag != CONTROL_GROUP_TAG && group_tag != LIGHT_FIXTURE_GROUP_TAG))
+	/* (a sky's model, its first field; first-person hands are a model) */
+	if (root && group_tag == SKY_GROUP_TAG)
+		root = preview_tag(source, ((struct tag_reference const *)root)->index, &group_tag);
+	if (root && group_tag == GBXMODEL_GROUP_TAG)
+		build.model = (struct model const *)root;
+	else if (!root || !preview_object_group(group_tag))
 	{
 		return FALSE;
 	}
-	object = (struct object_definition const *)root;
-	build.model = (struct model const *)preview_tag(source, object->object.model.index, &group_tag);
+	if (!build.model)
+	{
+		object = (struct object_definition const *)root;
+		build.model = (struct model const *)preview_tag(source, object->object.model.index, &group_tag);
+	}
 	if (!build.model || group_tag != GBXMODEL_GROUP_TAG || build.model->regions.count <= 0 ||
 		build.model->geometries.count <= 0)
 	{
@@ -2409,9 +3778,10 @@ static boolean preview_mesh_build(
 	}
 	for (index = 0; index < PREVIEW_MAXIMUM_SHADERS; index++)
 		build.shader_materials[index] = PREVIEW_MATERIAL_UNMADE;
+	mesh->sky = build.sky;
 	/* (its opaque parts, else all of them: an energy sword's are all
-	transparent) */
-	for (pass = 0; pass < 2 && !mesh->triangle_count; pass++)
+	transparent; a sky's all of them, its clouds and glows over its dome) */
+	for (pass = build.sky ? 1 : 0; pass < 2 && !mesh->triangle_count; pass++)
 	{
 		struct model const *model = build.model;
 		short region_index;
@@ -2771,12 +4141,45 @@ boolean tag_injector_map_tag_preview(
 	memset(&source, 0, sizeof(source));
 	if (absolute == NONE)
 		return FALSE;
-	custom_edition_cache_bundle_source(&source.map);
+	menu_bundle_source(&source.map);
 	root = tag_injector_menu.header->instances[absolute].base_address;
 	group_tag = (unsigned long)tag_injector_menu.header->instances[absolute].group_tag;
 	preview_needs(&source, root, group_tag, needs);
 	preview_mesh_build(&source, root, group_tag, mesh);
 
+	return TRUE;
+}
+
+boolean tag_injector_map_tag_usable(
+	short category,
+	char const *tag_name)
+{
+	struct preview_source source;
+	struct tag_injector_needs needs;
+	long count = tag_injector_category_count(category);
+	long index;
+	short need;
+
+	if (!tag_name)
+		return TRUE;
+	for (index = 0; index < count; index++)
+	{
+		long absolute = menu_tag(category, index);
+
+		if (absolute == NONE || _stricmp(menu_tag_name(absolute), tag_name))
+			continue;
+		memset(&source, 0, sizeof(source));
+		menu_bundle_source(&source.map);
+		preview_needs(&source, tag_injector_menu.header->instances[absolute].base_address,
+			(unsigned long)tag_injector_menu.header->instances[absolute].group_tag, &needs);
+		for (need = 0; need < needs.count; need++)
+		{
+			if (needs.needs[need].state == _tag_injector_need_missing)
+				return FALSE;
+		}
+		return TRUE;
+	}
+	/* (one not found: as it was, usable) */
 	return TRUE;
 }
 
@@ -3185,33 +4588,45 @@ long tag_injector_tags_read(
 	long failed_count = 0;
 	long skipped = 0;
 	long baked = LEVEL_BAKED;
+	long props = LEVEL_PROPS;
+	long sources[3];
 	short pass;
 
 	tag_injector_tags_unloaded();
 	tag_injector_tags_baked_set(baked);
+	tag_injector_tags_props_set(props);
 	tag_injector_level.bundles_read = TRUE;
 	tag_injector_level.read_profile = profile;
 
 	/* each bundle read, checked, and its models made (none of the level's
 	tags is touched until all are): a map's bake first, so its tags are the
-	ones played where the profile has the same */
-	for (pass = 0; pass < 2; pass++)
+	ones played where the profile has the same, then the game's props, then
+	the profile; each source once */
+	sources[0] = baked;
+	sources[1] = props != baked ? props : NONE;
+	sources[2] = profile != baked && profile != props ? profile : NONE;
+	for (pass = 0; pass < 3; pass++)
 	{
-		long source = pass ? profile : baked;
+		long source = sources[pass];
 		long source_count = source == NONE ? 0 : port_tag_profiles_tag_count(source);
 
-		if (pass && source == baked)
-			break;
 		for (index = 0; index < source_count; index++)
 		{
 			struct injected_bundle *bundle = &tag_injector_level.bundles[tag_injector_level.bundle_count];
+			short earlier;
 
 			/* (one turned off stays in the profile, and is not played) */
 			if (!port_tag_profiles_tag_enabled(source, index))
 				continue;
-			if (pass && baked != NONE &&
-				port_tag_profiles_tag_find(baked, port_tag_profiles_tag_group(source, index),
-					port_tag_profiles_tag_name(source, index)) != NONE)
+			/* (a tag an earlier source has is that one's) */
+			for (earlier = 0; earlier < pass; earlier++)
+			{
+				if (sources[earlier] != NONE &&
+					port_tag_profiles_tag_find(sources[earlier], port_tag_profiles_tag_group(source, index),
+						port_tag_profiles_tag_name(source, index)) != NONE)
+					break;
+			}
+			if (earlier < pass)
 				continue;
 			/* (past the most a level adds: left out, and said, but not turned
 			off) */
@@ -3387,6 +4802,8 @@ long tag_injector_tags_load(
 	for (bundle_index = 0; bundle_index < tag_injector_level.bundle_count; bundle_index++)
 	{
 		struct injected_bundle *bundle = &tag_injector_level.bundles[bundle_index];
+		char const *alias_root = NULL;
+		char const *alias = level_hands_alias(bundle, &alias_root);
 		long tag;
 
 		for (tag = 0; bundle->datums && tag < bundle->loaded.tag_count; tag++)
@@ -3407,6 +4824,38 @@ long tag_injector_tags_load(
 			{
 				bundle->datums[tag] = bundle->replaced;
 				continue;
+			}
+			/* (a map's hands beside the level's own: the model by its
+			profile's name, what it names that the level has of the same
+			paths by theirs and the map's, level_hands_alias) */
+			if (alias && !group_left_out(group_tag) && (tag == 0 || datum != NONE))
+			{
+				char *aliased;
+				long already;
+
+				if (tag == 0 && alias_root)
+				{
+					aliased = level_allocation((unsigned long)strlen(alias_root) + 1);
+					if (aliased)
+						strcpy(aliased, alias_root);
+				}
+				else
+				{
+					aliased = level_allocation((unsigned long)(strlen(name) + strlen(alias) + 2));
+					if (aliased)
+						sprintf(aliased, "%s#%s", name, alias);
+				}
+				if (aliased)
+				{
+					already = level_tag(group_tag, aliased);
+					if (already != NONE)
+					{
+						bundle->datums[tag] = already;
+						continue;
+					}
+					name = aliased;
+					datum = NONE;
+				}
 			}
 			/* (an AI's weapon a player could not hold: left out, what names
 			it naming none) */
@@ -3504,8 +4953,10 @@ long tag_injector_tags_load(
 				}
 			}
 		}
-		/* (the tag it was taken out for: the pools' weapon or actor) */
-		if (!bundle->refused && bundle->loaded.tag_count > 0 && bundle->datums[0] != NONE && root_count < root_capacity)
+		/* (the tag it was taken out for: the pools' weapon or actor; the
+		props are no one's pools') */
+		if (!bundle->refused && bundle->loaded.tag_count > 0 && bundle->datums[0] != NONE && root_count < root_capacity &&
+			bundle->profile != LEVEL_PROPS)
 		{
 			roots[root_count] = bundle->datums[0];
 			root_tags[root_count++] = bundle->profile_tag;
@@ -3516,7 +4967,10 @@ long tag_injector_tags_load(
 	/* (the channels of every bitmap Halo PC keeps elsewhere, the bundles'
 	among the level's, as a mod's bitmaps are found: mod_bitmaps.c) */
 	if (tag_injector_level.bitmaps_added && !custom_edition_cache_tags_loaded())
+	{
 		custom_edition_loaded_reordered_bitmaps_find();
+		mcc_bundles_channels_keep(existing);
+	}
 	error(_error_silent, "tag injector: %s: %ld tags added and %ld replaced from %ld bundles (%lu bytes of tags), %ld "
 		"roots", port_tag_profiles_name(profile), added, replaced, tag_injector_level.bundle_count, total, root_count);
 	if (bitmaps_downsized)
@@ -3546,6 +5000,19 @@ long tag_injector_level_baked_profile(
 	void)
 {
 	return tag_injector_level.bundles_read && tag_injector_level.grown_instances ? LEVEL_BAKED : NONE;
+}
+
+void tag_injector_tags_props_set(
+	long profile)
+{
+	tag_injector_level.has_props = profile != NONE;
+	tag_injector_level.props_profile = profile;
+}
+
+long tag_injector_level_props_profile(
+	void)
+{
+	return tag_injector_level.bundles_read && tag_injector_level.grown_instances ? LEVEL_PROPS : NONE;
 }
 
 void tag_injector_tags_unloaded(
@@ -3592,6 +5059,7 @@ void tag_injector_tags_unloaded(
 	tag_injector_level.bundles_read = FALSE;
 	tag_injector_level.read_profile = NONE;
 	tag_injector_level.has_baked = FALSE;
+	tag_injector_level.has_props = FALSE;
 	tag_injector_level.read_bytes = 0;
 	tag_injector_level.notice_lines = 0;
 	tag_injector_level.notice_ticks = 0;

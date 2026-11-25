@@ -51,6 +51,7 @@ boolean social_account_emblem(struct firefight_emblem_info *out_emblem);
 /* the account's rank and emblem as an answer of the server's says them, kept
 and brought to the profile ({data: {account}}: POST /account/setup's...) */
 void social_account_answer(char const *answer);
+void social_account_synced(char const *answer);
 /* the server's rank and emblem brought to the profile (a new one, on a device
 of an account set up elsewhere) */
 void social_account_apply(void);
@@ -101,5 +102,41 @@ absolute index, NONE for none), the run as the leaderboards have it, the
 level's tag name (levels\a10\a10), and its profile's name */
 void social_level_won(short player_index, struct community_run const *run, char const *level_name,
 	wchar_t const *name);
+
+/* ---------- the chat's /invite (social_chat.c) */
+
+enum
+{
+	SOCIAL_GAME_INVITE_LINK_SIZE = 168,
+	SOCIAL_GAME_INVITE_KEY_SIZE = 33,
+	SOCIAL_GAME_INVITE_LABEL_SIZE = 64,
+};
+
+/* the network game this machine hosts, as an invite in a chat line shows
+it and joins it: its invite link (else, a public game with a password, its
+listing's host key, which the joiner's server browser finds and asks for
+the password), its game's name, gametype, map, the map's kind (Custom
+Edition, MCC, Halo PC) and players */
+struct social_game_invite
+{
+	char link[SOCIAL_GAME_INVITE_LINK_SIZE];
+	char host_key[SOCIAL_GAME_INVITE_KEY_SIZE];
+	char game[SOCIAL_GAME_INVITE_LABEL_SIZE];
+	char gametype[SOCIAL_GAME_INVITE_LABEL_SIZE];
+	char map[SOCIAL_GAME_INVITE_LABEL_SIZE];
+	char kind[16];
+	long players;
+	long maximum;
+};
+
+/* the game hosted, as an invite (one to a single player: its link past the
+password; to everyone: a password's game's host key instead). FALSE with
+why (a chat notice's text) when there is none to give: not in a network
+game, not its host, not an internet game */
+boolean social_game_invite_make(boolean to_one_player, struct social_game_invite *invite, char *why, long why_size);
+
+/* whether this machine is in a game (campaign, a network game or its
+lobby, a replay): another's game is joined from the menus alone */
+boolean social_in_any_game(void);
 
 #endif

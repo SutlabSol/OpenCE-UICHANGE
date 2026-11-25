@@ -74,6 +74,6 @@
 		<child widget="main_menu/multiplayer_type_select/header_firefight"/>
 		<child widget="main_menu/multiplayer_type_select/header_forge"/>
 		<child widget="main_menu/multiplayer_type_select/multiplayer_type_select_list"/>
-		<child widget="main_menu/blueline" x="64" y="349"/>
+		<child widget="main_menu/blueline" x="64" y="376"/>
 	</widget>
 </menus>

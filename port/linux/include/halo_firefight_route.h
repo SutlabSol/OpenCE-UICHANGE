@@ -14,7 +14,8 @@ A zone with no route flies this too, on the automatic path's two points.
 
 A marker's usage (netgame flag team_index) holds:
 
-	bits 0-3    spawn type: FF_ROUTE_SPAWN_TYPE on a route's point
+	bits 0-3    spawn type: FF_ROUTE_SPAWN_TYPE on a route's point, a drop
+	            point's factions on a drop point (FF_DROP_SPAWN_TYPE_*)
 	bits 4-7    a point's order in its leg (a zone's rounds)
 	bit  8      a point's leg (a zone's waves)
 	bits 9-10   a point's leg's style, the same on all of them
@@ -32,6 +33,10 @@ Bit 15 stays clear, as a usage below 0 means a default elsewhere.
 enum
 {
 	FF_ROUTE_SPAWN_TYPE = 7,
+	/* a Firefight player spawn (Forge's FIREFIGHT SPAWNS > PLAYER SPAWN): the
+	players spawn on these, those of the round first, over the map's starting
+	locations (firefight_select_player_spawn_point) */
+	FF_PLAYER_SPAWN_TYPE = 14,
 	FF_ROUTE_MAX_ID = 15,
 	FF_ROUTE_MAX_LEG_POINTS = 16,
 	FF_ROUTE_APPROACH = 0,
@@ -81,6 +86,164 @@ enum
 #define FF_ROUTE_POINT_USAGE(id, leg, order, style) \
 	((short)(FF_ROUTE_SPAWN_TYPE | ((((int)(order)) & 0x0F) << 4) | \
 		((((int)(leg)) & 0x01) << 8) | ((((int)(style)) & 0x03) << 9) | ((((int)(id)) & 0x0F) << 11)))
+
+/* ---------- Enemy drop points
+
+A drop point (once the dropship zone) is a Firefight marker that takes the
+drops of the factions it's set to spawn (Forge's FACTIONS TO SPAWN), its
+spawn type saying which: all three is 5, the dropship zone's old type, so
+older maps' zones take every drop; one or two are types past the route's,
+outside Forge's type cycle (8-10 one alone, as they were first made; 11-13
+two). What carries a drop is its faction's: a Spirit the Covenant (and the
+Sentinels), a Pelican the humans, both on the flight below; the Flood come out
+of Keyes' Flood form, grown out of the floor where the point is, swollen,
+burst. */
+
+enum
+{
+	FF_DROP_SPAWN_TYPE_ANY = 5,
+	FF_DROP_SPAWN_TYPE_COVENANT = 8,
+	FF_DROP_SPAWN_TYPE_HUMAN = 9,
+	FF_DROP_SPAWN_TYPE_FLOOD = 10,
+	FF_DROP_SPAWN_TYPE_COVENANT_HUMAN = 11,
+	FF_DROP_SPAWN_TYPE_COVENANT_FLOOD = 12,
+	FF_DROP_SPAWN_TYPE_HUMAN_FLOOD = 13,
+
+	FF_DROP_KIND_COVENANT = 1,
+	FF_DROP_KIND_HUMAN = 2,
+	FF_DROP_KIND_FLOOD = 3,
+	FF_DROP_KIND_COUNT = 4,
+
+	/* (a set of factions: 1 << FF_DROP_KIND_*) */
+	FF_DROP_KINDS_COVENANT = 1 << FF_DROP_KIND_COVENANT,
+	FF_DROP_KINDS_HUMAN = 1 << FF_DROP_KIND_HUMAN,
+	FF_DROP_KINDS_FLOOD = 1 << FF_DROP_KIND_FLOOD,
+	FF_DROP_KINDS_SHIPS = FF_DROP_KINDS_COVENANT | FF_DROP_KINDS_HUMAN,
+	FF_DROP_KINDS_ALL = FF_DROP_KINDS_SHIPS | FF_DROP_KINDS_FLOOD
+};
+
+/* the factions a spawn type's drop point spawns, or 0 when it isn't one */
+static inline unsigned ff_drop_point_kinds(int spawn_type)
+{
+	switch (spawn_type)
+	{
+	case FF_DROP_SPAWN_TYPE_ANY:            return FF_DROP_KINDS_ALL;
+	case FF_DROP_SPAWN_TYPE_COVENANT:       return FF_DROP_KINDS_COVENANT;
+	case FF_DROP_SPAWN_TYPE_HUMAN:          return FF_DROP_KINDS_HUMAN;
+	case FF_DROP_SPAWN_TYPE_FLOOD:          return FF_DROP_KINDS_FLOOD;
+	case FF_DROP_SPAWN_TYPE_COVENANT_HUMAN: return FF_DROP_KINDS_COVENANT | FF_DROP_KINDS_HUMAN;
+	case FF_DROP_SPAWN_TYPE_COVENANT_FLOOD: return FF_DROP_KINDS_COVENANT | FF_DROP_KINDS_FLOOD;
+	case FF_DROP_SPAWN_TYPE_HUMAN_FLOOD:    return FF_DROP_KINDS_HUMAN | FF_DROP_KINDS_FLOOD;
+	default:                                return 0;
+	}
+}
+
+/* a set of factions' drop point type (none: all of them) */
+static inline int ff_drop_point_type(unsigned kinds)
+{
+	switch (kinds & FF_DROP_KINDS_ALL)
+	{
+	case FF_DROP_KINDS_COVENANT:                         return FF_DROP_SPAWN_TYPE_COVENANT;
+	case FF_DROP_KINDS_HUMAN:                            return FF_DROP_SPAWN_TYPE_HUMAN;
+	case FF_DROP_KINDS_FLOOD:                            return FF_DROP_SPAWN_TYPE_FLOOD;
+	case FF_DROP_KINDS_COVENANT | FF_DROP_KINDS_HUMAN:   return FF_DROP_SPAWN_TYPE_COVENANT_HUMAN;
+	case FF_DROP_KINDS_COVENANT | FF_DROP_KINDS_FLOOD:   return FF_DROP_SPAWN_TYPE_COVENANT_FLOOD;
+	case FF_DROP_KINDS_HUMAN | FF_DROP_KINDS_FLOOD:      return FF_DROP_SPAWN_TYPE_HUMAN_FLOOD;
+	default:                                             return FF_DROP_SPAWN_TYPE_ANY;
+	}
+}
+
+/* (a spawn type mask's bits of every drop point's type) */
+#define FF_DROP_POINT_TYPE_MASK \
+	((1UL << FF_DROP_SPAWN_TYPE_ANY) | (1UL << FF_DROP_SPAWN_TYPE_COVENANT) | \
+	 (1UL << FF_DROP_SPAWN_TYPE_HUMAN) | (1UL << FF_DROP_SPAWN_TYPE_FLOOD) | \
+	 (1UL << FF_DROP_SPAWN_TYPE_COVENANT_HUMAN) | (1UL << FF_DROP_SPAWN_TYPE_COVENANT_FLOOD) | \
+	 (1UL << FF_DROP_SPAWN_TYPE_HUMAN_FLOOD))
+
+static inline char const *ff_drop_kind_name(int kind)
+{
+	switch (kind)
+	{
+	case FF_DROP_KIND_COVENANT: return "COVENANT";
+	case FF_DROP_KIND_HUMAN:    return "HUMAN";
+	case FF_DROP_KIND_FLOOD:    return "FLOOD";
+	default:                    return "";
+	}
+}
+
+/* ---------- The Flood's drop: Keyes' Flood form out of the floor
+
+It grows up out of the ground (from under it, small, to its full size on
+it), swells and shakes, then bursts, and the squad is where it was. Every
+machine shows it from the tick it started (scenery isn't sent), so it's a
+function of the ticks since alone. */
+
+#define FF_FLOOD_DROP_TAG "characters\\flood_captain\\flood_captain"
+
+enum
+{
+	FF_FLOOD_DROP_GROW_TICKS = 150,
+	FF_FLOOD_DROP_SWELL_TICKS = 50,
+	FF_FLOOD_DROP_BURST_TICK = FF_FLOOD_DROP_GROW_TICKS + FF_FLOOD_DROP_SWELL_TICKS,
+	/* (the squad's out, and the burst's bits have settled, by this) */
+	FF_FLOOD_DROP_TOTAL_TICKS = FF_FLOOD_DROP_BURST_TICK + 30,
+	/* (a dirt and gore puff this often as it grows) */
+	FF_FLOOD_DROP_PUFF_TICKS = 20
+};
+
+/* (its tag's bounding radius is a placeholder 5, so its size is its model's:
+d20's nodes run from about 0.3 over its origin, the sacks hanging lowest, to
+about 1.6, its head and root. World units, unscaled; and the scale it's grown
+to) */
+#define FF_FLOOD_DROP_MODEL_BOTTOM 0.3f
+#define FF_FLOOD_DROP_MODEL_TOP 1.7f
+#define FF_FLOOD_DROP_SCALE 1.4f
+
+struct ff_flood_drop_pose
+{
+	float size;    /* of its full size */
+	float sink;    /* of its full height, still under the floor */
+	float turn;    /* radians it still has to turn to its facing */
+	float lean_i;  /* its up's lean off the vertical, a shudder */
+	float lean_j;
+	int burst;     /* past the burst: not shown */
+};
+
+static inline struct ff_flood_drop_pose ff_flood_drop_pose_at(float ticks)
+{
+	struct ff_flood_drop_pose pose;
+
+	pose.size = 1.0f;
+	pose.sink = 0.0f;
+	pose.turn = 0.0f;
+	pose.lean_i = 0.0f;
+	pose.lean_j = 0.0f;
+	pose.burst = ticks >= (float)FF_FLOOD_DROP_BURST_TICK;
+	if (ticks < 0.0f)
+		ticks = 0.0f;
+	if (ticks < (float)FF_FLOOD_DROP_GROW_TICKS)
+	{
+		float u = ticks / (float)FF_FLOOD_DROP_GROW_TICKS;
+		/* (out of the ground fast, then slower: an ease out) */
+		float e = 1.0f - (1.0f - u) * (1.0f - u) * (1.0f - u);
+
+		pose.size = 0.15f + 0.85f * e;
+		pose.sink = 1.0f - e;
+		pose.turn = (1.0f - e) * 1.2f;
+		pose.lean_i = 0.06f * sinf(ticks * 0.37f) * (1.0f - u);
+		pose.lean_j = 0.06f * cosf(ticks * 0.29f) * (1.0f - u);
+	}
+	else if (!pose.burst)
+	{
+		float u = (ticks - (float)FF_FLOOD_DROP_GROW_TICKS) / (float)FF_FLOOD_DROP_SWELL_TICKS;
+
+		/* (swelling, its throb quicker and its shudder harder to the end) */
+		pose.size = 1.0f + 0.18f * u + 0.05f * u * sinf(ticks * (0.6f + 0.9f * u));
+		pose.lean_i = 0.09f * u * sinf(ticks * 1.7f);
+		pose.lean_j = 0.09f * u * cosf(ticks * 1.3f);
+	}
+	return pose;
+}
 
 struct ff_route_point
 {

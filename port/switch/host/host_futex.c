@@ -15,11 +15,18 @@ What that costs in fidelity, stated plainly:
 changed, do not wait" case that the caller must be woken to observe. The
 guest's musl uses these for its condition variables and its thread joins.
 
+- FUTEX_REQUEUE wakes the waiters it would move instead of moving them (a
+superset musl tolerates); musl's condition variables' broadcasts need it.
+
 - The priority-inheritance operations (FUTEX_LOCK_PI and the rest) are not.
 They need a wait queue whose order is by priority and an unlock that hands
 the lock to the highest waiter; musl uses them only on a kernel that
 advertises them, and the guest here does not, so it takes the plain
 condition-variable path. They answer ENOSYS rather than pretending.
+
+- FUTEX_REQUEUE and FUTEX_CMP_REQUEUE wake the waiters they would have moved
+onto the other word, rather than moving them: an early wake, which every
+waiter allows for.
 
 - FUTEX_WAIT_BITSET and FUTEX_WAKE_BITSET are treated as the plain forms: the
 bitset is ignored. That is exact for a single bitset used as "any", which is
@@ -232,15 +239,25 @@ long host_futex(uint32_t address, int operation, uint32_t value, uint64_t timeou
 		to run on the woken threads' words, which this port does not have;
 		report the wake it can do rather than failing outright */
 		return futex_wake(address, (int)value);
+	case FUTEX_CMP_REQUEUE:
+		if (GUEST_WORD(address) != value3)
+			return -EAGAIN;
+		/* fall through */
 	case FUTEX_REQUEUE:
 	{
-		/* move up to value waiters from one word to another, as the wake
-		half of a requeue; the futex that asked for this is only ever
-		woken by a requeue that could not be completed on Linux either */
-		int woken = futex_wake(address, (int)value);
+		/* wake value waiters and move up to the fourth argument's count
+		more to the word at address2. Here there is no moving: those are
+		woken now instead, a superset that musl tolerates (they re-test
+		their own word). musl's condition variables rely on it: a
+		broadcast wakes the first waiter and requeues the next onto the
+		mutex with value 0 and a count of 1, its barrier already cleared.
+		Waking "as many on the second word as were woken on the first"
+		woke nobody then, and every waiter of a condition but one slept
+		for good (the Steam Workshop's threads, port/linux/src/steam_downloads.c) */
+		int moved = (int)(timeout_address > 0x7fffffffu ? 0x7fffffff : timeout_address);
+		int woken = futex_wake(address, (int)value + moved);
 
-		if (woken)
-			futex_wake((uint32_t)address2, woken);
+		futex_wake((uint32_t)address2, (int)value);
 		return woken;
 	}
 	case FUTEX_LOCK_PI:

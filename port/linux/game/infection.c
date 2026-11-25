@@ -161,10 +161,14 @@ static boolean infection_weapon_is_skull(
 	return object && object->definition_index == get_ball_definition_index();
 }
 
+boolean firefight_active(void);
+
 boolean infection_can_delete_skull(
 	long object_index)
 {
-	return infection_enabled() && infection_weapon_is_skull(object_index);
+	/* (and Firefight's objectives' flags and balls, which they make and take
+	away: firefight_objectives.c) */
+	return (infection_enabled() && infection_weapon_is_skull(object_index)) || firefight_active();
 }
 
 boolean infection_unit_is_zombie(

@@ -67,6 +67,7 @@ being hit looks and feels like on the clients).
 #include "scenario/scenario.h"
 #include "units/units.h"
 #include "network_distributed.h"
+#include "mcc_grenades.h"
 
 #include <math.h>
 
@@ -418,6 +419,8 @@ static struct distributed_damage_event damage_events[MAXIMUM_DAMAGE_EVENTS_PER_T
 static short damage_event_count;
 /* ... dealing a client's report */
 static boolean damage_dealing_report;
+/* (the report distributed_report_valid passed last: a melee blow's) */
+static boolean damage_report_melee;
 /* ... each player's weapons of late, and hits left */
 struct damage_stuck_projectile
 {
@@ -1375,6 +1378,8 @@ than one damage), the vehicle they drove lately; 0 when none of them deals
 it; how they deal it (the _damage_source flags); how far from them what
 they fire deals it; and the type of grenade when nothing but a grenade of
 theirs deals it, else NONE */
+#include "mcc_network_damage.inc"
+
 static real distributed_player_deals(
 	short player_index,
 	long damage_index,
@@ -1463,6 +1468,7 @@ static real distributed_player_deals(
 			*kinds |= this_kinds;
 		}
 	}
+	mcc_network_extra_grenade_damage(player_index, damage_index, kinds, reach, grenade_type, &grenade_rate);
 	if (rate > 0.0f)
 		*grenade_type = NONE;
 	rate = MAX(rate, grenade_rate);
@@ -2485,6 +2491,7 @@ static boolean distributed_report_valid(
 	unit_index = distributed_living_unit(player);
 	if (!distributed_object_is_players(player_index, unit_index, damage->owner_object_index))
 		damage->owner_object_index = unit_index;
+	damage_report_melee = melee;
 	return TRUE;
 }
 
@@ -2526,8 +2533,15 @@ void network_damage_handle_reports(
 		}
 		damage_dealt_reports++;
 		damage_dealing_report = TRUE;
-		object_cause_damage(&damage, report->object_index, report->node_index, report->region_index,
-			report->material_index, report->has_normal ? &report->object_normal : NULL);
+		{
+			/* (a client's melee blow, one whatever its damage's category) */
+			long previous_blow = damage_report_melee ? damage_melee_blow_begin(damage.definition_index) : NONE;
+
+			object_cause_damage(&damage, report->object_index, report->node_index, report->region_index,
+				report->material_index, report->has_normal ? &report->object_normal : NULL);
+			if (damage_report_melee)
+				damage_melee_blow_end(previous_blow);
+		}
 		damage_dealing_report = FALSE;
 	}
 }
@@ -2993,6 +3007,11 @@ void network_damage_note_grenade(
 	short index;
 	short slot = 0;
 
+	if (mcc_grenades_active() && grenade_type >= 2)
+	{
+		mcc_network_note_extra_grenade(unit_index, grenade_type);
+		return;
+	}
 	if (game_connection() != _game_connection_network_server || unit->unit.player_index == NONE ||
 		grenade_type < 0 || grenade_type >= NUMBER_OF_UNIT_GRENADE_TYPES)
 	{

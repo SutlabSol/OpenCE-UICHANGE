@@ -29,6 +29,8 @@ enum
 	_game_variant_always_invisible_bit,
 	/* (the starting equipment: generic, else the map's) */
 	_game_variant_generic_starting_equipment_bit,
+	/* port: players standing on a vehicle are carried by it (the gametype's VEHICLE RIDING: vehicle_riding.c) */
+	_game_variant_vehicle_riding_bit,
 };
 
 enum game_engine_type
@@ -262,6 +264,10 @@ enum
 
 /* (the starting equipment, generic or the map's, is the variant's own:
 _game_variant_generic_starting_equipment_bit) */
+/* port: game_variant_options' firefight_plasma_flinch: its value set by this
+build, 0 (OFF) to 4 (100%) under it */
+#define FIREFIGHT_PLASMA_FLINCH_SET 0x80
+
 struct game_variant_options
 {
 	/* minutes; 0: none */
@@ -337,17 +343,26 @@ struct game_variant_options
 	byte firefight_dropship_mode;
 	byte firefight_next_wave_mode;
 	byte firefight_player_faction_mode;
-	/* ROUND 1, ROUND 2 and ROUND 3 VEHICLE */
-	byte firefight_early_vehicle;
-	byte firefight_round2_vehicle;
-	byte firefight_late_vehicle;
+	/* VEHICLES, a game's (Server Setup's; a saved variant's is ALL AT SPAWN:
+	halo_firefight.h's _firefight_vehicle_spawns_*). Were ROUND 1, 2 and 3
+	VEHICLE, which variants saved: the other two unused */
+	byte firefight_vehicle_spawns;
+	/* PLASMA FLINCH (was ROUND 2 VEHICLE): how much of a plasma hit's stun a
+	player takes, FIREFIGHT_PLASMA_FLINCH_SET | 0 (OFF) to 4 (100%); without
+	the bit (a variant saved before, its old vehicle's) OFF */
+	byte firefight_plasma_flinch;
+	byte firefight_unused_vehicle;
 	byte firefight_prep_countdown;
 	byte firefight_skull_progression_mode;
 	byte firefight_player_shields;
 	byte firefight_player_speed;
 	byte firefight_player_gravity;
 	byte firefight_infinite_ammo;
-	byte firefight_last_man_boost;
+	/* MAP CONTENT, a game's (Server Setup's; a saved variant's is VANILLA):
+	whether the waves, drops and vehicles take the map's own enemies, weapons
+	and vehicles, mode and ADVANCED's kinds (halo_firefight.h). Was LAST MAN
+	BOOST, which nothing read and variants saved as 1: 1 is VANILLA too */
+	byte firefight_map_content;
 	byte firefight_wave_size_scale;
 	byte firefight_boss_wave_mode;
 	byte firefight_enemy_loadout;
@@ -825,6 +840,10 @@ void game_engine_intialize_queued_sounds(
 long game_engine_remap_object_definition(long definition_index);
 
 long game_engine_remap_vehicle(long vehicle_definition_index);
+/* port: TRUE while the vehicle being made is kept whatever the gametype's
+vehicles (game_engine_remap_vehicle): a Forge map's vehicle set to ALWAYS
+SPAWN (port/forge/src/forge_3d_mode.c) */
+extern boolean game_engine_vehicle_always_spawn;
 long game_engine_remap_equipment(long equipment_definition_index);
 void game_show_score_team(
 	long team_index,
@@ -876,5 +895,17 @@ boolean game_engine_king_hill(real_point3d *points, long maximum, long *point_co
 	real_point3d *center, long *hill_id);
 /* port: whether a point is on the hill, as a player's middle is counted */
 boolean game_engine_king_point_on_hill(real_point3d const *position);
+
+/* port: (game_engine_oddball.c, for the Proving Grounds bots) a ball's object, NONE for none: the balls are the
+weapons weapon_is_flag says are, their owner team index the ball's; and the player holding it, NONE for none */
+long game_engine_oddball_ball(short index);
+long game_engine_oddball_carrier(short index);
+
+/* port: (game_engine_race.c, for the Proving Grounds bots) the race's type (_race_type_normal, any order, rally),
+whether a player may touch race flag flag_number next (the single rally flag in rally; the first again once all are
+touched), and the reach a touch counts within (on foot, or in a vehicle) */
+short game_engine_race_type(void);
+boolean game_engine_race_can_touch(long player_index, long flag_number);
+real game_engine_race_touch_radius(boolean in_vehicle);
 
 #endif // __GAME_ENGINE_H

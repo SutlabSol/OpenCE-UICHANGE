@@ -42,8 +42,11 @@ the community server as the install's account (social.c; api-opence's
   on-screen keyboard as the upstream chat's (the stick and the D-pad move,
   A presses, X deletes), the touchscreen taps its keys; on Android, the
   touchscreen types with Android's keyboard instead, as a player profile's
-  name does (halo_system_keyboard: a tap in the box brings it up again, the
-  back closes the box). A click or a tap on a channel's name picks it, on
+  name does (halo_system_keyboard), which never comes up by itself (to read
+  the lines, change the channel, tap a name): a tap on the line typed, with
+  its keyboard button, brings it; the back closes the box. A tap on the
+  docked box (menus, lobby) opens it and goes on to it: a name tapped opens
+  its menu at once. A click or a tap on a channel's name picks it, on
   the private line's player the next one, and outside the box (its keyboard,
   a player's menu) closes it. No hint of the keys is shown. The platform's
   input takes it as the upstream chat's typing (network_chat_typing and the
@@ -73,6 +76,13 @@ the community server as the install's account (social.c; api-opence's
   until the game's room changes. No player's code is shown: another
   account is known by the public id the server gives (social_menu.c asks
   the server).
+- A line starting with / is a command, never said (social_chat_command):
+  /invite [NAME] (the host of an internet game: a GLOBAL line, or a PRIVATE
+  one to NAME or the PRIVATE channel's player, carrying the game's invite,
+  shown with a [ JOIN ] row that a click, or JOIN THEIR GAME in the host's
+  menu, joins from the menus as a friend's JOIN GAME does), /add NAME or
+  CODE, /mute, /unmute, /block, /unblock, /report NAME, /clear (the lines
+  shown here gone), /help.
 - The players muted or blocked (social_menu.c's moderation list) are never
   heard: the server leaves their fork lines out, and their upstream lines
   (known by their names alone, as the upstream chat has no accounts) are
@@ -124,6 +134,9 @@ are kept in memory alone, gone with the game.
 
 #include <stdio.h>
 #include <string.h>
+
+/* (bots.c's: a bot setting Firefight keeps apart from multiplayer's) */
+char const *bots_setting_key(char const *name);
 
 void platform_log(char const *format, ...);
 unsigned long system_milliseconds(void);
@@ -237,6 +250,8 @@ enum
 	/* (the lobby's, a player's row: social_chat_lobby_player_menu) */
 	_social_chat_option_kick,
 	_social_chat_option_remove_bot,
+	/* (a player whose invite line is in the chat: their game joined) */
+	_social_chat_option_join,
 };
 
 /* the on-screen keyboard's last row's wide keys */
@@ -275,6 +290,9 @@ struct social_chat_line
 	long name_color;
 	/* (system_milliseconds; 0: an old line, the history's, never shown as new) */
 	unsigned long time;
+	/* a game's invite (its host's /invite): a JOIN row under its text */
+	boolean has_invite;
+	struct social_game_invite invite;
 };
 
 /* an account a private line may go to */
@@ -376,6 +394,18 @@ static struct
 	actions on it, SOCIAL_CHAT_LOBBY_*) */
 	long lobby_machine;
 	unsigned long lobby_actions;
+	/* (the player's latest invite line's game: JOIN THEIR GAME) */
+	boolean has_invite;
+	struct social_game_invite invite;
+	/* the invite lines' JOIN rows drawn last (their lines' slots and times,
+	to know them still the same lines) */
+	short join_hit_count;
+	struct
+	{
+		rectangle2d bounds;
+		short slot;
+		unsigned long time;
+	} join_hits[SOCIAL_CHAT_MAXIMUM_NAME_HITS];
 	short hit_count;
 	struct
 	{
@@ -394,6 +424,10 @@ static struct
 	buttons still close the box and send the line, a tap brings that
 	keyboard up again */
 	boolean system;
+	/* (that keyboard asked for: docked, in the menus or the lobby, only
+	once the line where it is typed is tapped, so that a tap on a player's
+	name is not under it) */
+	boolean system_up;
 	short row;
 	short column;
 	boolean shift;
@@ -419,6 +453,8 @@ static struct
 	rectangle2d box;
 	rectangle2d channels[NUMBER_OF_SOCIAL_CHAT_CHANNELS];
 	rectangle2d peer;
+	/* (where the line is typed) */
+	rectangle2d input;
 } social_chat_hits;
 
 static char const *const social_chat_letters[SOCIAL_CHAT_KEYBOARD_ROWS - 1] =
@@ -1090,6 +1126,8 @@ static void social_chat_take(
 	int reported = 0;
 	struct social_chat_line *line;
 	int reported_token = server_json_member(document, token, "reported");
+	struct social_game_invite taken_invite;
+	boolean has_invite = FALSE;
 
 	if (reported_token < 0 || !server_json_get_boolean(document, reported_token, &reported))
 		reported = 0;
@@ -1100,6 +1138,24 @@ static void social_chat_take(
 	social_chat_string(document, token, "to", to, sizeof(to));
 	social_chat_string(document, token, "toName", to_name, sizeof(to_name));
 	social_chat_string(document, token, "nameColor", name_color_text, sizeof(name_color_text));
+	/* (a game's invite: its link, or a password game's listing key) */
+	{
+		int invite_token = server_json_member(document, token, "invite");
+
+		csmemset(&taken_invite, 0, sizeof(taken_invite));
+		if (invite_token >= 0)
+		{
+			social_chat_string(document, invite_token, "link", taken_invite.link, sizeof(taken_invite.link));
+			social_chat_string(document, invite_token, "hostKey", taken_invite.host_key, sizeof(taken_invite.host_key));
+			social_chat_string(document, invite_token, "game", taken_invite.game, sizeof(taken_invite.game));
+			social_chat_string(document, invite_token, "gametype", taken_invite.gametype, sizeof(taken_invite.gametype));
+			social_chat_string(document, invite_token, "map", taken_invite.map, sizeof(taken_invite.map));
+			social_chat_string(document, invite_token, "kind", taken_invite.kind, sizeof(taken_invite.kind));
+			taken_invite.players = social_chat_number(document, invite_token, "players", 0);
+			taken_invite.maximum = social_chat_number(document, invite_token, "maximum", 0);
+			has_invite = taken_invite.link[0] || taken_invite.host_key[0];
+		}
+	}
 	if (!strcmp(channel_name, "match"))
 		channel = _social_chat_match;
 	else if (!strcmp(channel_name, "team"))
@@ -1150,6 +1206,11 @@ static void social_chat_take(
 	line->mine = mine;
 	line->name_color = name_color;
 	line->reported = reported != 0;
+	if (has_invite && (channel == _social_chat_global || channel == _social_chat_private))
+	{
+		line->has_invite = TRUE;
+		line->invite = taken_invite;
+	}
 	if (!mine)
 		csstrncpy(line->code, from, SOCIAL_CHAT_CODE_SIZE - 1);
 	line->color = mine ? _social_chat_color_mine : _social_chat_color_none;
@@ -1280,17 +1341,20 @@ static void social_chat_send_answer(
 /* ---------- saying a line */
 
 /* a line said to a channel: through the upstream chat where its host lets
-it, and the fork's where it can; shown here as it goes */
-static void social_chat_say(
+it, and the fork's where it can; shown here as it goes (a private one to
+peer, NULL for the one picked; with a game's invite, the fork's alone) */
+static void social_chat_say_full(
 	short channel,
-	char const *typed)
+	char const *typed,
+	struct social_chat_peer const *peer_to,
+	struct social_game_invite const *invite)
 {
 	char text[SOCIAL_CHAT_SAID_SIZE];
 	char name[64];
 	wchar_t wide_name[SOCIAL_CHAT_NAME_SIZE];
 	byte sources = 0;
 	short team = social_chat_team();
-	struct social_chat_peer const *peer = social_chat_peer_picked();
+	struct social_chat_peer const *peer = peer_to ? peer_to : social_chat_peer_picked();
 	boolean fork = social_chat_online() && social_account_code()[0];
 	struct social_chat_line *line;
 	short index;
@@ -1309,7 +1373,7 @@ static void social_chat_say(
 		social_chat_notice("Still sending the last line: try again");
 		return;
 	}
-	if ((channel == _social_chat_match || channel == _social_chat_team) && network_chat_available())
+	if (!invite && (channel == _social_chat_match || channel == _social_chat_team) && network_chat_available())
 	{
 		network_chat_say(channel == _social_chat_team ? _chat_channel_team : _chat_channel_everyone, text);
 		SET_FLAG(sources, _social_chat_upstream_bit, TRUE);
@@ -1340,6 +1404,21 @@ static void social_chat_say(
 			server_json_integer(&json, "team", team);
 		if (channel == _social_chat_private)
 			server_json_string(&json, "to", peer->code);
+		if (invite)
+		{
+			server_json_object_begin(&json, "invite");
+			if (invite->link[0])
+				server_json_string(&json, "link", invite->link);
+			else
+				server_json_string(&json, "hostKey", invite->host_key);
+			server_json_string(&json, "game", invite->game);
+			server_json_string(&json, "gametype", invite->gametype);
+			server_json_string(&json, "map", invite->map);
+			server_json_string(&json, "kind", invite->kind);
+			server_json_integer(&json, "players", invite->players);
+			server_json_integer(&json, "maximum", invite->maximum);
+			server_json_object_end(&json);
+		}
 		server_json_object_end(&json);
 		social_chat.send_ticket = social_send("/chat/messages", server_json_text(&json));
 		server_json_free(&json);
@@ -1392,9 +1471,432 @@ static void social_chat_say(
 			csstrncpy(line->peer, peer->code, SOCIAL_CHAT_CODE_SIZE - 1);
 			ustrncpy(line->peer_name, peer->name, SOCIAL_CHAT_NAME_SIZE - 1);
 		}
+		if (invite)
+		{
+			line->has_invite = TRUE;
+			line->invite = *invite;
+		}
 		social_chat.sending_line = line;
 		csstrncpy(social_chat.sending_text, line->text, SOCIAL_CHAT_TEXT_SIZE - 1);
 	}
+}
+
+static void social_chat_say(
+	short channel,
+	char const *typed)
+{
+	social_chat_say_full(channel, typed, NULL, NULL);
+}
+
+/* ---------- the commands: /invite, /add, /mute, /unmute, /block, /unblock,
+/report, /help
+
+Typed in any channel, never said: /invite asks players into the internet
+game this machine hosts (everyone online in GLOBAL, or one player:
+/invite NAME, or the PRIVATE channel's player), its line showing them a
+JOIN row (a click, or JOIN THEIR GAME in their menu); the others act on a
+player by name, as their menu's options do: the accounts seen in the chat
+(the room's players, those who wrote), the friends, and (/unmute,
+/unblock) those muted or blocked; the whole name in any case, or the
+start of one alone. /add takes a friend code too (XXXX-XXXX) */
+
+enum
+{
+	_social_chat_command_add,
+	_social_chat_command_mute,
+	_social_chat_command_unmute,
+	_social_chat_command_block,
+	_social_chat_command_unblock,
+	_social_chat_command_report,
+	SOCIAL_CHAT_COMMAND_CANDIDATES = 8,
+};
+
+/* a name starting with the text typed, in either case */
+static boolean social_chat_name_starts(
+	wchar_t const *name,
+	wchar_t const *typed)
+{
+	while (*typed && *name && social_chat_lower(*name) == social_chat_lower(*typed))
+	{
+		name++;
+		typed++;
+	}
+	return !*typed;
+}
+
+/* a candidate account (distinct codes); FALSE when the list is full */
+static void social_chat_candidate_add(
+	char (*codes)[SOCIAL_CHAT_CODE_SIZE],
+	wchar_t (*names)[SOCIAL_CHAT_NAME_SIZE],
+	short *count,
+	char const *code,
+	wchar_t const *name)
+{
+	short index;
+
+	if (!code[0] || !strcmp(code, social_account_code()))
+		return;
+	for (index = 0; index < *count; index++)
+	{
+		if (!strcmp(codes[index], code))
+			return;
+	}
+	if (*count >= SOCIAL_CHAT_COMMAND_CANDIDATES)
+		return;
+	csstrncpy(codes[*count], code, SOCIAL_CHAT_CODE_SIZE - 1);
+	codes[*count][SOCIAL_CHAT_CODE_SIZE - 1] = 0;
+	ustrncpy(names[*count], name, SOCIAL_CHAT_NAME_SIZE - 1);
+	names[*count][SOCIAL_CHAT_NAME_SIZE - 1] = 0;
+	(*count)++;
+}
+
+/* the account of a player's name, as typed: 1 found (its code and name),
+0 none, -1 several of that name (or starting so) */
+static short social_chat_account_by_name(
+	char const *typed,
+	boolean moderated,
+	char *code,
+	wchar_t *found)
+{
+	wchar_t wide[SOCIAL_CHAT_NAME_SIZE];
+	char codes[SOCIAL_CHAT_COMMAND_CANDIDATES][SOCIAL_CHAT_CODE_SIZE];
+	wchar_t names[SOCIAL_CHAT_COMMAND_CANDIDATES][SOCIAL_CHAT_NAME_SIZE];
+	short pass;
+
+	social_chat_wide_from_ascii(typed, wide, NUMBEROF(wide));
+	if (!wide[0])
+		return 0;
+	/* (the whole name first, then the start of one) */
+	for (pass = 0; pass < 2; pass++)
+	{
+		short count = 0;
+		short index;
+		char menu_code[SOCIAL_CHAT_CODE_SIZE];
+		char menu_name[SOCIAL_CHAT_NAME_SIZE * 3];
+		wchar_t menu_wide[SOCIAL_CHAT_NAME_SIZE];
+		short menu_found;
+
+		for (index = 0; index < social_chat.peer_count; index++)
+		{
+			struct social_chat_peer const *peer = &social_chat.peers[index];
+
+			if (pass ? social_chat_name_starts(peer->name, wide) : social_chat_names_equal(peer->name, wide))
+				social_chat_candidate_add(codes, names, &count, peer->code, peer->name);
+		}
+		for (index = 0; index < social_chat.line_count; index++)
+		{
+			struct social_chat_line const *line = social_chat_line_at(index);
+
+			if (!line->code[0] || line->mine || line->notice)
+				continue;
+			if (pass ? social_chat_name_starts(line->name, wide) : social_chat_names_equal(line->name, wide))
+				social_chat_candidate_add(codes, names, &count, line->code, line->name);
+		}
+		menu_found = moderated ?
+			social_menu_moderated_by_name(typed, menu_code, sizeof(menu_code), menu_name, sizeof(menu_name)) :
+			social_menu_friend_by_name(typed, menu_code, sizeof(menu_code), menu_name, sizeof(menu_name));
+		if (menu_found == 1)
+		{
+			social_chat_wide_from_utf8(menu_name, menu_wide, NUMBEROF(menu_wide));
+			if (pass || social_chat_names_equal(menu_wide, wide))
+				social_chat_candidate_add(codes, names, &count, menu_code, menu_wide);
+		}
+		else if (menu_found < 0 && pass)
+			return -1;
+		if (count > 1)
+			return -1;
+		if (count == 1)
+		{
+			csstrncpy(code, codes[0], SOCIAL_CHAT_CODE_SIZE - 1);
+			code[SOCIAL_CHAT_CODE_SIZE - 1] = 0;
+			ustrncpy(found, names[0], SOCIAL_CHAT_NAME_SIZE - 1);
+			found[SOCIAL_CHAT_NAME_SIZE - 1] = 0;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+/* an upstream player's name alone (one not of the fork's chat, as its
+lines show it, not this machine's), for /mute in this match */
+static boolean social_chat_upstream_name(
+	char const *typed,
+	wchar_t *found)
+{
+	wchar_t wide[SOCIAL_CHAT_NAME_SIZE];
+	short index;
+
+	social_chat_wide_from_ascii(typed, wide, NUMBEROF(wide));
+	for (index = 0; index < social_chat.line_count; index++)
+	{
+		struct social_chat_line const *line = social_chat_line_at(index);
+
+		if (line->code[0] || line->notice || line->mine || !TEST_FLAG(line->sources, _social_chat_upstream_bit) ||
+			social_chat_name_is_local(line->name))
+		{
+			continue;
+		}
+		if (social_chat_names_equal(line->name, wide) || social_chat_name_starts(line->name, wide))
+		{
+			ustrncpy(found, line->name, SOCIAL_CHAT_NAME_SIZE - 1);
+			found[SOCIAL_CHAT_NAME_SIZE - 1] = 0;
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/* a friend code as a player types it (XXXX-XXXX) */
+static boolean social_chat_friend_code(
+	char const *text)
+{
+	short index;
+
+	for (index = 0; index < 9; index++)
+	{
+		char character = text[index];
+
+		if (index == 4 ? character != '-' :
+			!((character >= '0' && character <= '9') || (character >= 'A' && character <= 'Z') ||
+				(character >= 'a' && character <= 'z')))
+		{
+			return FALSE;
+		}
+	}
+	return text[9] == 0;
+}
+
+static void social_chat_player_command(
+	short command,
+	char const *word,
+	char const *typed)
+{
+	static short const acts[] = { _social_menu_act_friend, _social_menu_act_mute, _social_menu_act_unmute,
+		_social_menu_act_block, _social_menu_act_unblock, _social_menu_act_report };
+	char code[SOCIAL_CHAT_CODE_SIZE];
+	wchar_t found[SOCIAL_CHAT_NAME_SIZE];
+	char name[SOCIAL_CHAT_NAME_SIZE * 3];
+	char text[SOCIAL_CHAT_TEXT_SIZE];
+	short result;
+
+	if (!typed[0])
+	{
+		snprintf(text, sizeof(text), "Write the player's name: /%s NAME", word);
+		social_chat_notice(text);
+		return;
+	}
+	/* (an upstream player alone: muted in this match, by their name) */
+	if (!social_chat_online() || !social_account_code()[0])
+	{
+		if ((command == _social_chat_command_mute || command == _social_chat_command_unmute) &&
+			social_chat_upstream_name(typed, found))
+		{
+			social_chat_mute_here(found, command == _social_chat_command_mute);
+			social_chat_utf8_from_wide(found, name, sizeof(name));
+			snprintf(text, sizeof(text), command == _social_chat_command_mute ? "Muted %s in this match" :
+				"%s is no longer muted in this match", name);
+			social_chat_notice(text);
+		}
+		else
+			social_chat_notice("The fork's chat is offline: that needs the community server");
+		return;
+	}
+	if (command == _social_chat_command_add && social_chat_friend_code(typed))
+	{
+		social_menu_player_act(typed, typed, _social_menu_act_friend);
+		return;
+	}
+	result = social_chat_account_by_name(typed,
+		command == _social_chat_command_unmute || command == _social_chat_command_unblock, code, found);
+	if (result < 0)
+	{
+		snprintf(text, sizeof(text), "Several players are called %s: write more of the name", typed);
+		social_chat_notice(text);
+		return;
+	}
+	if (!result)
+	{
+		if ((command == _social_chat_command_mute || command == _social_chat_command_unmute) &&
+			social_chat_upstream_name(typed, found))
+		{
+			social_chat_mute_here(found, command == _social_chat_command_mute);
+			social_chat_utf8_from_wide(found, name, sizeof(name));
+			snprintf(text, sizeof(text), command == _social_chat_command_mute ?
+				"Muted %s in this match (they are not on the fork's chat)" : "%s is no longer muted in this match", name);
+		}
+		else
+		{
+			snprintf(text, sizeof(text), "No player called %s is in the chat or your %s", typed,
+				command == _social_chat_command_unmute || command == _social_chat_command_unblock ? "blocked and muted list" :
+				"friends");
+		}
+		social_chat_notice(text);
+		return;
+	}
+	social_chat_utf8_from_wide(found, name, sizeof(name));
+	social_menu_player_act(code, name, acts[command]);
+}
+
+/* the game's invite in a line's words */
+static void social_chat_invite_summary(
+	struct social_game_invite const *invite,
+	char *text,
+	long size)
+{
+	char const *kind = !strcmp(invite->kind, "ce") ? "Custom Edition" : !strcmp(invite->kind, "mcc") ? "MCC" :
+		"Halo PC";
+
+	snprintf(text, (size_t)size, "%s on %s (%s)", invite->gametype[0] ? invite->gametype : "a game",
+		invite->map[0] ? invite->map : "?", kind);
+	if (invite->maximum > 0)
+		snprintf(text + strlen(text), (size_t)(size - (long)strlen(text)), " %ld/%ld", invite->players,
+			invite->maximum);
+	if (!invite->link[0])
+		snprintf(text + strlen(text), (size_t)(size - (long)strlen(text)), ", password");
+}
+
+static void social_chat_invite_command(
+	char const *typed)
+{
+	struct social_game_invite invite;
+	struct social_chat_peer peer;
+	struct social_chat_peer const *picked = social_chat_peer_picked();
+	boolean to_one = FALSE;
+	char why[128];
+	char summary[160];
+	char text[SOCIAL_CHAT_SAID_SIZE];
+	char notice[SOCIAL_CHAT_TEXT_SIZE];
+	char name[SOCIAL_CHAT_NAME_SIZE * 3];
+
+	if (!social_chat_online() || !social_account_code()[0])
+	{
+		social_chat_notice("The fork's chat is offline: invites go through the community server");
+		return;
+	}
+	csmemset(&peer, 0, sizeof(peer));
+	if (typed[0])
+	{
+		short result = social_chat_account_by_name(typed, FALSE, peer.code, peer.name);
+
+		if (result <= 0)
+		{
+			snprintf(notice, sizeof(notice), result < 0 ? "Several players are called %s: write more of the name" :
+				"No player called %s is in the chat or your friends", typed);
+			social_chat_notice(notice);
+			return;
+		}
+		to_one = TRUE;
+	}
+	else if (social_chat.channel == _social_chat_private && picked)
+	{
+		peer = *picked;
+		to_one = TRUE;
+	}
+	if (!social_game_invite_make(to_one, &invite, why, sizeof(why)))
+	{
+		social_chat_notice(why);
+		return;
+	}
+	social_chat_invite_summary(&invite, summary, sizeof(summary));
+	snprintf(text, sizeof(text), "Join my game: %s", summary);
+	social_chat_say_full(to_one ? _social_chat_private : _social_chat_global, text, to_one ? &peer : NULL, &invite);
+	if (!social_chat.send_ticket)
+		return;
+	social_chat_utf8_from_wide(peer.name, name, sizeof(name));
+	if (to_one)
+		snprintf(notice, sizeof(notice), "Invited %s to your game", name);
+	else
+		snprintf(notice, sizeof(notice), "Invited everyone online to your game (GLOBAL)");
+	social_chat_notice(notice);
+}
+
+static void social_chat_command(
+	char const *typed)
+{
+	static struct
+	{
+		char const *word;
+		short command;
+	} const words[] =
+	{
+		{ "add", _social_chat_command_add },
+		{ "friend", _social_chat_command_add },
+		{ "mute", _social_chat_command_mute },
+		{ "unmute", _social_chat_command_unmute },
+		{ "block", _social_chat_command_block },
+		{ "unblock", _social_chat_command_unblock },
+		{ "report", _social_chat_command_report },
+	};
+	char word[16];
+	char rest[SOCIAL_CHAT_SAID_SIZE];
+	char text[SOCIAL_CHAT_TEXT_SIZE];
+	short length = 0;
+	short index;
+	long end;
+
+	for (typed++; *typed && *typed != ' ' && length < (short)sizeof(word) - 1; typed++)
+		word[length++] = *typed >= 'A' && *typed <= 'Z' ? (char)(*typed - 'A' + 'a') : *typed;
+	word[length] = 0;
+	while (*typed && *typed != ' ')
+		typed++;
+	while (*typed == ' ')
+		typed++;
+	csstrncpy(rest, typed, sizeof(rest) - 1);
+	rest[sizeof(rest) - 1] = 0;
+	for (end = (long)strlen(rest); end > 0 && rest[end - 1] == ' '; end--)
+		rest[end - 1] = 0;
+	if (!strcmp(word, "invite"))
+	{
+		social_chat_invite_command(rest);
+		return;
+	}
+	/* (the lines shown here, gone: this machine's alone, as IRC's) */
+	if (!strcmp(word, "clear"))
+	{
+		csmemset(social_chat.lines, 0, sizeof(social_chat.lines));
+		social_chat.line_count = 0;
+		social_chat.newest = 0;
+		social_chat.scroll = 0;
+		social_chat.dock_picked = FALSE;
+		social_chat.dock_pick = 0;
+		social_chat.dock_scroll = 0;
+		social_chat.sending_line = NULL;
+		social_chat_player.hit_count = 0;
+		social_chat_player.join_hit_count = 0;
+		return;
+	}
+	for (index = 0; index < (short)NUMBEROF(words); index++)
+	{
+		if (!strcmp(word, words[index].word))
+		{
+			social_chat_player_command(words[index].command, word, rest);
+			return;
+		}
+	}
+	if (word[0] && strcmp(word, "help") && strcmp(word, "?"))
+	{
+		snprintf(text, sizeof(text), "No command /%s", word);
+		social_chat_notice(text);
+	}
+	social_chat_notice("Commands: /invite [NAME] (the host), /add, /mute, /unmute, /block, /unblock, /report NAME, /clear");
+}
+
+/* JOIN on an invite line: its game joined from the menus (menu_functions.c
+takes it the next frame), else said to leave the game first */
+static void social_chat_invite_join(
+	wchar_t const *host_name,
+	struct social_game_invite const *invite)
+{
+	char name[SOCIAL_CHAT_NAME_SIZE * 3];
+
+	if (social_in_any_game())
+	{
+		social_chat_notice("Leave your game first, then press JOIN again");
+		return;
+	}
+	social_chat_utf8_from_wide(host_name, name, sizeof(name));
+	social_menu_invite_join(name, invite->link, invite->host_key);
+	social_chat_close();
 }
 
 /* ---------- opening, closing, typing */
@@ -1411,10 +1913,17 @@ boolean social_chat_keyboard_open(
 	return social_chat.open && social_chat_keyboard.open;
 }
 
-boolean social_chat_system_keyboard(
+boolean social_chat_system_open(
 	void)
 {
 	return social_chat.open && social_chat_keyboard.open && social_chat_keyboard.system && !social_chat.menu_only;
+}
+
+boolean social_chat_system_keyboard(
+	void)
+{
+	return social_chat.open && social_chat_keyboard.open && social_chat_keyboard.system &&
+		social_chat_keyboard.system_up && !social_chat.menu_only;
 }
 
 short social_chat_controller(
@@ -1435,6 +1944,17 @@ static short social_chat_channel_usable(
 	if (channel == _social_chat_private && !social_chat_private_heard())
 		channel = social_chat_network_game() ? _social_chat_match : _social_chat_global;
 	return channel;
+}
+
+/* the channel T (and the other "everyone" openings) opens to: the private
+talk last open where it still can be (the box reopened as it was left, not
+moved to GLOBAL), else `fallback` */
+short social_chat_everyone_channel(
+	short fallback)
+{
+	if (social_chat.channel == _social_chat_private && social_chat_private_heard())
+		return _social_chat_private;
+	return fallback;
 }
 
 void social_chat_open(
@@ -1461,6 +1981,10 @@ void social_chat_open(
 		/* (the touchscreen's, on Android: its own keyboard, as a player
 		profile's name has) */
 		social_chat_keyboard.system = port == 0 && halo_system_keyboard();
+		/* (not up by itself, so that the lines can be read and the channel
+		changed: the keyboard button on the line typed brings it,
+		social_chat_click) */
+		social_chat_keyboard.system_up = FALSE;
 		social_chat_keyboard.row = 1;
 		/* (the buttons that opened it held over: none of them a key) */
 		social_chat_keyboard.opening = halo_chat_pad_buttons_for_port(port);
@@ -1489,6 +2013,12 @@ void social_chat_open_private(
 	social_chat_open(_social_chat_private, halo_keyboard_typed_last() ? NONE : 0);
 	social_chat.channel = _social_chat_private;
 	social_chat.peer = index;
+	/* (asked to write: the system's keyboard up at once) */
+	if (social_chat_keyboard.system)
+	{
+		social_chat_keyboard.system_up = TRUE;
+		halo_system_keyboard_again();
+	}
 }
 
 short social_chat_recent_players(
@@ -1519,10 +2049,12 @@ static void social_chat_close(
 	social_chat.open = FALSE;
 	social_chat_keyboard.open = FALSE;
 	social_chat_keyboard.system = FALSE;
+	social_chat_keyboard.system_up = FALSE;
 	social_chat_keyboard.drawn = FALSE;
 	social_chat.scroll = 0;
 	social_chat_player_close();
 	social_chat_player.hit_count = 0;
+	social_chat_player.join_hit_count = 0;
 }
 
 enum
@@ -1552,8 +2084,9 @@ static boolean social_chat_docked(
 void social_chat_open_docked(
 	short port)
 {
-	if (!social_chat.open)
-		social_chat_open(social_chat.channel, halo_keyboard_typed_last() ? NONE : port);
+	if (social_chat.open)
+		return;
+	social_chat_open(social_chat.channel, halo_keyboard_typed_last() ? NONE : port);
 }
 
 boolean social_chat_dock_picked(void)
@@ -1733,7 +2266,11 @@ static void social_chat_delete(
 static void social_chat_send_typed(
 	void)
 {
-	social_chat_say(social_chat.channel, social_chat.typed);
+	/* (a command: never said) */
+	if (social_chat.typed[0] == '/')
+		social_chat_command(social_chat.typed);
+	else
+		social_chat_say(social_chat.channel, social_chat.typed);
 	social_chat_close();
 }
 
@@ -1806,8 +2343,9 @@ static boolean social_chat_inside(
 
 /* a click or a tap at this place in the screen, past a player's menu and
 the names: a channel's name picks it, the private line's player the next
-one, a key presses it, elsewhere in the box the system's keyboard comes up
-again (closed by hand), and outside the box it closes */
+one, a key presses it, the line typed (its keyboard button) brings the
+system's keyboard up, elsewhere in the box nothing, and outside the box it
+closes */
 static void social_chat_click(
 	short x,
 	short y)
@@ -1837,12 +2375,15 @@ static void social_chat_click(
 		social_chat_peer_next(1);
 		return;
 	}
-	if (social_chat_inside(&social_chat_hits.box, x, y))
+	if (social_chat_keyboard.system && !social_chat.menu_only &&
+		social_chat_inside(&social_chat_hits.input, x, y))
 	{
-		if (social_chat_system_keyboard())
-			halo_system_keyboard_again();
+		social_chat_keyboard.system_up = TRUE;
+		halo_system_keyboard_again();
 		return;
 	}
+	if (social_chat_inside(&social_chat_hits.box, x, y))
+		return;
 	social_chat_close();
 }
 
@@ -2037,6 +2578,8 @@ static void social_chat_player_options(
 		social_chat_player.chosen = (short)PIN(social_chat_player.chosen, 0, social_chat_player.option_count - 1);
 		return;
 	}
+	if (social_chat_player.has_invite && !social_chat_player.lobby_actions)
+		social_chat_player.options[social_chat_player.option_count++] = _social_chat_option_join;
 	if (online && social_chat_private_heard())
 		social_chat_player.options[social_chat_player.option_count++] = _social_chat_option_private;
 	if (online && config_boolean("social.friends") && !social_menu_is_friend(code))
@@ -2072,6 +2615,24 @@ static void social_chat_player_open(
 	social_chat_player.confirm_time = 0;
 	social_chat_player.top = top;
 	social_chat_player.drawn = FALSE;
+	/* (their latest invite line's game) */
+	social_chat_player.has_invite = FALSE;
+	if (code[0])
+	{
+		short back;
+
+		for (back = 0; back < social_chat.line_count; back++)
+		{
+			struct social_chat_line const *line = social_chat_line_at(back);
+
+			if (line->has_invite && !line->mine && !strcmp(line->code, code))
+			{
+				social_chat_player.has_invite = TRUE;
+				social_chat_player.invite = line->invite;
+				break;
+			}
+		}
+	}
 	social_chat_player_options();
 	if (!social_chat_player.option_count)
 		social_chat_player_close();
@@ -2118,6 +2679,11 @@ static void social_chat_player_pick(
 			}
 			/* (opened for the menu alone: kept open to write, its keyboard shown) */
 			social_chat.menu_only = FALSE;
+			if (social_chat_keyboard.system && !social_chat_keyboard.system_up)
+			{
+				social_chat_keyboard.system_up = TRUE;
+				halo_system_keyboard_again();
+			}
 			social_chat_player_close();
 		}
 		break;
@@ -2165,13 +2731,24 @@ static void social_chat_player_pick(
 		else
 			social_chat_player.confirm_time = system_milliseconds();
 		break;
+	case _social_chat_option_join:
+		{
+			struct social_game_invite invite = social_chat_player.invite;
+			wchar_t host[SOCIAL_CHAT_NAME_SIZE];
+
+			ustrncpy(host, social_chat_player.name, SOCIAL_CHAT_NAME_SIZE - 1);
+			host[SOCIAL_CHAT_NAME_SIZE - 1] = 0;
+			social_chat_player_close();
+			social_chat_invite_join(host, &invite);
+		}
+		break;
 	case _social_chat_option_remove_bot:
 		/* (one bot fewer: the lobby's bots follow bots.count, bots.c) */
 		{
 			char count[16];
 
-			snprintf(count, sizeof(count), "%ld", MAX(config_integer("bots.count") - 1, 0L));
-			config_write("bots.count", count);
+			snprintf(count, sizeof(count), "%ld", MAX(config_integer(bots_setting_key("bots.count")) - 1, 0L));
+			config_write(bots_setting_key("bots.count"), count);
 		}
 		social_chat_player_close();
 		break;
@@ -2237,6 +2814,25 @@ void social_chat_pointer(
 		if (social_chat_inside(&social_chat_player.panel, x, y))
 			return;
 		social_chat_player_close();
+	}
+	for (index = 0; index < social_chat_player.join_hit_count; index++)
+	{
+		short slot = social_chat_player.join_hits[index].slot;
+		struct social_chat_line const *line = &social_chat.lines[slot];
+
+		if (social_chat_inside(&social_chat_player.join_hits[index].bounds, x, y))
+		{
+			if (line->has_invite && line->time == social_chat_player.join_hits[index].time && !line->mine)
+			{
+				struct social_game_invite invite = line->invite;
+				wchar_t host[SOCIAL_CHAT_NAME_SIZE];
+
+				ustrncpy(host, line->name, SOCIAL_CHAT_NAME_SIZE - 1);
+				host[SOCIAL_CHAT_NAME_SIZE - 1] = 0;
+				social_chat_invite_join(host, &invite);
+			}
+			return;
+		}
 	}
 	for (index = 0; index < social_chat_player.hit_count; index++)
 	{
@@ -2348,7 +2944,8 @@ static void social_chat_open_keys(
 	pressed = held & ~social_chat.keys_held;
 	social_chat.keys_held = held;
 	if (pressed && !social_chat.open && !console_is_active())
-		social_chat_open(TEST_FLAG(pressed, HALO_KEYBOARD_CHAT) ? _social_chat_global : _social_chat_team, NONE);
+		social_chat_open(TEST_FLAG(pressed, HALO_KEYBOARD_CHAT) ? social_chat_everyone_channel(_social_chat_global) :
+			_social_chat_team, NONE);
 }
 
 void social_chat_update(
@@ -2396,7 +2993,8 @@ void social_chat_update(
 		if (social_chat.open && now - social_chat.opened_at > SOCIAL_CHAT_TOGGLE_MILLISECONDS)
 			social_chat_close();
 		else if (!console_is_active())
-			social_chat_open(social_chat_network_game() ? _social_chat_match : _social_chat_global, port);
+			social_chat_open(social_chat_everyone_channel(social_chat_network_game() ? _social_chat_match :
+				_social_chat_global), port);
 	}
 	social_chat_open_keys();
 	if (!social_chat.open || console_is_active())
@@ -2644,7 +3242,8 @@ static short social_chat_line_rows(
 		start = (short)(start + MAX(count, 1) + skip);
 		rows++;
 	}
-	return MAX(rows, 1);
+	/* (an invite's JOIN row under it) */
+	return (short)(MAX(rows, 1) + (line->has_invite ? 1 : 0));
 }
 
 /* a line drawn from top, a row each line_height: its head in its colour,
@@ -2748,6 +3347,35 @@ static short social_chat_line_draw(
 		start = (short)(start + count + skip);
 		rows++;
 	}
+	/* (an invite: its JOIN row, a button drawn under the text) */
+	if (line->has_invite)
+	{
+		char summary[160];
+		char row[200];
+		wchar_t wide[200];
+		real_argb_color join_color;
+		rectangle2d button;
+
+		social_chat_invite_summary(&line->invite, summary, sizeof(summary));
+		snprintf(row, sizeof(row), line->mine ? "(invite sent) %s" : "[ JOIN ] %s", summary);
+		social_chat_wide_from_ascii(row, wide, NUMBEROF(wide));
+		rows = MAX(rows, 1);
+		bounds.x0 = left;
+		bounds.y0 = (short)(top + rows * line_height);
+		bounds.y1 = (short)(bounds.y0 + line_height);
+		if (!line->mine)
+		{
+			button = bounds;
+			button.x1 = (short)MIN(left + social_chat_width(wide, NONE) + 4, left + width);
+			draw_quad(&button, ((pixel32)(alpha * 0x70) << 24) | 0x2896FFUL);
+		}
+		join_color.alpha = alpha;
+		join_color.red = line->mine ? 0.7f : 0.6f;
+		join_color.green = line->mine ? 0.7f : 1.0f;
+		join_color.blue = line->mine ? 0.7f : 0.6f;
+		bounds.x0 = (short)(left + 2);
+		social_chat_text(font_index, &bounds, &join_color, wide);
+	}
 	return head_width;
 }
 
@@ -2824,6 +3452,51 @@ static void social_chat_keyboard_draw(
 private line goes to, the line typed, and the keys' hint; where the
 channels and the private line's player were drawn kept, for a click (the
 screen's coordinates: shift from them) */
+/* a keyboard drawn at the right end of the row given (its outline, two
+rows of keys and a space bar), lit or not; its width and a gap */
+static short social_chat_keyboard_button_draw(
+	rectangle2d const *row,
+	boolean lit)
+{
+	pixel32 const color = lit ? 0xFF4F9BE0UL : 0xFFD0D0D0UL;
+	short height = (short)MAX(row->y1 - row->y0 - 4, 6);
+	short width = (short)(height * 3 / 2);
+	short thick = (short)MAX(height / 12, 1);
+	rectangle2d icon;
+	rectangle2d part;
+	short key_row;
+	short key;
+
+	icon.x1 = (short)(row->x1 - 2);
+	icon.x0 = (short)(icon.x1 - width);
+	icon.y0 = (short)(row->y0 + (row->y1 - row->y0 - height) / 2);
+	icon.y1 = (short)(icon.y0 + height);
+	if (lit)
+		draw_quad(&icon, 0x404F9BE0UL);
+	part = icon; part.y1 = (short)(icon.y0 + thick); draw_quad(&part, color);
+	part = icon; part.y0 = (short)(icon.y1 - thick); draw_quad(&part, color);
+	part = icon; part.x1 = (short)(icon.x0 + thick); draw_quad(&part, color);
+	part = icon; part.x0 = (short)(icon.x1 - thick); draw_quad(&part, color);
+	/* (two rows of five keys, then the space bar) */
+	for (key_row = 0; key_row < 2; key_row++)
+	{
+		for (key = 0; key < 5; key++)
+		{
+			part.x0 = (short)(icon.x0 + width * (2 + key * 4) / 22);
+			part.x1 = (short)(part.x0 + MAX(width * 2 / 22, 1));
+			part.y0 = (short)(icon.y0 + height * (2 + key_row * 3) / 11);
+			part.y1 = (short)(part.y0 + MAX(height * 2 / 11, 1));
+			draw_quad(&part, color);
+		}
+	}
+	part.x0 = (short)(icon.x0 + width * 6 / 22);
+	part.x1 = (short)(icon.x0 + width * 16 / 22);
+	part.y0 = (short)(icon.y0 + height * 8 / 11);
+	part.y1 = (short)(part.y0 + MAX(height * 2 / 11, 1));
+	draw_quad(&part, color);
+	return (short)(width + 6);
+}
+
 static short social_chat_open_draw(
 	long font_index,
 	short line_height,
@@ -2935,6 +3608,11 @@ static short social_chat_open_draw(
 			social_chat_wide_from_ascii("A or click: write", typed, SOCIAL_CHAT_SAID_SIZE);
 			length = 0;
 		}
+		/* (the system's keyboard not up yet: tapped here, it comes) */
+		else if (social_chat_keyboard.system && !social_chat_keyboard.system_up && !length)
+		{
+			social_chat_wide_from_ascii("Tap to write", typed, SOCIAL_CHAT_SAID_SIZE);
+		}
 		else if ((system_milliseconds() / SOCIAL_CHAT_CARET_MILLISECONDS) % 2 == 0)
 		{
 			typed[length] = '_';
@@ -2954,12 +3632,23 @@ static short social_chat_open_draw(
 			bounds.x1 = (short)(left + width);
 			bounds.y0 = (short)(top + 6);
 			bounds.y1 = (short)(top + line_height + 6);
+			social_chat_hits.input = bounds;
+			social_chat_hits.input.x0 = (short)(bounds.x0 + shift);
+			social_chat_hits.input.x1 = (short)(bounds.x1 + shift);
+			/* (the system's keyboard, a touchscreen's: a keyboard button at the
+			line's right end, lit while that keyboard is up) */
+			if (social_chat.open && !social_chat.menu_only && social_chat_keyboard.system)
+			{
+				short button = social_chat_keyboard_button_draw(&bounds, social_chat_keyboard.system_up);
+
+				bounds.x1 = (short)(bounds.x1 - button);
+			}
 			for (;;)
 			{
 				ustrncpy(text, L"> ", NUMBEROF(text) - 1);
 				text[NUMBEROF(text) - 1] = 0;
 				ustrncat(text, typed + start, NUMBEROF(text) - 1 - ustrlen(text));
-				if (start >= length || social_chat_width(text, NONE) <= width - 4)
+				if (start >= length || social_chat_width(text, NONE) <= bounds.x1 - bounds.x0 - 4)
 					break;
 				start++;
 			}
@@ -2997,7 +3686,7 @@ static void social_chat_player_draw(
 	static real_argb_color const blue = { 1.0f, 0x28 / 255.0f, 0x96 / 255.0f, 1.0f };
 	static real_argb_color const grey = { 1.0f, 0.65f, 0.65f, 0.65f };
 	static char const *const labels[] = { "SEND PRIVATE MESSAGE", "ADD FRIEND", "VIEW PROFILE", "MUTE", "UNMUTE",
-		"REPORT", "MUTE IN THIS MATCH", "UNMUTE", "KICK FROM GAME", "REMOVE BOT" };
+		"REPORT", "MUTE IN THIS MATCH", "UNMUTE", "KICK FROM GAME", "REMOVE BOT", "JOIN THEIR GAME" };
 	real_argb_color white = get_ui_argb_white();
 	char text[SOCIAL_CHAT_PLAYER_TEXT_SIZE];
 	wchar_t wide[SOCIAL_CHAT_TEXT_SIZE];
@@ -3161,6 +3850,7 @@ static void social_chat_draw_in(
 	if (box)
 	{
 		social_chat_player.hit_count = 0;
+		social_chat_player.join_hit_count = 0;
 		social_chat_hits.drawn = FALSE;
 	}
 	if (!social_chat_shown() || (!social_chat.open && cinematic_in_progress()))
@@ -3341,7 +4031,7 @@ static void social_chat_draw_in(
 				/* (its player's name can be clicked, open: one whose account is
 				known, and an upstream player's not of this machine, muted in
 				this match by its name) */
-				if (social_chat.open && !line->mine && !line->notice && line->name[0] &&
+				if (shown_open && !line->mine && !line->notice && line->name[0] &&
 					(line->code[0] || (TEST_FLAG(line->sources, _social_chat_upstream_bit) &&
 						!social_chat_name_is_local(line->name))) &&
 					social_chat_player.hit_count < SOCIAL_CHAT_MAXIMUM_NAME_HITS)
@@ -3357,6 +4047,20 @@ static void social_chat_draw_in(
 					social_chat_player.hits[hit].code[SOCIAL_CHAT_CODE_SIZE - 1] = 0;
 					ustrncpy(social_chat_player.hits[hit].name, line->name, SOCIAL_CHAT_NAME_SIZE - 1);
 					social_chat_player.hits[hit].name[SOCIAL_CHAT_NAME_SIZE - 1] = 0;
+				}
+				/* (an invite's JOIN row, its last, can be clicked) */
+				if (shown_open && line->has_invite && !line->mine &&
+					social_chat_player.join_hit_count < SOCIAL_CHAT_MAXIMUM_NAME_HITS)
+				{
+					short hit = social_chat_player.join_hit_count++;
+
+					social_chat_player.join_hits[hit].bounds.x0 = (short)(left + shift + SOCIAL_CHAT_PADDING + indent);
+					social_chat_player.join_hits[hit].bounds.x1 = (short)(left + shift + SOCIAL_CHAT_PADDING + indent +
+						text_width);
+					social_chat_player.join_hits[hit].bounds.y0 = (short)(y + (rows - 1) * line_height);
+					social_chat_player.join_hits[hit].bounds.y1 = (short)(y + rows * line_height);
+					social_chat_player.join_hits[hit].slot = (short)(line - social_chat.lines);
+					social_chat_player.join_hits[hit].time = line->time;
 				}
 			}
 			y = (short)(y + rows * line_height);

@@ -11,7 +11,12 @@ host_renderer_vulkan); this is for host_vk.c's own files.
 #define HOST_VK_H
 
 /* (the PS5's surface is a display plane, VK_KHR_display's, which needs no platform define: port/ps5/PS5.md, phase 4) */
-#if !defined(VK_USE_PLATFORM_ANDROID_KHR) && !defined(HALO_PS5)
+/* (macOS's is MoltenVK's, on the window's CAMetalLayer: VK_EXT_metal_surface) */
+#if defined(HALO_MACOS)
+#ifndef VK_USE_PLATFORM_METAL_EXT
+#define VK_USE_PLATFORM_METAL_EXT
+#endif
+#elif !defined(VK_USE_PLATFORM_ANDROID_KHR) && !defined(HALO_PS5)
 #define VK_USE_PLATFORM_ANDROID_KHR
 #endif
 #include "host_vk_driver.h"
@@ -36,6 +41,10 @@ instance is 1.0-level and the extension stands in for it */
 #define HOST_VK_SURFACE_FUNCTIONS(X) \
 	X(vkCreateDisplayPlaneSurfaceKHR) X(vkGetPhysicalDeviceDisplayPropertiesKHR) X(vkGetDisplayModePropertiesKHR) \
 	X(vkGetPhysicalDeviceDisplayPlanePropertiesKHR) X(vkGetDisplayPlaneCapabilitiesKHR)
+#elif defined(HALO_MACOS)
+#define HOST_VK_SURFACE_FUNCTIONS(X) X(vkCreateMetalSurfaceEXT)
+/* the game window's CAMetalLayer, from its Metal view, made on the main thread with the window (host_sdl.c) */
+extern void *host_vk_metal_layer;
 #else
 #define HOST_VK_SURFACE_FUNCTIONS(X) X(vkCreateAndroidSurfaceKHR)
 #endif
@@ -197,7 +206,7 @@ struct host_vk_backend
 	host_vk_present.c */
 	int color_sampled;
 	/* the optional device features that were enabled */
-	int sampler_anisotropy, fill_mode_non_solid, occlusion_query_precise, texture_compression_bc;
+	int sampler_anisotropy, fill_mode_non_solid, occlusion_query_precise, texture_compression_bc, texture_compression_astc;
 	/* VK_EXT_multisampled_render_to_single_sampled: a multisampled rendering draws into the targets' own images, its samples
 	kept in the GPU's tile memory and resolved as they are stored (the sample counts it can, 0 when it is off) */
 	VkSampleCountFlags msrtss_counts;
@@ -234,6 +243,11 @@ struct host_vk_backend
 	cache every pipeline is made in, saved per driver */
 	VkDescriptorSetLayout draw_set_layout;
 	VkPipelineLayout draw_layout;
+	/* the dynamic lighting's model variants with occlusion: the draws' set, and the fields' (VK_PLASMA_SET) */
+	VkDescriptorSetLayout plasma_set_layout;
+	VkPipelineLayout plasma_layout;
+	/* the images they read (VK_COMMAND_PLASMA_OCCLUSION) */
+	uint32_t plasma_images[2];
 	VkPipelineCache pipeline_cache;
 
 	/* the built-in pipeline of clears of some channels only */
@@ -403,7 +417,9 @@ void host_vk_services_start(void);
 void host_vk_pipeline_command(const struct vk_command_pipeline *command);
 /* the pipeline for a draw's two shader handles and state, queued if new: the VkPipeline once it is ready, else VK_NULL_HANDLE
 (counted as skipped); B.lock is held */
-VkPipeline host_vk_pipeline_find(uint32_t vertex_handle, uint32_t pixel_handle, const struct vk_pipeline_state *state);
+VkPipeline host_vk_pipeline_find(uint32_t vertex_handle, uint32_t pixel_handle, const struct vk_pipeline_state *state,
+	int plasma_occlusion);
+void host_vk_plasma_occlusion_command(const struct vk_command_plasma_occlusion *command);
 /* the statistics line's part, and the services' tick (a frame): the cache is saved every five minutes if pipelines
 were made since */
 void host_vk_services_statistics(char *text, size_t size);

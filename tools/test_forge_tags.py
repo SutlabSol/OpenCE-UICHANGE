@@ -241,9 +241,12 @@ def test_ai_spawns_rebuild_the_encounters_and_are_saved_and_shared():
     assert "#undef free" in forge_ai and "#undef malloc" in forge_ai
     # the fields the saved line writes are the fields it reads, in order
     written = re.search(r'"AI_SPAWN\|([^"]+)\\r\\n"', builder).group(1)
-    # (the spawn effect is last and read apart: an empty weapon stops the scan short of it)
-    assert written.endswith("|fx=%d") and 'strstr(cur, "|fx=")' in forge_ai
-    written = written[:-len("|fx=%d")]
+    # (the spawn effect, CLOAKED, HEIGHT and the GOAL are last and read apart: an empty weapon stops the scan
+    # short of them)
+    trailing = "|fx=%d|ck=%d|ht=%d|gl=%d|gn=%d|gw=%d|gs=%d|gf=%d"
+    assert written.endswith(trailing)
+    assert all(f'strstr(cur, "|{key}=")' in forge_ai for key in ("fx", "ck", "ht"))
+    written = written[:-len(trailing)]
     read = re.search(r'"(%f\|%f\|%f\|%f[^"]+)"', forge_ai).group(1)
     assert written.count("%") == read.count("%") == 16
     # not behind the stock maps' condition: a Custom Edition base has AI
@@ -313,7 +316,7 @@ def test_the_palette_offers_ranks_not_weapons():
 
 def test_leaving_forge_mode_places_what_is_held_and_entering_resets_origins():
     forge = (ROOT / "port/forge/src/forge_3d_mode.c").read_text()
-    toggle = forge[forge.index("if (cur_f1 && !prev_f1 && allow_f1)"):]
+    toggle = forge[forge.index("if ((cur_f1 && !prev_f1 && allow_f1) || test_leaves)"):]
     assert "forge_place_held_item();" in toggle[:400] and "forge_cancel_or_release_held_item" not in toggle[:400]
     assert "forge_ai_forge_mode_changed(1);\n\t\t\t\t\tforge_origins_reset();" in forge
 

@@ -50,3 +50,5 @@ reference/
 
 # a local copy of the web build (build/web/site), not ours to track
 /site/
+# User-supplied Halo 1 MCC maps and resources
+mcc_maps/

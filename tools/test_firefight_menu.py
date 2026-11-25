@@ -236,8 +236,6 @@ def test_each_firefight_spinner_has_as_many_values_as_choices():
 def test_the_defaults_show_as_what_they_are():
     escalation = option_values("ff_escalation_spinner")
     assert menus.FIREFIGHT_CHOICES["var_ff_escalation"][escalation.index("_firefight_escalation_medium")] == "+25% / SET"
-    late = option_values("ff_r3_veh_spinner")
-    assert menus.FIREFIGHT_CHOICES["var_ff_late_veh"][late.index("_firefight_late_vehicle_scorpion")] == "SCORPION"
 
 
 def test_generator_attackers_default_to_half_of_a_wave_and_outweigh_the_players():
@@ -293,13 +291,26 @@ def test_floodfight_defaults_to_250_and_the_fiestas_to_random_enemy_weapons():
     assert FIREFIGHT_C.count("FALSE, 0, _firefight_enemy_loadout_random") == 2
 
 
-def test_vehicle_rows_are_the_values_their_labels_say():
-    names = {"NONE": "none", "WARTHOG": "warthog", "ROCKET HOG": "rocket_warthog", "GHOST": "ghost",
-             "SCORPION": "scorpion", "BANSHEE": "banshee", "WRAITH": "wraith"}
-    for spinner in ("ff_r1_veh_spinner", "ff_r2_veh_spinner"):
-        values = re.findall(r"_firefight_early_vehicle_(\w+)", spinner_values(spinner))
-        assert values == [names[label] for label in menus.FIREFIGHT_CHOICES["var_ff_round_veh"]]
-    assert "OPTIONS_FIELD(firefight_round2_vehicle)" in MENU_C
+def test_vehicles_are_a_game_s_server_setup_row_not_the_variant_s():
+    """VEHICLES (ALL AT SPAWN first, the default) is GAME SETTINGS', shown on a
+    map with vehicles; the variant's ROUND 1-3 VEHICLE rows are gone"""
+    assert not [row for row in menus.FIREFIGHT_ROWS if row[1] in ("r1_veh", "r2_veh", "r3_veh")]
+    assert "ff_r1_veh_spinner" not in MENU_C and "var_ff_round_veh" not in menus.FIREFIGHT_CHOICES
+    rows = dict((row[0], row[2]) for row in port_settings.FIREFIGHT_SETUP_ROWS)
+    assert rows["ff_vehicles"] == ["ALL AT SPAWN", "ORDNANCE REWARDS", "NONE"]
+    keys = [row[0] for row in port_settings.FIREFIGHT_SETUP_ROWS]
+    base = int(re.search(r"#define FF_PLAYER_SCALE_HELP (\d+)", MENU_C).group(1))
+    assert base + keys.index("ff_vehicles") == int(re.search(r"#define FF_VEHICLES_HELP (\d+)", MENU_C).group(1))
+    # (on Server Setup's hub, after GAME SETTINGS, with OBJECTIVE SETTINGS)
+    members = dict((section[0], section[3]) for section in port_settings.SERVER_SETUP_SECTIONS)["game_settings"]
+    assert "ff_vehicles" not in members and "ff_round_objectives" not in members
+    assert port_settings.HUB_FIREFIGHT_ROWS == ["ff_vehicles", "objective_settings"]
+    assert port_settings.OBJECTIVE_SETUP_SECTION[3] == ["ff_round_objectives", "ff_set_objectives"]
+    assert "#define OBJECTIVE_SETTINGS_HELP 43" in MENU_C
+    assert "_firefight_vehicle_spawns_all = 0," in (ROOT / "port/linux/include/halo_firefight.h").read_text()
+    assert "byte firefight_vehicle_spawns;" in ENGINE_H
+    profile = (ROOT / "source/saved games/playlist_profile.c").read_text()
+    assert "options->firefight_vehicle_spawns = _firefight_vehicle_spawns_all;" in profile
 
 
 def test_enemy_loadout_is_on_enemy_units_page():
@@ -319,9 +330,137 @@ def test_the_map_vote_is_laid_out_as_the_lobby():
 
 
 def test_a_players_vehicle_goes_on_a_pad_or_the_maps_own_spots():
-    body = SPAWNER_C.split("void firefight_spawn_scheduled_round_vehicles(", 1)[1].split("\nstatic boolean vehicle_has_player_rider", 1)[0]
+    """where the map has it (a reward's on a pad first), else the map's own
+    free spots: never the resupply point"""
+    body = SPAWNER_C.split("static boolean player_vehicle_make(", 1)[1].split("\n}\n", 1)[0]
     assert "calculate_safe_player_resupply_point" not in body
-    assert "else if (!map_vehicle_spot(vehicle_tag, &drop_pos, &drop_facing))\n\t\treturn;" in body
+    assert "g_player_vehicles.rewarded[slot] && player_vehicle_pad(nth, &position, &facing)" in body
+    assert "!map_vehicle_spot(tag_index, &position, &facing)" in body
+
+
+def test_the_players_vehicles_are_there_from_the_start_and_stay():
+    """the map's placements' at the second tick, made again at a round where
+    one went, and none taken away at a set's end or the bonus round"""
+    assert "if (ff_state.session_elapsed_ticks == 2)\n\t\t\tfirefight_spawn_player_vehicles();" in FIREFIGHT_C
+    assert FIREFIGHT_C.count("firefight_spawn_player_vehicles();") == 2
+    assert "despawn" not in FIREFIGHT_C and "firefight_despawn" not in SPAWNER_C
+    body = SPAWNER_C.split("void firefight_spawn_player_vehicles(void)", 1)[1].split("\n}\n", 1)[0]
+    assert "player_vehicle_present(ff_state.deployed_set_vehicles[slot])" in body
+    assert "!g_player_vehicles.earned[slot]" in body
+    # (ORDNANCE REWARDS: one with each drop past the first, after its banner)
+    assert "if (ff_state.ordnance_drops_made > 1)\n\t\tfirefight_reward_player_vehicle();" in SPAWNER_C
+
+
+def test_map_content_is_a_server_setup_section_not_a_variant_rule():
+    """MAP CONTENT after GAME SETTINGS, its USE CONTENT and ADVANCED rows; a
+    variant has none (saved or in the copy Server Setup starts from)"""
+    assert not [row for row in menus.FIREFIGHT_ROWS if row[1] == "map_content"]
+    assert "var_ff_map_content" not in menus.FIREFIGHT_CHOICES
+    keys = [section[0] for section in port_settings.SERVER_SETUP_SECTIONS]
+    assert keys.index("map_content") == keys.index("game_settings") + 1
+    members = dict((section[0], section[3]) for section in port_settings.SERVER_SETUP_SECTIONS)["map_content"]
+    assert members == ["ff_map_content", "ff_mc_enemies", "ff_mc_enemies_list", "ff_mc_weapons", "ff_mc_weapons_list",
+                       "ff_mc_vehicles", "ff_mc_vehicles_list", "ff_mc_loadout", "ff_mc_shields",
+                       "ff_mc_shield_regen", "ff_mc_health_regen"]
+    rows = dict((row[0], row[2]) for row in port_settings.FIREFIGHT_SETUP_ROWS)
+    # (PLAYER LOADOUT: a row of no choices opening the same list, its help
+    # FF_MAP_CONTENT_HELP + 7, the spawn's override in firefight.c)
+    assert rows["ff_mc_loadout"] is None
+    assert port_settings.FIREFIGHT_SETUP_RUNS["ff_mc_loadout"][0] == "ss map content loadout"
+    keys = [row[0] for row in port_settings.FIREFIGHT_SETUP_ROWS]
+    assert keys.index("ff_mc_loadout") == keys.index("ff_map_content") + 7
+    assert "firefight_map_loadout_override(0)" in (ROOT / "port/linux/game/firefight.c").read_text()
+    # (HEALTH RULES: their spinners in the rules' values, MAP'S first;
+    # HEALTH REGEN OFF first; helps FF_MAP_CONTENT_HELP + 8 + the rule)
+    assert rows["ff_mc_shields"] == rows["ff_mc_shield_regen"] == ["MAP'S", "ON", "OFF"]
+    assert rows["ff_mc_health_regen"] == ["OFF", "ON"]
+    assert [keys.index(key) - keys.index("ff_map_content") for key in
+            ("ff_mc_shields", "ff_mc_shield_regen", "ff_mc_health_regen")] == [8, 9, 10]
+    assert "FF_MAP_CONTENT_HELP + 8 + rule" in MENU_C
+    assert "static short const map_health_choices[NUMBER_OF_FIREFIGHT_HEALTH_RULES] = { 3, 3, 2 };" in MENU_C
+    damage = (ROOT / "source/objects/damage.c").read_text()
+    assert "firefight_player_shield_regen(object_index) != 0" in damage
+    assert "(!object_shield_given(object) || firefight_regen == 1)" in damage
+    assert rows["ff_map_content"] == ["VANILLA ONLY", "INCLUDE MAP", "ONLY MAP"]
+    assert rows["ff_mc_enemies"] == rows["ff_mc_weapons"] == rows["ff_mc_vehicles"] == ["ALL ON", "CUSTOM", "OFF"]
+    assert '"op_lobby_settings", "op_game_settings", "op_map_content", "op_fork_settings"' in MENU_C
+    assert "gametype_edit.setup_options.firefight_map_content = _firefight_map_content_vanilla;" in MENU_C
+    profile = (ROOT / "source/saved games/playlist_profile.c").read_text()
+    assert "options->firefight_map_content = _firefight_map_content_vanilla;" in profile
+    assert "byte firefight_map_content;" in ENGINE_H and "firefight_last_man_boost" not in ENGINE_H
+
+
+def test_server_setup_s_help_indices_match_its_strings():
+    xml = menu("main_menu.multiplayer_type_select.server_settings.xml")
+    block = re.search(r'<strings name="main_menu/multiplayer_type_select/server_settings/help_strings">(.*?)</strings>',
+                      xml, re.S).group(1)
+    helps = re.findall(r'text="([^"]*)"', block)
+    for macro, row in (("FF_PLAYER_SCALE_HELP", "ff_player_scale"), ("SERVER_SCORING_HELP", "scoring"),
+                       ("FF_START_SKULLS_HELP", "ff_start_skulls"), ("FF_MAP_CONTENT_HELP", "ff_map_content")):
+        index = int(re.search(rf"#define {macro} (\d+)", MENU_C).group(1))
+        expected = dict((r[0], r[3]) for r in port_settings.FIREFIGHT_SETUP_ROWS)[row]
+        assert helps[index] == expected.replace("'", "&apos;") or helps[index] == expected
+    section = int(re.search(r"#define SERVER_SETUP_SECTION_HELP (\d+)", MENU_C).group(1))
+    assert helps[section + 2].startswith("Play the map")
+    # (ADVANCED's kinds after USE CONTENT's, CUSTOM's CHOOSE rows after them:
+    # menu_functions.c's FF_MAP_CONTENT_HELP + 1 + kind, + 4 + kind)
+    base = int(re.search(r"#define FF_MAP_CONTENT_HELP (\d+)", MENU_C).group(1))
+    by_key = dict((r[0], r[3]) for r in port_settings.FIREFIGHT_SETUP_ROWS)
+    for kind, key in enumerate(("enemies", "weapons", "vehicles")):
+        for offset, row in ((1, f"ff_mc_{key}"), (4, f"ff_mc_{key}_list")):
+            assert helps[base + offset + kind].replace("&apos;", "'") == by_key[row]
+
+
+def test_map_content_custom_lists_open_the_map_s_tags_kept_per_map():
+    xml = menu("main_menu.multiplayer_type_select.server_settings.xml")
+    tags = (ROOT / "port/linux/game/menu_tags.c").read_text()
+    screen = "main_menu/multiplayer_type_select/server_settings/map_content/map_content_tags_screen"
+    for kind in ("enemies", "weapons", "vehicles"):
+        row = re.search(rf'<widget name="[^"]*/op_ff_mc_{kind}_list".*?</widget>', xml, re.S).group(0)
+        assert f'run="ss map content {kind}" open="{screen}"' in row
+        assert f"/ff_mc_{kind}_list_value" in row
+        assert f'"ss map content {kind}"' in tags and f'"ss map content {kind}"' in MENU_C
+    assert f'<widget name="{screen}"' in xml
+    for run in ("map content tags init", "map content tag toggle", "map content tags all on",
+                "map content tags all off", "map content tags update"):
+        assert f'"{run}"' in tags and f'"{run}"' in MENU_C
+    assert xml.count('run="map content tag toggle"') == 2 * port_settings.MAP_CONTENT_TAG_ROWS
+    assert f"#define MAP_CONTENT_TAG_ROWS {port_settings.MAP_CONTENT_TAG_ROWS}" in MENU_C
+    spawner = (ROOT / "port/linux/game/firefight_spawner.c").read_text()
+    # (kept per map in a file of the host's, and played by the host alone)
+    assert '#define FF_MC_FILE "d:\\\\firefight_map_content.txt"' in spawner
+    for kind in ("ENEMIES", "WEAPONS", "VEHICLES"):
+        assert f"map_content_custom_off(FIREFIGHT_MAP_CONTENT_{kind}_CUSTOM" in spawner
+    header = (ROOT / "port/linux/include/halo_firefight.h").read_text()
+    bits = [int(value, 16) for value in re.findall(r"#define FIREFIGHT_MAP_CONTENT_\w+_(?:OFF|CUSTOM) (0x[0-9A-F]+)", header)]
+    mask = int(re.search(r"#define FIREFIGHT_MAP_CONTENT_MODE_MASK (0x[0-9A-F]+)", header).group(1), 16)
+    assert len(bits) == 6 and len(set(bits)) == 6 and not any(bit & mask for bit in bits)
+
+
+def test_the_ordnance_drops_in_a_pod_every_machine_shows():
+    network = (ROOT / "port/linux/game/firefight_network.c").read_text()
+    assert "pkt.ordnance_pod_drop_time = ff_state.ordnance_pod_drop_time;" in network
+    assert "size < (long)FIREFIGHT_NET_PACKET_BEFORE_POD" in network
+    # (before the client's return: the pod is each machine's own scenery)
+    update = FIREFIGHT_C.split("static void firefight_update(", 1)[1]
+    assert update.index("firefight_ordnance_pod_update();") < update.index("if (network_game_distributed_client())")
+    assert '"scenery\\\\c_storage\\\\c_storage"' in RANDOMIZER_C
+    # (where a pod lands: map ground, seen, clear round, open sky; its weapons
+    # held on its sides, full)
+    for rule in ("if (collision.type == _collision_result_object)", "if (collision.plane.n.k < 0.8f)",
+                 "if (pod_ray(structure, eye, &vector, &collision) && collision.t < 0.98f)",
+                 "collision.t * FF_POD_FALL_HEIGHT < sky"):
+        assert rule in SPAWNER_C
+    assert "pod_weapon_fill(object_index);" in SPAWNER_C and "pod_weapons_hold(FALSE);" in SPAWNER_C
+    drop = SPAWNER_C.split("void firefight_spawn_ordnance_drop(", 1)[1].split("\n}\n", 1)[0]
+    # (the ammo crate is the pod's own: never the level's ammo powerups)
+    assert "ff_ammo_tags" not in drop
+    # (port: the pods let go in groups, each player's set its own, rolled by its health)
+    assert "ordnance_roll(odds->health)" in drop and "first_drop" in drop
+    assert "FIREFIGHT_ORDNANCE_MIN_GROUPS = 3," in (ROOT / "port/linux/include/halo_firefight.h").read_text()
+    assert "pod_elapsed = elapsed - firefight_ordnance_pod_release_delay(pod, pods);" in SPAWNER_C
+    modes = (ROOT / "port/assets/tag_packs/watanoge_gamemodes.toml").read_text()
+    assert '"scenery\\\\c_storage\\\\"' in modes
 
 
 def test_a_waves_zones_stay_near_the_players():
@@ -352,3 +491,26 @@ def test_a_firefight_game_takes_sixteen_bots_and_coop_three():
     assert "FIREFIGHT_MAX_BOTS = 16," in header
     assert "short max_pve_bots = hosting_cooperative() ? 3 : FIREFIGHT_MAX_BOTS;" in MENU_C
     assert "pve_bots ? (long)FIREFIGHT_MAX_BOTS : (long)BOTS_MAXIMUM" in MENU_C
+
+
+def test_map_content_custom_list_previews_each_tag_s_model():
+    xml = menu("main_menu.multiplayer_type_select.server_settings.xml")
+    tags = (ROOT / "port/linux/game/menu_tags.c").read_text()
+    # (a widget named tag_preview: ui_widget.c draws tag_preview_picture in it)
+    assert '<widget name="main_menu/multiplayer_type_select/server_settings/map_content/tag_preview"' in xml
+    assert '<on event="deleted" run="map content tags close"/>' in xml
+    assert '"map content tags close"' in tags and '"map content tags close"' in MENU_C
+    assert "tag_injector_map_named(server_settings_map_name())" in MENU_C
+    assert "tag_preview_map_tag(category, index);" in MENU_C
+    injector = (ROOT / "port/linux/game/tag_injector.h").read_text()
+    assert "short tag_injector_map_named(" in injector
+
+
+def test_fiesta_s_random_weapons_take_the_map_s_pool():
+    firefight = (ROOT / "port/linux/game/firefight.c").read_text()
+    random = firefight[firefight.index("case _loadout_weapon_random:"):]
+    random = random[:random.index("case _loadout_weapon_assault_rifle:")]
+    assert random.index("firefight_map_loadout_weapon(other)") < random.index("s_ff_loadout_weapon_paths[index]")
+    spawner = (ROOT / "port/linux/game/firefight_spawner.c").read_text()
+    body = spawner[spawner.index("char const *firefight_map_loadout_weapon(char const *other)"):]
+    assert "mode == _firefight_map_content_only_map" in body[:body.index("\n}\n")]

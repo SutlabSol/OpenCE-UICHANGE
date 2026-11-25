@@ -351,6 +351,13 @@ give, and whether a level played alone copies those it has not got */
 static long loadout_set[LOADOUT_WEAPONS];
 static int loadout_ready;
 static int loadout_imports;
+/* an MCC map's level is being loaded (randomizer_mcc_tags_loaded): no
+randomizer or game modes (Forge on a multiplayer one only), but its Tag
+Injector profiles (a multiplayer
+game's share, a Firefight variant's, a campaign profile played alone); and
+whether it is a campaign level (a solo scenario) */
+static int mcc_vanilla_level;
+static int mcc_solo_level;
 static unsigned long placement_roll;
 static int placement_roll_ready;
 /* the weapons and actor variants of the Tag Injector's profile the level was
@@ -1905,6 +1912,22 @@ game's shared ones (multiplayer: given the game's swaps and loadouts), or
 the firing range's */
 static void gather_firefight(char const *leaf);
 
+/* the game's own props (port_tag_profiles_props_open: Firefight's ordnance
+capsule, Forge's weapon rack), played by the level loading beside its
+profile and bake, on every machine alike; NONE when they are not there */
+static long level_props_profile = NONE;
+
+static long level_props(void)
+{
+	long props = port_tag_profiles_props_open();
+
+	if (props < 0)
+		props = NONE;
+	tag_injector_tags_props_set(props);
+	level_props_profile = props;
+	return props;
+}
+
 static void multiplayer_tags_loaded(char const *scenario_name, long profile, int multiplayer)
 {
 	custom_profile = profile;
@@ -1962,6 +1985,7 @@ static int vault_profile_has_enabled_tags(long profile)
 the injector reads first) and the profile, either of which may be none */
 extern int forge_ai_saved_actor_count(void);
 extern void forge_ai_saved_clear(void);
+extern void forge_level_local_tags_clear(void);
 
 /* a Forge map's AI's tags come from Forge's own pack, else (a player who has
 never opened Forge's menu) the randomizer's: the same maps' same tags */
@@ -2116,6 +2140,7 @@ static int forge_level_tags(char const *scenario_name, int firefight, long *forg
 	extern char const *forge_tag_profile_folder(void);
 	int saved = is_saved_forge_map(scenario_name);
 	long baked;
+	long props;
 	long profile = NONE;
 
 	/* (a client that joined a Forge game is told so a moment later: as
@@ -2134,7 +2159,10 @@ static int forge_level_tags(char const *scenario_name, int firefight, long *forg
 	*forge_baked = NONE;
 	/* (the last level's actors are not this one's) */
 	if (!saved)
+	{
 		forge_ai_saved_clear();
+		forge_level_local_tags_clear();
+	}
 	if (!g_forge_session_enabled && !saved && !forge_session_import)
 		return 0;
 	baked = saved ? forge_level_baked_open(scenario_name) : NONE;
@@ -2150,13 +2178,16 @@ static int forge_level_tags(char const *scenario_name, int firefight, long *forg
 			profile = NONE;
 	}
 	tag_injector_tags_baked_set(baked);
+	/* (and the props, which Forge places and a saved map may have) */
+	props = level_props();
 	if (firefight)
 	{
 		*forge_profile = profile;
 		*forge_baked = baked;
 		return 0;
 	}
-	if (profile != NONE || baked != NONE || forge_session_import || (saved && forge_ai_saved_actor_count() > 0))
+	if (profile != NONE || baked != NONE || props != NONE || forge_session_import ||
+		(saved && forge_ai_saved_actor_count() > 0))
 		forge_vault_tags_loaded(scenario_name, profile);
 	return 1;
 }
@@ -2248,6 +2279,9 @@ static void seed_firefight_donor(struct tag_import_donor *donor)
 	{
 		"effects\\coop teleport",
 		"characters\\floodcarrier\\effects\\carrier burst",
+		/* (a carrier form's pop: the Flood's drop bursts with it) */
+		"characters\\floodcarrier\\effects\\body destroyed",
+		"effects\\flood bit skin explode",
 		"weapons\\plasma grenade\\effects\\explosion",
 		"weapons\\frag grenade\\effects\\explosion",
 	};
@@ -2410,13 +2444,37 @@ static void gather_firefight(char const *leaf)
 		char const *pack = !_stricmp(other, "wizard") ? "watanoge_skulls" : RANDOMIZER_PACK;
 		struct tag_import_donor *donor;
 
-		if (leaf && !_stricmp(other, leaf))
+		/* (the level's own map has these already; an MCC map of the same
+		name has not) */
+		if (leaf && !mcc_vanilla_level && !_stricmp(other, leaf))
 			continue;
 		donor = tag_import_open(pack, other);
 		if (!donor)
 			continue;
 		seed_firefight_donor(donor);
 		tag_import_release(donor);
+	}
+	/* (and the ordnance pod: the props' capsule, else Two Betrayals' storage
+	crate, from the game modes' pack, which keeps its pixels:
+	firefight_spawner.c) */
+	if (level_props_profile == NONE && tag_loaded('scen', "scenery\\c_storage\\c_storage") == NONE)
+	{
+		static struct tag_import_root const pod_root = { 'scen', "scenery\\c_storage\\c_storage" };
+
+		tag_import_roots(GAME_MODES_PACK, "c40", &pod_root, 1);
+	}
+	/* (and Keyes' Flood form, which the Flood's drops grow out of the floor
+	as, and the gore it throws: from Keyes, firefight_spawner.c's Flood drop) */
+	if (tag_loaded('scen', "characters\\flood_captain\\flood_captain") == NONE)
+	{
+		static struct tag_import_root const flood_drop_roots[] =
+		{
+			{ 'scen', "characters\\flood_captain\\flood_captain" },
+			{ 'effe', "characters\\flood_captain\\punchspray" },
+			{ 'effe', "effects\\flood bit death" },
+		};
+
+		tag_import_roots(RANDOMIZER_PACK, "d20", flood_drop_roots, (int)NUMBEROF(flood_drop_roots));
 	}
 }
 
@@ -2455,6 +2513,29 @@ void randomizer_custom_edition_tags_loaded(char const *scenario_name)
 	game_modes_tags_loaded(scenario_name);
 }
 
+/* an MCC map's level (cache_files.c), as any other's (randomizer_tags_loaded)
+but for what is this build's maps' and Custom Edition's alone: no randomizer,
+game modes or co-op share, and Forge on a multiplayer map only. Its Tag Injector profiles are played: a
+multiplayer game's (the host's share), a Firefight variant's, and a campaign
+profile played alone; Firefight's campaign weapons and enemies, and a
+campaign level's skulls (the skull the enemies carry, Outbreak's Flood and
+Scarab's projectiles), as before. TRUE for a Firefight game or a campaign
+level, whose skulls are played then (skulls_level_loaded) */
+boolean randomizer_mcc_tags_loaded(char const *scenario_name, long scenario_tag_index)
+{
+	boolean firefight = firefight_wanted();
+	boolean solo = scenario_tag_index != NONE &&
+		scenario_definition_get(scenario_tag_index)->type == _scenario_type_solo;
+
+	randomizer_tags_unloaded();
+	mcc_vanilla_level = 1;
+	mcc_solo_level = solo && !firefight;
+	randomizer_tags_loaded(scenario_name);
+	mcc_vanilla_level = 0;
+	mcc_solo_level = 0;
+	return firefight || solo;
+}
+
 void randomizer_tags_loaded(char const *scenario_name)
 {
 	struct network_game *game = network_game_get_game();
@@ -2471,6 +2552,7 @@ void randomizer_tags_loaded(char const *scenario_name)
 	long campaign_profile = NONE;
 	long forge_profile = NONE;
 	long forge_baked = NONE;
+	long props = NONE;
 
 	randomizer_tags_unloaded();
 	extra_enemies = 1;
@@ -2491,13 +2573,27 @@ void randomizer_tags_loaded(char const *scenario_name)
 	}
 #endif
 #if OPENCE_ENABLE_FORGE
-	if (forge_level_tags(scenario_name, firefight, &forge_profile, &forge_baked))
+	/* (an MCC multiplayer map is Forge's as a Custom Edition one is: a
+	Forge session's, or a map Forge saved on one, mcc_maps\forge\<name>, its
+	bake and local tags with it. An MCC campaign level never is: none of a
+	saved Forge map's of the same name, nor the last level's actors) */
+	if (mcc_vanilla_level && mcc_solo_level)
+	{
+		forge_ai_saved_clear();
+		forge_level_local_tags_clear();
+	}
+	else if (forge_level_tags(scenario_name, firefight, &forge_profile, &forge_baked))
 		return;
 #endif
 	/* (a Firefight variant's Tag Injector profile, shared by its host; a
-	saved Forge map's bake stays beside it) */
+	saved Forge map's bake stays beside it. An MCC map's too) */
 	if (firefight && forge_profile == NONE)
 		forge_profile = tag_multiplayer_firefight_level_profile(scenario_name);
+	/* (the props: Firefight's ordnance capsule, and a saved map's weapon
+	racks; an MCC map's too, for its capsule. Without them the pod is the
+	storage crate, gather_firefight) */
+	if (firefight)
+		props = level_props();
 	/* (a multiplayer game's shared weapons, on the game's own multiplayer
 	maps) */
 	if (!firefight)
@@ -2528,8 +2624,16 @@ void randomizer_tags_loaded(char const *scenario_name)
 			return;
 		}
 	}
+	/* (an MCC map's campaign level is one, by its own name; its multiplayer
+	levels play no game modes, which are this build's maps') */
+	if (mcc_vanilla_level && !firefight)
+	{
+		if (!mcc_solo_level)
+			return;
+		snprintf(leaf, sizeof(leaf), "%s", scenario_name ? tag_name_strip_path(scenario_name) : "mcc");
+	}
 	/* (a multiplayer game's mode's: Floodfection's burst and forms) */
-	if (!campaign_leaf(scenario_name, leaf, sizeof(leaf)))
+	else if (!campaign_leaf(scenario_name, leaf, sizeof(leaf)))
 	{
 		if (!firefight)
 		{
@@ -2549,7 +2653,8 @@ void randomizer_tags_loaded(char const *scenario_name)
 	host alone swaps with) */
 	if (!firefight && !game && !network_game_distributed_client() && !community_challenge_running())
 		campaign_profile = tag_campaign_level_profile();
-	else if (!firefight && !community_challenge_running())
+	/* (an MCC map's co-op game: as it is, tag_multiplayer_campaign_takes) */
+	else if (!firefight && !community_challenge_running() && !mcc_vanilla_level)
 	{
 		campaign_profile = tag_campaign_level_profile_shared(tag_multiplayer_campaign_level_profile(scenario_name),
 			network_game_distributed_client() ? NONE : tag_multiplayer_game_campaign_profile());
@@ -2558,8 +2663,9 @@ void randomizer_tags_loaded(char const *scenario_name)
 	{
 		memset(&current, 0, sizeof(current));
 	}
-	else if (firefight)
+	else if (firefight || mcc_vanilla_level)
 	{
+		/* (the randomizer plays this build's campaign alone) */
 		memset(&current, 0, sizeof(current));
 		randomize = 0;
 	}
@@ -2635,6 +2741,9 @@ void randomizer_tags_loaded(char const *scenario_name)
 			error(_error_silent, "randomizer: the host's Tag Injector profile is not on this machine: the level "
 				"will not match the host's");
 	}
+	/* (the props alone: read now as a profile's are) */
+	if (custom_profile == NONE && forge_baked == NONE && props != NONE)
+		stock_hud_count = tag_injector_tags_read(NONE, stock_huds, STOCK_HUD_MAX);
 	if (tag_import_begin())
 	{
 		if (firefight)
@@ -2650,7 +2759,7 @@ void randomizer_tags_loaded(char const *scenario_name)
 		tag_import_end();
 	}
 	/* (its tags, after those) */
-	if (custom_profile != NONE || forge_baked != NONE)
+	if (custom_profile != NONE || forge_baked != NONE || props != NONE)
 		custom_root_count = tag_injector_tags_load(custom_profile, custom_roots, custom_root_tags, CUSTOM_ROOT_MAX);
 	if (campaign_profile != NONE)
 	{
@@ -2746,6 +2855,15 @@ boolean randomizer_firefight_weapon_power(
 
 void randomizer_tags_unloaded(void)
 {
+#if OPENCE_ENABLE_FORGE
+	/* (a saved Forge map's general settings are its level's alone: read
+	again as one loads, forge_level_baked_open) */
+	{
+		extern void forge_map_settings_level_loading(char const *saved_state_text);
+
+		forge_map_settings_level_loading(NULL);
+	}
+#endif
 	if (pods_swapped || pods_left_out || pods_kept)
 	{
 		error(_error_silent, "randomizer: infection forms: %ld swapped, %ld left out, %ld placed as they were",
@@ -2762,6 +2880,7 @@ void randomizer_tags_unloaded(void)
 	loadout_ready = 0;
 	loadout_imports = 0;
 	tag_injector_tags_unloaded();
+	level_props_profile = NONE;
 	tag_multiplayer_level_unloaded();
 	tag_campaign_level_unloaded();
 	campaign_swapped_variant = NONE;

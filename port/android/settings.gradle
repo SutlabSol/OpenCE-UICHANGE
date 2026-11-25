@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "halo-android"
 include ":app"
+// the old app's (com.halo.decomp's) last update, which moves its players to the app: bridge/build.gradle
+include ":bridge"

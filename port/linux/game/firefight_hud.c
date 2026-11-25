@@ -25,6 +25,7 @@ Halo 1 CE-styled Firefight HUD module:
 #include "interface/hud_messaging.h"
 #include "interface/interface.h"
 #include "math/real_math.h"
+#include "memory/data.h"
 #include "objects/objects.h"
 #include "rasterizer/rasterizer.h"
 #include "render/render.h"
@@ -709,6 +710,98 @@ static void format_elapsed_time(long elapsed_ticks, char *out_buf, size_t buf_si
 		snprintf(out_buf, buf_size, "%02ld:%02ld", minutes, seconds);
 }
 
+/* ---------- the ordnance pods' markers (port) */
+
+/* a player's place among the game's players (those not quit, by their
+index, as every machine has them); NONE for none */
+static short firefight_hud_player_order(long player_index)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+	short order = 0;
+
+	if (!player_data || player_index == NONE)
+		return NONE;
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		if (iterator.datum_index == player_index)
+			return order;
+		if (!player->quit_out_of_game)
+			order++;
+	}
+	return NONE;
+}
+
+/* whether this view's player marks the pod: its own (each pod's player, by
+its place among the players: firefight_spawner.c's), or everyone's; from a
+host from before, its own set of ordnance_pods_per_player (a ninth player
+sharing the first's), else all of them */
+static boolean firefight_hud_own_pod(short pod, short pods)
+{
+	short per_player = ff_state.ordnance_pods_per_player;
+	byte owner = ff_state.ordnance_pod_owners[pod];
+	short order;
+
+	if (render.local_player_index == NONE)
+		return TRUE;
+	order = firefight_hud_player_order(local_player_get_player_index(render.local_player_index));
+	if (order == NONE)
+		return TRUE;
+	if (per_player > 0)
+	{
+		short sets = (short)((pods + per_player - 1) / per_player);
+
+		return sets <= 1 || pod / per_player == order % sets;
+	}
+	return owner == FIREFIGHT_ORDNANCE_POD_ANYONE ||
+		owner == (byte)MIN(order, FIREFIGHT_ORDNANCE_POD_ANYONE - 1);
+}
+
+/* whether this view's player has been to the pod (within 2.5 units, since
+it landed: the weapon on it taken, or seen and left), its marker gone till
+the next drop */
+#define FF_HUD_POD_VISIT_DISTANCE 2.5f
+/* (so long after its own landing: its group's, firefight_ordnance_pod_land_time) */
+#define FF_HUD_POD_LANDED_TICKS (TICKS_PER_SECOND)
+static boolean firefight_hud_pod_visited(short pod)
+{
+	static long drop_time[MAXIMUM_LOCAL_PLAYERS];
+	static unsigned long visited[MAXIMUM_LOCAL_PLAYERS][(FIREFIGHT_MAX_ORDNANCE_PODS + 31) / 32];
+	short local = render.local_player_index;
+	struct player_datum *player;
+	struct object_datum *unit;
+	real_point3d const *spot = &ff_state.ordnance_pod_positions[pod];
+
+	if (local < 0 || local >= MAXIMUM_LOCAL_PLAYERS || pod < 0 || pod >= FIREFIGHT_MAX_ORDNANCE_PODS)
+		return FALSE;
+	if (drop_time[local] != ff_state.ordnance_pod_drop_time)
+	{
+		drop_time[local] = ff_state.ordnance_pod_drop_time;
+		csmemset(visited[local], 0, sizeof(visited[local]));
+	}
+	if (visited[local][pod >> 5] & (1UL << (pod & 31)))
+		return TRUE;
+	if (firefight_ordnance_pod_spent(pod))
+		return TRUE;
+	if (ff_state.ordnance_pod_drop_time <= 0 ||
+		game_time_get() - firefight_ordnance_pod_land_time(pod) < FF_HUD_POD_LANDED_TICKS)
+	{
+		return FALSE;
+	}
+	player = (struct player_datum *)datum_try_and_get(player_data, local_player_get_player_index(local));
+	unit = player ? object_try_and_get(player->unit_index) : NULL;
+	if (!unit)
+		return FALSE;
+	if (distance2d((real_point2d const *)&unit->object.position, (real_point2d const *)spot) < FF_HUD_POD_VISIT_DISTANCE &&
+		fabs(unit->object.position.z - spot->z) < 2.0f)
+	{
+		visited[local][pod >> 5] |= 1UL << (pod & 31);
+		return TRUE;
+	}
+	return FALSE;
+}
+
 /* ---------- 3D -> 2D Navpoints (Stragglers & Resupply Drops) */
 
 static void draw_world_navpoint(
@@ -1184,8 +1277,22 @@ static void format_banner_strings(
 		snprintf(sub_out, sub_size, "ROCKETS, SNIPER & OVERSHIELD DEPLOYED");
 		break;
 	case _ff_banner_dropship_inbound:
-		snprintf(title_out, title_size, "DROPSHIP INBOUND");
-		snprintf(sub_out, sub_size, "PHANTOM / PELICAN INSERTION DETECTED");
+		/* (its data what brings it: enum firefight_drop_carrier) */
+		if (banner_data == _ff_drop_carrier_flood)
+		{
+			snprintf(title_out, title_size, "THE FLOOD IS EMERGING");
+			snprintf(sub_out, sub_size, "A FLOOD FORM IS GROWING OUT OF THE GROUND");
+		}
+		else if (banner_data == _ff_drop_carrier_pelican)
+		{
+			snprintf(title_out, title_size, "PELICAN INBOUND");
+			snprintf(sub_out, sub_size, "UNSC INSERTION DETECTED");
+		}
+		else
+		{
+			snprintf(title_out, title_size, "DROPSHIP INBOUND");
+			snprintf(sub_out, sub_size, "COVENANT SPIRIT INSERTION DETECTED");
+		}
 		break;
 	case _ff_banner_vehicle_deployed:
 		snprintf(title_out, title_size, "VEHICLE DEPLOYED");
@@ -1208,6 +1315,412 @@ static void format_banner_strings(
 	}
 }
 
+/* ---------- Objectives (firefight_objectives.c): their cards, their notice
+and their markers, as the host's view has them */
+
+/* (Purge's enemies marked within this of this view's player) */
+#define FF_OBJECTIVE_UNIT_MARK_DISTANCE 30.0f
+
+static void draw_objective_card(
+	long font_index,
+	short line_height,
+	real vx0,
+	real vy0,
+	real scale,
+	real y,
+	char const *header,
+	char const *title,
+	char const *status,
+	boolean warn)
+{
+	real base_x = 14.0f;
+	real card_w = 176.0f;
+	real card_h = 30.0f;
+	real_argb_color white = { 1.0f, 0.95f, 0.95f, 0.95f };
+	real_argb_color cyan = { 1.0f, 0.42f, 0.78f, 1.0f };
+	real_argb_color gold = { 1.0f, 1.0f, 0.85f, 0.25f };
+
+	ff_draw_box(vx0, vy0, scale, base_x, y, base_x + card_w, y + card_h, 0.0f,
+		warn ? FF_HUD_WARN_FILL : FF_HUD_PANEL_FILL, warn ? FF_HUD_WARN_EDGE : FF_HUD_PANEL_EDGE);
+	ff_draw_text(font_index, line_height, vx0, vy0, scale, header,
+		base_x + 6.0f, base_x + 70.0f, y + 2.0f, 0.42f, _ff_text_left, &cyan);
+	ff_draw_text(font_index, line_height, vx0, vy0, scale, status,
+		base_x + 70.0f, base_x + card_w - 6.0f, y + 2.0f, 0.42f, _ff_text_right, &gold);
+	ff_draw_text(font_index, line_height, vx0, vy0, scale, title,
+		base_x + 6.0f, base_x + card_w - 6.0f, y + 14.0f, 0.5f, _ff_text_left, &white);
+}
+
+/* this view's player's absolute index, NONE for none */
+static short objective_local_absolute(void)
+{
+	long player_index;
+
+	if (render.local_player_index == NONE)
+		return NONE;
+	player_index = local_player_get_player_index(render.local_player_index);
+	return player_index != NONE ? (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index) : NONE;
+}
+
+/* whether this view's player is the one carrying (an absolute index) */
+static boolean objective_local_carrier(short carrier)
+{
+	long player_index;
+
+	if (carrier == NONE || render.local_player_index == NONE)
+		return FALSE;
+	player_index = local_player_get_player_index(render.local_player_index);
+	return player_index != NONE && DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index) == carrier;
+}
+
+/* this view's player's unit, NONE for none */
+static long objective_local_unit(void)
+{
+	long player_index;
+	struct player_datum *player;
+
+	if (render.local_player_index == NONE)
+		return NONE;
+	player_index = local_player_get_player_index(render.local_player_index);
+	player = player_index != NONE ? (struct player_datum *)datum_try_and_get(player_data, player_index) : NULL;
+	return player && object_try_and_get(player->unit_index) ? player->unit_index : NONE;
+}
+
+/* the carrier's unit (an absolute player index), NONE for none */
+static long objective_carrier_unit(short carrier)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+
+	if (carrier == NONE || !player_data)
+		return NONE;
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		if ((short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index) == carrier)
+			return object_try_and_get(player->unit_index) ? player->unit_index : NONE;
+	}
+	return NONE;
+}
+
+/* where a carried objective is shown: over its carrier (a rider's put away,
+its own place left where they got in), else where it lies; FALSE for none */
+static boolean objective_item_position(short carrier, short item, real_point3d *at)
+{
+	long unit = objective_carrier_unit(carrier);
+	long object_index;
+
+	if (unit != NONE)
+	{
+		struct object_datum *object = object_get(unit);
+
+		object_get_origin(unit, at);
+		at->z += object->object.bounding_sphere_radius + 0.6f;
+		return TRUE;
+	}
+	object_index = item != NONE ? firefight_objectives_object(item) : NONE;
+	if (object_index == NONE || !object_try_and_get(object_index))
+		return FALSE;
+	object_get_origin(object_index, at);
+	at->z += 0.8f;
+	return TRUE;
+}
+
+/* (a mark of the view's: an object lying about, its absolute index) drawn
+over it, with its label */
+static void draw_objective_object_mark(long font_index, short line_height, real scale, short absolute, char const *label,
+	pixel32 box_color, real_argb_color const *text_color)
+{
+	long object_index = absolute != NONE ? firefight_objectives_object(absolute) : NONE;
+	struct object_datum *object = object_index != NONE ? object_try_and_get(object_index) : NULL;
+	real_point3d at;
+
+	if (!object || object->object.parent_object_index != NONE)
+		return;
+	object_get_origin(object_index, &at);
+	at.z += 0.6f;
+	draw_world_navpoint(font_index, line_height, scale, &at, label, box_color, text_color, FALSE);
+}
+
+static void draw_objectives(
+	long font_index,
+	short line_height,
+	real vx0,
+	real vy0,
+	real vw,
+	real scale,
+	real notice_top)
+{
+	struct firefight_objectives_view const *view = firefight_objectives_view_get();
+	real_argb_color white = { 1.0f, 0.96f, 0.98f, 1.0f };
+	real_argb_color red = { 1.0f, 1.0f, 0.35f, 0.35f };
+	real_argb_color gold = { 1.0f, 1.0f, 0.85f, 0.25f };
+	char title[96];
+	char status[64];
+	real y = 106.0f + (real)PIN(ff_state.generator_count, 0, FIREFIGHT_MAX_GENERATORS) * 28.0f;
+
+	/* the cards, under the generators' */
+	if (firefight_objectives_round_card(title, sizeof(title), status, sizeof(status)))
+	{
+		draw_objective_card(font_index, line_height, vx0, vy0, scale, y, "WAVE", title, status,
+			view->round_state == _ff_objective_failed);
+		y += 34.0f;
+	}
+	if (firefight_objectives_set_card(title, sizeof(title), status, sizeof(status), objective_local_absolute()))
+	{
+		draw_objective_card(font_index, line_height, vx0, vy0, scale, y, "ROUND", title, status,
+			view->set_state == _ff_objective_failed || (view->set_flags & FF_OBJECTIVE_CONTESTED));
+		/* (a hold's, a generator's, the marines' life: a bar under it) */
+		if (view->set_state == _ff_objective_running && view->set_goal > 0 &&
+			view->set_kind != _ff_set_objective_flag && view->set_kind != _ff_set_objective_purge &&
+			view->set_kind != _ff_set_objective_target &&
+			(view->set_kind != _ff_set_objective_bomb || (view->set_flags & FF_OBJECTIVE_PLANTED)))
+		{
+			real fraction = PIN((real)view->set_progress / (real)view->set_goal, 0.0f, 1.0f);
+
+			ff_draw_quad(vx0, vy0, scale, 20.0f, y + 26.0f, 184.0f, y + 28.0f, FF_HUD_BAR_BG);
+			ff_draw_quad(vx0, vy0, scale, 20.0f, y + 26.0f, 20.0f + 164.0f * fraction, y + 28.0f,
+				view->set_kind == _ff_set_objective_generator ? FF_HUD_WARN_EDGE : FF_HUD_LOCK_BAR);
+		}
+	}
+
+	/* the notice: what started, what was broken and by whom, what was won */
+	if (view->notice_ticks > 0 && view->notice[0])
+	{
+		real bw = 300.0f;
+		real bx = (vw / scale - bw) * 0.5f;
+		/* (under the banners shown: a round's countdown and its skulls') */
+		real by = MAX(96.0f, notice_top);
+
+		ff_draw_box(vx0, vy0, scale, bx, by, bx + bw, by + 16.0f, 0.0f, FF_HUD_PANEL_FILL, FF_HUD_LOCK_BAR);
+		ff_draw_text(font_index, line_height, vx0, vy0, scale, view->notice,
+			bx + 6.0f, bx + bw - 6.0f, by + 2.0f, 0.48f, _ff_text_center, &white);
+	}
+
+	/* the markers */
+	if (view->round_state == _ff_objective_running && view->round_kind == _ff_round_objective_kill_first &&
+		view->round_target != NONE)
+	{
+		long target = firefight_objectives_object(view->round_target);
+
+		if (target != NONE && object_try_and_get_and_verify_type(target, _object_mask_unit))
+			draw_hostile_navpoint(font_index, line_height, scale, target, hostile_nav_arrow_index(), "FIRST", &red);
+	}
+	/* (Vehicle kills' vehicle, while this view's player is not in it) */
+	if (view->round_state == _ff_objective_running && view->round_kind == _ff_round_objective_vehicle_kills &&
+		view->round_target != NONE)
+	{
+		long vehicle = firefight_objectives_object(view->round_target);
+		struct object_datum *object = vehicle != NONE ? object_try_and_get_and_verify_type(vehicle, _object_mask_vehicle) : NULL;
+		long player_index = render.local_player_index != NONE ? local_player_get_player_index(render.local_player_index) : NONE;
+		struct player_datum *player = player_index != NONE ? (struct player_datum *)datum_try_and_get(player_data, player_index) : NULL;
+		struct object_datum *unit = player ? object_try_and_get(player->unit_index) : NULL;
+
+		if (object && !TEST_FLAG(object->object.damage_flags, _object_dead_bit) &&
+			(!unit || unit->object.parent_object_index != vehicle))
+		{
+			real_point3d at;
+
+			object_get_origin(vehicle, &at);
+			at.z += 1.5f;
+			draw_world_navpoint(font_index, line_height, scale, &at, view->round_label, FF_HUD_LOCK_BAR, &gold, FALSE);
+		}
+	}
+	/* (Travel's point; over a round objective's marker, should they share
+	a spot, higher) */
+	if (view->round_state == _ff_objective_running && view->round_kind == _ff_round_objective_travel)
+	{
+		real_point3d at = view->round_point;
+
+		at.z += 1.0f;
+		if (view->set_state == _ff_objective_running &&
+			(distance3d(&view->round_point, &view->set_site) < 4.0f ||
+				distance3d(&view->round_point, &view->set_goal_point) < 4.0f))
+		{
+			at.z += 1.6f;
+		}
+		draw_world_navpoint(font_index, line_height, scale, &at, "GO HERE", FF_HUD_LOCK_BAR, &gold, FALSE);
+	}
+	/* (Use X only's weapons lying about, while this view's player has none
+	of it: one dropped dying, a pod's) */
+	if (view->round_state == _ff_objective_running && view->round_kind == _ff_round_objective_weapon_only)
+	{
+		long unit = objective_local_unit();
+		short index;
+		long tag = NONE;
+
+		for (index = 0; index < FF_OBJECTIVE_WEAPON_MARKS && tag == NONE; index++)
+		{
+			long weapon = view->round_marks[index] != NONE ? firefight_objectives_object(view->round_marks[index]) : NONE;
+			struct object_datum *object = weapon != NONE ? object_try_and_get_and_verify_type(weapon, _object_mask_weapon) : NULL;
+
+			if (object)
+				tag = object->definition_index;
+		}
+		if (tag != NONE && (unit == NONE || !unit_has_weapon_definition_index(unit, tag)))
+		{
+			for (index = 0; index < FF_OBJECTIVE_WEAPON_MARKS; index++)
+			{
+				draw_objective_object_mark(font_index, line_height, scale, view->round_marks[index], view->round_label,
+					FF_HUD_LOCK_BAR, &gold);
+			}
+		}
+	}
+	if (view->set_state != _ff_objective_running)
+		return;
+	switch (view->set_kind)
+	{
+	case _ff_set_objective_target:
+	{
+		long target = firefight_objectives_object(view->set_target);
+
+		if (target != NONE && object_try_and_get_and_verify_type(target, _object_mask_unit))
+			draw_hostile_navpoint(font_index, line_height, scale, target, hostile_nav_arrow_index(), "VIP", &red);
+		break;
+	}
+	case _ff_set_objective_generator:
+	{
+		real_point3d at = view->set_site;
+
+		at.z += 1.25f;
+		draw_world_navpoint(font_index, line_height, scale, &at, "ENEMY GENERATOR", FF_HUD_WARN_EDGE, &red, FALSE);
+		break;
+	}
+	case _ff_set_objective_purge:
+	{
+		real_point3d at = view->set_site;
+		long unit = objective_local_unit();
+		real_point3d from;
+		short index;
+
+		at.z += 1.0f;
+		draw_world_navpoint(font_index, line_height, scale, &at, "ENEMY BASE", FF_HUD_WARN_EDGE, &red, FALSE);
+		/* (its enemies, each, near enough) */
+		if (unit == NONE)
+			break;
+		object_get_origin(unit, &from);
+		for (index = 0; index < FF_OBJECTIVE_UNIT_MARKS; index++)
+		{
+			long enemy = view->set_units[index] != NONE ? firefight_objectives_object(view->set_units[index]) : NONE;
+			struct object_datum *object = enemy != NONE ? object_try_and_get_and_verify_type(enemy, _object_mask_unit) : NULL;
+			real_point3d head;
+
+			if (!object || TEST_FLAG(object->object.damage_flags, _object_dead_bit))
+				continue;
+			object_get_origin(enemy, &head);
+			if (distance3d(&head, &from) > FF_OBJECTIVE_UNIT_MARK_DISTANCE)
+				continue;
+			head.z += object->object.bounding_sphere_radius * 1.3f + 0.3f;
+			draw_world_navpoint(font_index, line_height, scale, &head, "ELIMINATE", FF_HUD_WARN_EDGE, &red, FALSE);
+		}
+		break;
+	}
+	case _ff_set_objective_data_link:
+	{
+		real_point3d at = view->set_site;
+
+		at.z += 1.0f;
+		draw_world_navpoint(font_index, line_height, scale, &at, "DATA LINK",
+			(view->set_flags & FF_OBJECTIVE_CONTESTED) ? FF_HUD_WARN_EDGE : FF_HUD_LOCK_BAR,
+			(view->set_flags & FF_OBJECTIVE_CONTESTED) ? &red : &gold, FALSE);
+		break;
+	}
+	case _ff_set_objective_flag:
+	{
+		real_point3d at = view->set_goal_point;
+
+		at.z += 1.0f;
+		if (objective_local_carrier(view->set_carrier))
+			draw_world_navpoint(font_index, line_height, scale, &at, "CAPTURE", FF_HUD_LOCK_BAR, &gold, FALSE);
+		else
+		{
+			real_point3d flag_at;
+
+			if (objective_item_position(view->set_carrier, view->set_target, &flag_at))
+			{
+				draw_world_navpoint(font_index, line_height, scale, &flag_at,
+					view->set_carrier != NONE ? "FLAG CARRIER" : "FLAG", FF_HUD_LOCK_BAR, &gold, FALSE);
+			}
+		}
+		break;
+	}
+	case _ff_set_objective_collect:
+	{
+		real_point3d at = view->set_site;
+		short index;
+
+		at.z += 1.6f;
+		draw_world_navpoint(font_index, line_height, scale, &at, "DEPOSIT", FF_HUD_LOCK_BAR, &gold, FALSE);
+		/* (the skulls a player dropped, dying) */
+		for (index = 0; index < FF_OBJECTIVE_DROP_MARKS; index++)
+		{
+			char label[32];
+
+			snprintf(label, sizeof(label), "%d DROPPED SKULL%s", (int)view->set_drop_values[index],
+				view->set_drop_values[index] == 1 ? "" : "S");
+			draw_objective_object_mark(font_index, line_height, scale, view->set_drops[index], label,
+				FF_HUD_LOCK_BAR, &gold);
+		}
+		break;
+	}
+	case _ff_set_objective_bomb:
+	{
+		real_point3d at = view->set_site;
+
+		at.z += 1.0f;
+		if (view->set_flags & FF_OBJECTIVE_PLANTED)
+		{
+			draw_world_navpoint(font_index, line_height, scale, &at, "BOMB",
+				(view->set_flags & FF_OBJECTIVE_DISARMING) ? FF_HUD_WARN_EDGE : FF_HUD_LOCK_BAR,
+				(view->set_flags & FF_OBJECTIVE_DISARMING) ? &red : &gold, FALSE);
+			break;
+		}
+		draw_world_navpoint(font_index, line_height, scale, &at, "TARGET", FF_HUD_LOCK_BAR, &gold, FALSE);
+		if (!objective_local_carrier(view->set_carrier))
+		{
+			real_point3d bomb_at;
+
+			if (objective_item_position(view->set_carrier, view->set_target, &bomb_at))
+			{
+				draw_world_navpoint(font_index, line_height, scale, &bomb_at,
+					view->set_carrier != NONE ? "BOMB CARRIER" : "BOMB", FF_HUD_LOCK_BAR, &gold, FALSE);
+			}
+		}
+		break;
+	}
+	case _ff_set_objective_rescue:
+		if (!(view->set_flags & FF_OBJECTIVE_RESCUED))
+		{
+			real_point3d at = view->set_site;
+
+			at.z += 1.0f;
+			draw_world_navpoint(font_index, line_height, scale, &at, "RESCUE", 0xE040E070, &white, FALSE);
+		}
+		break;
+	case _ff_set_objective_oddball:
+	{
+		long target = firefight_objectives_object(view->set_target);
+
+		if (target == NONE || objective_local_carrier(view->set_carrier))
+			break;
+		if (object_try_and_get_and_verify_type(target, _object_mask_unit))
+			draw_hostile_navpoint(font_index, line_height, scale, target, hostile_nav_arrow_index(), "SKULL CARRIER", &red);
+		else
+		{
+			real_point3d at;
+
+			if (objective_item_position(view->set_carrier, view->set_target, &at))
+			{
+				draw_world_navpoint(font_index, line_height, scale, &at, view->set_carrier != NONE ? "SKULL HOLDER" : "SKULL",
+					FF_HUD_LOCK_BAR, &gold, FALSE);
+			}
+		}
+		break;
+	}
+	default:
+		break;
+	}
+}
+
 /* ---------- Main Firefight HUD Draw */
 
 void firefight_hud_draw(void)
@@ -1222,6 +1735,8 @@ void firefight_hud_draw(void)
 	real_argb_color red = { 1.0f, 1.0f, 0.35f, 0.35f };
 	real_argb_color green = { 1.0f, 0.35f, 1.0f, 0.45f };
 	boolean prep_phase;
+	/* (the banners' bottom: the objectives' notice goes under it) */
+	real banners_bottom = 0.0f;
 
 	if (!firefight_active())
 		return;
@@ -1281,6 +1796,7 @@ void firefight_hud_draw(void)
 
 			ff_draw_box_with_wells(vx0, vy0, scale, bx, sby, bx + bw, sby + 34.0f, 17.0f, inset, FF_HUD_WARN_FILL,
 				s_ff_skull_hud_defs[round_bits[0]].badge_color);
+			banners_bottom = sby + 34.0f + 4.0f;
 			ff_draw_banner_skulls(vx0, vy0, scale, bx, bx + bw, sby + 8.0f, 18.0f, round_bits, round_count);
 			snprintf(sk_title, sizeof(sk_title), "%s: ", round_count == 1 ? "SKULL ACTIVE" : "SKULLS ACTIVE");
 			for (name = 0; name < round_count; name++)
@@ -1343,6 +1859,8 @@ void firefight_hud_draw(void)
 
 	/* 4. Generator Defense Status Bars */
 	draw_generator_bars(font_index, line_height, vx0, vy0, scale);
+	/* (and the objectives', under them) */
+	draw_objectives(font_index, line_height, vx0, vy0, vw, scale, banners_bottom);
 
 	/* 5. 3D->2D World-to-Screen Navpoints for Stragglers (<= 3 enemies left), Dropships & Resupply Drops */
 	if (ff_state.straggler_navpoints_active && ff_state.enemies_alive > 0 && ff_state.enemies_alive <= FIREFIGHT_STRAGGLER_THRESHOLD)
@@ -1374,19 +1892,49 @@ void firefight_hud_draw(void)
 			font_index, line_height, scale,
 			ff_state.active_dropship.vehicle_index,
 			hostile_nav_arrow_index(),
-			"DROPSHIP",
+			/* (a client is told of the ship alone: its tag says which) */
+			strstr(tag_get_name(object_get(ff_state.active_dropship.vehicle_index)->definition_index), "pelican") ?
+				"PELICAN" : "DROPSHIP",
 			&red);
+	}
+	/* (the Flood's drop, Keyes' form growing: each machine's own scenery) */
+	{
+		long flood_form = firefight_flood_drop_object();
+
+		if (flood_form != NONE && object_try_and_get_and_verify_type(flood_form, _object_mask_scenery))
+			draw_hostile_navpoint(font_index, line_height, scale, flood_form, hostile_nav_arrow_index(), "FLOOD", &red);
 	}
 
 	if (ff_state.ordnance_navpoint_ticks > 0)
 	{
-		real_point3d ord_pos = ff_state.last_ordnance_position;
-		ord_pos.z += 0.4f;
-		draw_world_navpoint(
-			font_index, line_height, scale,
-			&ord_pos,
-			ff_state.last_ordnance_is_heavy ? "HEAVY ORDNANCE" : "ORDNANCE",
-			0xE040E070, &green, TRUE);
+		/* (the pods of the drop, where each lands: the host's spots, which
+		its clients have too, firefight_network.c; port: this player's own
+		set alone, less those it has been to since they landed) */
+		short pods = (short)PIN(ff_state.ordnance_pod_count, 1, FIREFIGHT_MAX_ORDNANCE_PODS);
+		short pod;
+
+		for (pod = 0; pod < pods; pod++)
+		{
+			real_point3d ord_pos = ff_state.ordnance_pod_positions[pod];
+			char const *label;
+
+			if (!firefight_hud_own_pod(pod, pods) || firefight_hud_pod_visited(pod))
+				continue;
+			switch (ff_state.ordnance_pod_kinds[pod])
+			{
+			case _ff_pod_kind_ammo_crate: label = "AMMO"; break;
+			case _ff_pod_kind_health: label = "HEALTH"; break;
+			case _ff_pod_kind_overshield: label = "OVERSHIELD"; break;
+			default: label = ff_state.last_ordnance_is_heavy ? "HEAVY ORDNANCE" : "ORDNANCE"; break;
+			}
+
+			ord_pos.z += 0.4f;
+			draw_world_navpoint(
+				font_index, line_height, scale,
+				&ord_pos,
+				label,
+				0xE040E070, &green, TRUE);
+		}
 	}
 }
 

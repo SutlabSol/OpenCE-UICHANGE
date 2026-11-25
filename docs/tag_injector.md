@@ -1,7 +1,7 @@
 # The Tag Injector
 
 The Tag Injector takes weapons, AI and equipment out of Halo Custom Edition
-maps and puts them in profiles, which the campaign randomizer adds to a level: a
+maps and Halo 1 MCC maps (`mcc_maps`) and puts them in profiles, which the campaign randomizer adds to a level: a
 Custom Edition map's carbine lying where a plasma rifle was, its brutes in
 the level's encounters. A tag is taken out with every tag it names (its
 model, animations, collision, HUD, projectiles, effects, sounds and bitmaps;
@@ -16,7 +16,8 @@ the randomizer's), and `port/linux/game/randomizer.c` (the pools).
 
 It needs Custom Edition maps to run (`game.custom_edition`, on by default)
 and the maps in `custom_maps`, with Custom Edition's `bitmaps.map` and
-`sounds.map` (`README.md`, "Custom Edition maps").
+`sounds.map` (`README.md`, "Custom Edition maps"), or MCC maps in `mcc_maps`
+with MCC's shared resource maps (`docs/mcc_maps.md`; below, "MCC maps").
 
 ## The menu
 
@@ -33,11 +34,12 @@ first leaves. Its first list has:
   and AI without the randomizer (below, "Campaign profiles").
 - **MULTIPLAYER PROFILES**: how a multiplayer game plays a profile's
   weapons (below, "In multiplayer").
-- **MAPS**: the Custom Edition maps.
+- **MAPS**: the Custom Edition maps and the MCC maps.
 
 **TAG PROFILES**: A on a profile lists its tags' kinds, as a map's are
-(**WEAPONS**, **AI**, **EQUIPMENT**, **VEHICLES**, **BIPEDS** and
-**SCENERY**, each with how many of them it has), and A on one lists them,
+(**WEAPONS**, **AI**, **EQUIPMENT**, **VEHICLES**, **BIPEDS**,
+**SCENERY**, **DOORS & DEVICES**, **SKIES** and **FIRST PERSON HANDS**, each
+with how many of them it has), and A on one lists them,
 each with where it came from (the frame) and its size, ON or OFF, or
 MISSING when its bundle is not there. Left or right turns a tag on or off: one off stays in the profile and
 is left out where the profile is played, to try the profile without it. A on
@@ -99,7 +101,10 @@ sword: power; rifle: automatic).
 opened last in TAG PROFILES, or made; left and right choose another), and
 **CUSTOM SINGLEPLAYER** and **CUSTOM MULTIPLAYER**, as the map lists have
 them: A on one lists its folders of `custom_maps` (each with how many maps
-it has) and the maps beside them, and A on a folder lists its maps. A on a
+it has) and the maps beside them, and A on a folder lists its maps.
+**MCC SINGLEPLAYER** and **MCC MULTIPLAYER** list the MCC maps of
+`mcc_maps` as the MCC map lists do: their Workshop collections and packages
+first, then the maps beside them (below, "MCC maps"). A on a
 map loads its tags, as the game would play them, and lists its
 **WEAPONS**, **AI**, **EQUIPMENT**, **VEHICLES**, **BIPEDS** and
 **SCENERY**, each with how many there are. A on one lists them, by the last
@@ -258,6 +263,66 @@ The frame says so, and NAME renames it once it is in a profile.
 Adding a tag loads its map again, with the sounds of the tags it takes
 decoded: a second or two, and longer for an actor variant of many voices
 (the brute major carbine of `firefight-fissurefall` takes 515 tags, 43 MB).
+
+### MCC maps
+
+A Halo 1 MCC map's tags are taken out as a Custom Edition map's are, into
+the same tag bundles, so a profile plays them wherever it plays any (the
+randomizer, campaign and multiplayer profiles, Forge, Firefight, the firing
+range) and on every kind of level the Tag Injector adds tags to, MCC
+levels among them (below, "On MCC levels").
+`port/linux/game/mcc_tag_bundle.c` opens the map as the MCC loader opens a
+level, in the MCC tag window (so not while an MCC map is played), and
+makes its tags a Custom Edition map's as they are taken out:
+
+- its metadata as an MCC level's is converted (shader types, chicago
+  extended shaders, weapon functions, HUD placements from MCC's 960-line
+  canvas, HUD meters), Gearbox HUD meters' opacity none as MCC draws them;
+- its models stay gbxmodels, as a Custom Edition map's bundles' are;
+- its bitmaps' pixels are read from the map or MCC's `bitmaps.map` as Halo
+  PC lays them out: BC7 as DXT5 (block for block), a 2D bitmap whose sides
+  are not powers of two (or BC7 that cannot be DXT5) decoded to linear
+  A8R8G8B8, its first level;
+- its sounds' samples (from the map or MCC's `sounds.map`: PCM, ADPCM or
+  Ogg Vorbis) are encoded as the Xbox ADPCM this build plays;
+- the MCC validator checks it all before anything is taken out.
+
+The scenario's scripts, recorded animations and cutscene cameras are left
+out of the opened map (a bundle never holds a scenario). An MCC map's model
+shaders of MCC's flag 6 and HUD meters of its flag 5 keep their Xbox channel
+orders where a level adds them (the bundle says it is an MCC map's). What an
+MCC level alone does as it draws (a weapon HUD's child anchors, its wider
+safe frame, MCC meters' coverage sampling) is not done for its tags on
+another level.
+
+**MCC's own content stays on this machine.** A tag of a map that is not a
+Steam Workshop item's (its package a Workshop id), or whose pixels or
+samples come from MCC's shared resource maps, holds MCC's own content,
+which its EULA lets no one redistribute (as MCC map sharing has it,
+`docs/mcc_maps.md`, "MCC sharing eligibility"). Its bundle says so, and it is
+left out of every network game's share and every Forge map's bake (logged:
+`... is MCC's own content, which stays on this machine`): played alone, on
+the firing range or in a campaign level, it plays; in a network game, every
+machine plays the profile without it. The menu says so on the MCC rows.
+
+### On MCC levels
+
+An MCC map's level plays Tag Injector profiles too (any profile's tags,
+Custom Edition's or MCC's; `randomizer.c`'s `randomizer_mcc_tags_loaded`
+takes it through the same level loading as any other's):
+
+- **an MCC campaign level** played alone: a campaign profile, chosen on the
+  TAG PROFILE screen after its difficulty (its campaign profiles alone:
+  the randomizer plays this build's campaign only), then the skulls' screen.
+  Its weapons and AI are swapped as a campaign level's are (by the
+  campaign's weapon and enemy paths, which a custom campaign may not use);
+- **an MCC multiplayer game**: the host's multiplayer profile, its share on
+  every machine, as on any multiplayer map;
+- **Firefight on an MCC map**: its variant's profile, as on any map.
+
+What is this build's maps' alone stays off on an MCC level: the
+randomizer's swaps, Forge's bakes and actors, the game modes' packs
+(Floodfection), and a co-op game's share (an MCC co-op game plays as it is).
 
 ## Profiles
 
@@ -555,6 +620,15 @@ daily challenge or a random run, and a saved game expects the same one.
 A campaign profile whose profile is gone, or has no tags on, plays the level
 as it is (the log says so).
 
+**PLAYER BIPED**, **PLAYER HANDS** and **PLAYER MOVEMENT** (`player_biped`,
+`player_hands`, `player_movement`) set what the player spawns as, as Forge's
+map settings do: a biped of the profile (or the map's own), its first-person
+hands (a biped chosen chooses the hands taken out of its map, the one whose
+path is most its own; hands are kept as `path#map`), and BIPED'S OWN or
+SPARTAN movement. A co-op game plays the host's for every player, read from
+its share's `campaign.toml` on every machine.
+
+
 ## In multiplayer
 
 A multiplayer game hosted on one of the game's own multiplayer maps (not a
@@ -644,6 +718,16 @@ level differ from the host's.
 Not built yet: Custom Edition maps; a multiplayer profile's AI or
 equipment. Downloaded shares stay in `tag_injector/.shared`
 until deleted by hand.
+
+Each team's **BIPED**, **HANDS** and **MOVEMENT** (RED, BLUE and FFA rows:
+`biped_red`, `hands_red`, `movement_red` and so on) set what its players
+spawn as, as Forge's map settings do (a team game plays the red and blue
+team's, a free for all game FFA's). The share carries the bipeds and hands
+chosen beside the weapons (`port_tag_profiles_shared_extras_set`), and every
+machine reads the settings from the share's `multiplayer.toml` as the level
+loads (port/forge/src/forge_map_settings.c's players layer, under a saved
+Forge map's own settings).
+
 
 ### In co-op
 
@@ -850,6 +934,61 @@ menu opens it (TAG INJECTOR).
   moved by its rows. A stock tag has no page: **SNAP POINTS** in Object
   Properties, on an object of it, chooses none or a layout. That replaces any
   points the tag had.
+- **Skies, bipeds and hands.** A map's **SKIES** are its sky tags, and its
+  **FIRST PERSON HANDS** every model that can be a player's arms: the one its
+  globals draw them with (`first_person_interface`), and each model no object
+  or first-person weapon is drawn with whose nodes are mostly those (an
+  elite's or an ODST's arms beside the cyborg's). Adding a biped adds its
+  hands too, a tag of its own (unless the profile has one of that path): the
+  arms whose path shares the most folders with the biped's
+  (`characters\elite\fp\fp_arms` for `characters\elite\elite_mp`), else the
+  globals'. Forge's map settings play them; nothing else does. Most maps keep
+  their arms at the stock path (`characters\cyborg\fp\fp`), so a profile
+  names hands by their path and map (`characters\cyborg\fp\fp#bigass`): each
+  map's arms are a tag of their own. A level adds a profile's hands beside its
+  own: the model by that name, and what it names that the level has of the
+  same paths (shaders, bitmaps) as `<path>#<map>`, so their textures stay
+  theirs (a hands tag of an older profile, named by its path alone, is added
+  so too when the level has its path). REPLACE ORIGINAL on hands replaces the
+  level's own instead.
+- **Map settings.** In Forge mode, holding the palette's button (instead of
+  pressing it) opens MAP SETTINGS: **DISPLAY NAME** (typed; the map lists
+  show it), **SKYBOX**, **FOG SETTINGS** and **PLAYER BIPEDS**. FOG SETTINGS
+  has the atmosphere (MAP DEFAULT, CLEAR, LIGHT FOG, HEAVY FOG, FLOOD FOG, or
+  CUSTOM once a value is changed) and the fog's color, density, start,
+  full-fog distance, fog indoors and the sky behind the fog. PLAYER BIPEDS has
+  RED TEAM, BLUE TEAM and FREE FOR ALL (left and right choose the biped, A
+  opens the team's page: BIPED, HANDS, MOVEMENT and TEST SPAWN). MOVEMENT
+  SPARTAN moves the biped as the map's own player biped does: its player
+  physics (strafing, the player's speeds), turning, flying none, slopes,
+  jump and landings are copied onto the biped's tag in memory on every
+  machine (its size, cameras and crouch stay its own; an AI of the same tag
+  moves so too); BIPED'S OWN gives them back (`MAP_MOVEMENT|slot|1`, `!FGM`). A biped chosen chooses
+  its hands: of a profile's biped, the hands taken from its map whose path is
+  most its own; else the map's. Solo Forge, a single player game, plays the
+  FREE FOR ALL biped.
+- **Test spawn.** TEST SPAWN (the host's, or solo) leaves Forge mode and
+  makes the player that team's biped. Solo, where a death reverts the game to
+  its checkpoint, the player's unit is swapped where it stands: the new one has
+  the weapons it had that the biped has animations for (the status bar says
+  how many it cannot hold; its tag's own starting weapons too) and its
+  grenades. A network game's host is killed and spawns again. A copy of the
+  biped stands a few steps ahead, facing the player, moving as in a mirror:
+  walking, aiming, jumping, crouching and firing as the player does, with the
+  player's weapons (its shots hurt no one; it can be shot, and stands again).
+  Forge mode ends the test. A biped picks up only weapons its animations
+  have, so many custom bipeds cannot hold the stock weapons at all.
+- **Saving and online.** The host alone changes the settings, and tells its
+  clients (`!FG` packets: a tag by its index, the tag tables being the
+  host's). A save keeps them in the state (`MAP_SETTINGS|1`, `MAP_NAME|`,
+  `MAP_SKY|`, `MAP_BIPED|slot|path`, `MAP_HANDS|slot|path`,
+  `MAP_ATMOSPHERE|...`), bakes their tags with the placed objects' (MCC's own
+  as `LOCAL_TAG` lines), and writes the name in the header (`FGDN` at 0x1A0).
+  Every machine reads them as the level loads, in any game of the map: the sky
+  replaces the scenario's sky references, a player spawns as the team's biped
+  (not in Firefight), the hands are drawn for the unit's team, and the fog is
+  set over the map's (under Floodfection's). Bipeds take effect at the next
+  spawn.
 - **Spawns, teleporters and objectives** of a stock map are saved in the same
   state (`PLAYER_SPAWN|`, `NETGAME_FLAG|`, with `PLAYER_SPAWNS_SAVED` and
   `NETGAME_FLAGS_SAVED` to say they stand in place of the map's) and put in the

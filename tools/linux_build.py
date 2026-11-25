@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .forge_build import forge_cflags, forge_source_flags, forge_sources
 from .embed_assets import hud_assets_build, hud_configure_inputs, server_ui_build
+from .macos_toolchain import default_clang, ld_lld, wayland_scanner
 from .ninja_syntax import Writer
 
 PORT_DIR = Path("port/linux")
@@ -26,6 +27,27 @@ XDK_INCLUDE = Path("port/include/xdk")
 
 def xdk_headers() -> List[Path]:
     return sorted(XDK_INCLUDE.glob("*.h"))
+
+
+# The dynamic lighting's modules (docs/dynamic_lighting_port.md): the Vulkan,
+# deko3d and Linux, Windows and web OpenGL builds link them. Android's OpenGL
+# ES image links dynamic_lighting_disabled.c in their place, so that it has
+# none of their lights, rays, textures or shaders.
+DYNAMIC_LIGHTING_GAME_SOURCES = {
+    "ambient_emitter_lighting.c", "ammo_counter_falloff.c", "ammo_counter_lighting.c",
+    "authored_emitter_lighting.c", "covenant_emitter_lighting.c", "covenant_lighting.c", "lighting_config.c",
+    "lighting_menu.c",
+    "muzzle_lighting.c", "needler_lighting.c", "plasma_falloff.c", "plasma_lighting.c",
+    "plasma_collision.c", "plasma_collision_models.c", "plasma_collision_scene.c", "plasma_occlusion.c",
+    "rocket_lighting.c", "shield_glow.c",
+}
+DYNAMIC_LIGHTING_PLATFORM_SOURCES = {"plasma_model_shader.c", "plasma_occlusion_gl.c"}
+# (Android's OpenGL ES image: the modules left out, their hooks answered stock)
+DYNAMIC_LIGHTING_DISABLED = Path("port/android/guest/dynamic_lighting_disabled.c")
+# the OpenGL builds of their own (Linux, Windows and the web) link the modules,
+# and their renderer's model variant and fields are compiled in by this
+# (port/linux/src/plasma_occlusion_gl.c, as GulchCE's)
+GL_DYNAMIC_LIGHTING_DEFINE = "-DHALO_GL_DYNAMIC_LIGHTING=1"
 
 
 def game_sources(config: Dict[str, Any]) -> List[Path]:
@@ -142,7 +164,13 @@ GAME_DATA_FILES = [Path("port/assets/firefight/rank_icons.bin"),
                    # (Forge's objective markers' meshes: port/forge/src/forge_runtime_tags.c)
                    Path("port/assets/forge/forge_markers.bin"),
                    # (MENDICANT AI's neural network weights: port/linux/game/mendicant/mendicant_models.c)
-                   Path("port/assets/mendicant/models.aibw")]
+                   Path("port/assets/mendicant/models.aibw"),
+                   # (the game's props, Firefight's and Forge's: tools/prop_assets.py,
+                   # port/linux/src/port_tag_profiles.c's port_tag_profiles_props_open)
+                   Path("port/assets/props/tag_props.bin"),
+                   # (FractumSeraph's map archive's categories, BROWSE MAPS' TYPE:
+                   # tools/map_archive_categories.py, port/linux/src/map_archive.c)
+                   Path("port/assets/map_archive/map_categories.txt")]
 # internet play's UPnP (port/linux/src/posix_upnp.c)
 MINIUPNPC_DIR = Path("port/third_party/miniupnpc")
 # the Custom Edition maps' Ogg Vorbis decoder (custom_edition_sounds.c),
@@ -341,6 +369,20 @@ def sdl3_rule(n: Writer, sln: Any, *, name: str, description: str, source: Path,
     )
 
 
+def macos_sdl_args() -> List[str]:
+    """CMake's arguments for the portable SDL3 on macOS: Homebrew's ld.lld
+    (tools/linux_sysroot.cmake's HALO_LD) and the wayland-scanner of
+    tools/macos_toolchain.py, which the PATH may not have; nothing elsewhere"""
+    args = []
+    lld = ld_lld()
+    if lld:
+        args.append(f"\"-DHALO_LD={lld}\"")
+    scanner = wayland_scanner()
+    if scanner:
+        args.append(f"\"-DWAYLAND_SCANNER={scanner}\"")
+    return args
+
+
 def portable_sdl(n: Writer, sln: Any, build_dir: Path, cc: str) -> Tuple[List[str], List[str], Path, Path, Path]:
     """The portable build's system root and SDL3: the compiler's flags, the
     linker's, what every unit waits for (the system root's stamp), the
@@ -363,12 +405,18 @@ def portable_sdl(n: Writer, sln: Any, build_dir: Path, cc: str) -> Tuple[List[st
     n.build(outputs=stamp, rule="linux_sysroot", implicit=[SYSROOT_SCRIPT], implicit_outputs=[sdl_license_source])
     sdl3_rule(n, sln, name="linux_sdl3", description="LINUX SDL3", source=sdl_source, sdl_build=sdl_build,
               log_dir=build_dir, cc=cc,
-              cmake_args=[f"\"-DCMAKE_TOOLCHAIN_FILE=$$PWD/{SYSROOT_TOOLCHAIN}\"", f"\"-DHALO_SYSROOT=$$PWD/{sysroot}\""],
+              cmake_args=[f"\"-DCMAKE_TOOLCHAIN_FILE=$$PWD/{SYSROOT_TOOLCHAIN}\"", f"\"-DHALO_SYSROOT=$$PWD/{sysroot}\"",
+                          *macos_sdl_args()],
               check=(f"$python {SYSROOT_SCRIPT} --check-sdl "
                      f"{sdl_build}/include-config-release/build_config/SDL_build_config.h"))
     n.build(outputs=libsdl, rule="linux_sdl3", implicit=[stamp, SYSROOT_TOOLCHAIN])
     cflags = [f"--sysroot={_quote(sysroot)}", f"-isystem {_quote(sdl_source / 'include')}"]
     ldflags = [f"--sysroot={_quote(sysroot)}", f"-L{_quote(sdl_build)}", *SDL_RPATH_LDFLAGS]
+    # (on macOS, Homebrew's lld by its path: clang would otherwise reach
+    # Apple's ld, which links no Linux executable)
+    lld = ld_lld()
+    if lld:
+        ldflags.append(f"--ld-path={_quote(lld)}")
     sdl_license = build_dir / "SDL3-LICENSE.txt"
     n.build(outputs=sdl_license, rule="linux_copy", inputs=sdl_license_source)
     return cflags, ldflags, stamp, libsdl, sdl_license
@@ -459,7 +507,8 @@ def linux_configure_inputs() -> List[Path]:
     # (the folders of the game's sources, so that adding or removing one
     # re-runs it)
     game_folders = sorted({source.parent for source in game_sources(_load_port_config())})
-    return [PORT_CONFIG, Path(__file__), PORT_DIR / "src", PORT_DIR / "game", XDK_INCLUDE, *game_folders,
+    return [PORT_CONFIG, Path(__file__), Path(__file__).with_name("macos_toolchain.py"), PORT_DIR / "src",
+            PORT_DIR / "game", XDK_INCLUDE, *game_folders,
             *hud_configure_inputs()]
 
 
@@ -476,7 +525,8 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
     build_dir: Path = sln.build_dir / "linux"
     obj_dir = build_dir / "obj"
     output = build_dir / "halo"
-    cc = sln.linux_cc or "clang"
+    # (Homebrew's LLVM on macOS: tools/macos_toolchain.py)
+    cc = sln.linux_cc or default_clang()
     prefix_header = PORT_DIR / "include" / "halo_linux_prefix.h"
     semantics_header = build_dir / "halo_msvc_semantics.h"
     platform_semantics_header = build_dir / "platform_msvc_semantics.h"
@@ -612,6 +662,7 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
             add_object(source, f"{flags} {forge_source_flags(source)}")
         # Port-specific units that must see the game exactly as its own
         # sources do (port/linux/game).
+        # (the dynamic lighting's modules among them: GL_DYNAMIC_LIGHTING_DEFINE)
         for source in sorted([*Path(config["game_sources"]).glob("*.c"), *Path(config["game_sources"]).glob("mendicant/*.c")]):
             add_object(source, f"{game_cflags} {forge_source_flags(source)}")
         # (Content Extended's Forge: tools/forge_build.py)
@@ -634,6 +685,7 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
             f"-I{ZLIB_DIR}",
             "-Isource -Isource/cseries",
             sdk_flags,
+            GL_DYNAMIC_LIGHTING_DEFINE,
         ])
         posix_cflags = " ".join(POSIX_FLAGS + target + [f"-I{platform_dir}"])
         # (with Mbed TLS's own locks, as built from its unchanged config by

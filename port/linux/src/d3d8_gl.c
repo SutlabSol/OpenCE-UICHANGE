@@ -23,9 +23,12 @@ Conventions carried over from the Xbox:
 
 #include "xgpu.h"
 #include "halo_port_window.h"
+#include "mcc_environment_shader.h"
+#include "plasma_occlusion_gl.h"
 #include "sdl_platform.h"
 #include "halo_ui_pointer.h"
 #include "port_config.h"
+#include "loading_widescreen.h"
 #include "posix.h"
 #include "main/console.h"
 #ifdef HALO_ANDROID
@@ -91,6 +94,23 @@ struct xgpu_capabilities xgpu_capabilities;
 OpenGL ES, which has no glClipControl: its depth from -1 would lose the
 precision near 0 that reversing gains */
 BOOL xgpu_reversed_depth;
+
+/* A record of the device's own (a vertex array, a render target, a
+framebuffer, a program): the renderer cannot go on without it. The web
+build's malloc gives NULL when the heap is full, rather than aborting
+(-sABORTING_MALLOC=0, tools/web_build.py), and WebAssembly does not trap a
+write through it (address 0 is memory), so stop here instead. */
+static void *device_record_new(size_t size)
+{
+	void *record = calloc(1, size);
+
+	if (!record)
+	{
+		fprintf(stderr, "d3d8: out of memory for a %lu byte record\n", (unsigned long)size);
+		abort();
+	}
+	return record;
+}
 
 /* ---------- the screen's width
 
@@ -551,9 +571,16 @@ struct vertex_shader_object
 	unsigned long vertex_array_streams;
 #endif
 	/* which of shader[] and lit_shader[] have been compiled (bits 0 and 1,
-	and 2 and 3): one that failed stays 0 and is not compiled again at each
-	draw */
+	and 2 and 3; plasma_shader[]'s 4 and 5): one that failed stays 0 and is
+	not compiled again at each draw */
 	unsigned char shaders_tried;
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	/* the dynamic lighting's model variant lit for each vertex, as shader[]
+	(plasma_occlusion_gl.c); a variant of its, for either stage, failed to
+	compile or link: stock from then on */
+	GLuint plasma_shader[2];
+	BOOL plasma_failed;
+#endif
 };
 
 /* ---------- programs */
@@ -610,6 +637,10 @@ struct program_entry
 	GLint screen_offset;
 	GLint height_fade;
 	GLint depth_bias;
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	/* the dynamic lighting's model variant's uniforms (-1: a stock program) */
+	struct plasma_gl_uniforms plasma;
+#endif
 	/* nv2a_pixel_shader_key's source_blend's color, and what it last had */
 	GLint blend_constant;
 	float blend_constant_value[4];
@@ -1493,6 +1524,26 @@ static void state_texture(int unit, GLenum target, GLuint texture)
 }
 #endif
 
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+void xgpu_gl_bind_extra_textures(GLuint first_unit, GLenum target, const GLuint *textures, int count)
+{
+#ifndef HALO_GLES
+	(void)target;
+	glBindTextures(first_unit, (GLsizei)count, textures);
+#else
+	int index;
+
+	for (index = 0; index < count; index++)
+	{
+		glActiveTexture(GL_TEXTURE0 + first_unit + (GLenum)index);
+		glBindTexture(target, textures[index]);
+	}
+	gl_state.active_texture = GL_TEXTURE0;
+	glActiveTexture(GL_TEXTURE0);
+#endif
+}
+#endif
+
 static void state_sampler(int unit, GLuint sampler)
 {
 	if (gl_state.samplers[unit] != sampler)
@@ -1572,7 +1623,7 @@ static struct vertex_array_entry *vertex_array_get(const struct vertex_layout *l
 		if (entry->hash == hash && words_equal(&entry->layout, layout, sizeof(*layout)))
 			return entry;
 	}
-	entry = calloc(1, sizeof(*entry));
+	entry = device_record_new(sizeof(*entry));
 	entry->hash = hash;
 	entry->layout = *layout;
 	memset(entry->bindings, 0xff, sizeof(entry->bindings));
@@ -1938,6 +1989,7 @@ static struct render_target_entry *render_target_get(const D3DSurface *surface)
 	unsigned long width, height, slot;
 	long screen;
 	BOOL depth;
+	GLint previous_texture;
 
 	if (!surface || !surface->Data)
 		return NULL;
@@ -1984,7 +2036,7 @@ static struct render_target_entry *render_target_get(const D3DSurface *surface)
 			return render_target_remember(surface, screen, entry);
 		}
 	}
-	entry = calloc(1, sizeof(*entry));
+	entry = device_record_new(sizeof(*entry));
 	entry->target.data = surface->Data;
 	entry->target.width = width;
 	entry->target.height = height;
@@ -1997,10 +2049,14 @@ static struct render_target_entry *render_target_get(const D3DSurface *surface)
 	entry->screen_buffer = surface->Data == (depth ? device.depth_buffer.Data : device.back_buffer.Data);
 	entry->target.format = depth ? (xgpu_reversed_depth ? GL_DEPTH32F_STENCIL8 : GL_DEPTH24_STENCIL8) :
 		entry->screen_buffer && hdr.active ? GL_RGBA16F : GL_RGBA8;
+	/* Textures may already be selected for this draw. Allocating its target
+	 * must not replace the active sampler's input with the output image. */
+	glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
 	glGenTextures(1, &entry->target.texture);
 	glBindTexture(GL_TEXTURE_2D, entry->target.texture);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 	render_target_storage(&entry->target);
+	glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
 	xgpu_gl_state_invalidate();
 	entry->next = render_targets;
 	render_targets = entry;
@@ -2040,7 +2096,7 @@ static GLuint framebuffer_find(GLuint color, GLuint depth, BOOL renderbuffers)
 			return entry->framebuffer;
 		}
 	}
-	entry = calloc(1, sizeof(*entry));
+	entry = device_record_new(sizeof(*entry));
 	entry->color = color;
 	entry->depth = depth;
 	entry->renderbuffers = renderbuffers;
@@ -3619,6 +3675,15 @@ void android_ce_texture_unbind(const void *resource)
 }
 #endif
 
+/* Unload can happen before a later draw replaces every texture stage. */
+void xgpu_mcc_texture_unbind(DWORD const *resource)
+{
+	unsigned long stage;
+	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
+		if ((DWORD const *)device.textures[stage] == resource)
+			device.textures[stage] = NULL;
+}
+
 void WINAPI D3DDevice_SetPalette(DWORD stage, D3DPalette *palette)
 {
 	if (stage < D3DTSS_MAXSTAGES)
@@ -3739,6 +3804,11 @@ HRESULT WINAPI D3DDevice_CreateVertexShader(CONST DWORD *declaration, CONST DWOR
 		/* header: program type in the low word, instruction count in the high */
 		object->instruction_count = function[0] >> 16;
 		object->instructions = malloc(object->instruction_count * 4 * sizeof(DWORD));
+		if (!object->instructions && object->instruction_count)
+		{
+			free(object);
+			return E_OUTOFMEMORY;
+		}
 		memcpy(object->instructions, function + 1, object->instruction_count * 4 * sizeof(DWORD));
 	}
 	parse_declaration(object, declaration);
@@ -3903,17 +3973,29 @@ static unsigned long hash_words(const void *data, unsigned long size)
 }
 
 /* lit: the shader that hands the lighting's normal and position on
-(vertex_shader_object lit_shader) */
-static GLuint vertex_shader_get(struct vertex_shader_object *program, BOOL immediate, BOOL lit)
+(vertex_shader_object lit_shader); plasma: the dynamic lighting's model
+variant lit for each vertex (XGPU_PLASMA_MODEL_*; 0: stock), never lit */
+static GLuint vertex_shader_get(struct vertex_shader_object *program, BOOL immediate, BOOL lit, unsigned int plasma)
 {
 	int variant = immediate ? 1 : 0;
 	GLuint *shader = lit ? &program->lit_shader[variant] : &program->shader[variant];
 	unsigned char tried = (unsigned char)(1 << (variant + (lit ? 2 : 0)));
 
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	if (plasma && !lit)
+	{
+		shader = &program->plasma_shader[variant];
+		tried = (unsigned char)(1 << (variant + 4));
+	}
+	else
+		plasma = 0;
+#else
+	plasma = 0;
+#endif
 	if (!*shader && !(program->shaders_tried & tried))
 	{
-		char *source = nv2a_vertex_shader_to_glsl(program->instructions, program->instruction_count,
-			immediate ? 0 : device.vertex_shader->packed_mask, lit ? &program->lighting : NULL);
+		char *source = nv2a_vertex_shader_to_glsl_variant(program->instructions, program->instruction_count,
+			immediate ? 0 : device.vertex_shader->packed_mask, lit ? &program->lighting : NULL, plasma);
 
 		program->shaders_tried |= tried;
 		*shader = xgpu_compile_shader(GL_VERTEX_SHADER, source, "vertex");
@@ -3923,8 +4005,8 @@ static GLuint vertex_shader_get(struct vertex_shader_object *program, BOOL immed
 			char path[512];
 			FILE *file;
 
-			snprintf(path, sizeof(path), "%s/vs%03lu_%d%s.glsl", debug_settings.dump_shaders, program->id, variant,
-				lit ? "_lit" : "");
+			snprintf(path, sizeof(path), "%s/vs%03lu_%d%s%s.glsl", debug_settings.dump_shaders, program->id, variant,
+				lit ? "_lit" : "", plasma ? "_plasma" : "");
 			if ((file = fopen(path, "w")) != NULL)
 			{
 				fputs(source, file);
@@ -3965,7 +4047,7 @@ static GLuint fragment_shader_get(const struct nv2a_pixel_shader_key *key)
 			return entry->shader;
 		}
 	}
-	entry = calloc(1, sizeof(*entry));
+	entry = device_record_new(sizeof(*entry));
 	entry->hash = hash;
 	entry->key = *key;
 	source = nv2a_pixel_shader_to_glsl(key);
@@ -4074,7 +4156,7 @@ static struct program_entry *program_get(GLuint vertex_shader, GLuint fragment_s
 			return entry;
 		}
 	}
-	entry = calloc(1, sizeof(*entry));
+	entry = device_record_new(sizeof(*entry));
 	entry->vertex_shader = vertex_shader;
 	entry->fragment_shader = fragment_shader;
 	memset(&entry->uniforms, 0xff, sizeof(entry->uniforms));
@@ -4189,6 +4271,9 @@ static struct program_entry *program_finish(struct program_entry *entry)
 	entry->depth_bias = glGetUniformLocation(entry->program, "depth_bias");
 	entry->blend_constant = glGetUniformLocation(entry->program, "blend_constant");
 	entry->model_lights = glGetUniformLocation(entry->program, "model_lights");
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	plasma_gl_program_initialize(entry->program, &entry->plasma);
+#endif
 	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
 	{
 		char name[8];
@@ -4554,7 +4639,7 @@ static GLuint mip_composite_get(const struct xgpu_texture_description *descripti
 	}
 	if (!composite)
 	{
-		composite = calloc(1, sizeof(*composite));
+		composite = device_record_new(sizeof(*composite));
 		composite->data = data;
 		composite->width = description->width;
 		composite->height = description->height;
@@ -5111,6 +5196,34 @@ static unsigned long model_light_register(int light)
 	return (unsigned long)(XGPU_VERTEX_CONSTANT_BIAS + (light ? -80 + light : -82));
 }
 
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+/* a program's model variant would not compile or link: its draws are stock
+from then on (0, the draw's variant now) */
+static unsigned int plasma_variant_failed(struct vertex_shader_object *program)
+{
+	platform_log("GPU: vertex shader %lu's dynamic lighting variant failed to compile or link (refer to the shader log "
+		"above): stock from now on", program->id);
+	program->plasma_failed = TRUE;
+	plasma_gl_draw_cancel();
+	return 0;
+}
+
+/* a variant's program not had: on the web, one still linking in parallel
+(the draw stock until it is done, asked again at the next); else failed */
+static unsigned int plasma_variant_missing(struct vertex_shader_object *program)
+{
+#ifdef HALO_WEB
+	if (program_pending)
+	{
+		program_pending = FALSE;
+		plasma_gl_draw_cancel();
+		return 0;
+	}
+#endif
+	return plasma_variant_failed(program);
+}
+#endif
+
 static struct program_entry *prepare_draw(BOOL immediate)
 {
 	/* (the fixed-function program compiled only with OpenGL there: not by
@@ -5122,6 +5235,9 @@ static struct program_entry *prepare_draw(BOOL immediate)
 	struct draw_uniforms uniforms;
 	BOOL has_depth = FALSE;
 	int stage;
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	unsigned int plasma = 0;
+#endif
 
 	/* (the fixed-function pipeline's draws: immediate mode's only) */
 	if (!device.gl_ready || !program || !(device.vertex_shader || device.fixed_function) || !program->instructions ||
@@ -5149,6 +5265,7 @@ static struct program_entry *prepare_draw(BOOL immediate)
 	key.combiner_state[D3DRS_PSFINALCOMBINERCONSTANT0] = 0;
 	key.combiner_state[D3DRS_PSFINALCOMBINERCONSTANT1] = 0;
 	key.texture_modes = D3D__RenderState[D3DRS_PSTEXTUREMODES];
+	key.mcc_bump_attenuation = mcc_environment_shader_active();
 	/* the textures before the targets: a render target the draw samples
 	has its multisampled pixels resolved by a blit (render_target_resolve),
 	which binds framebuffers of its own, and the back buffer can be both
@@ -5184,10 +5301,26 @@ static struct program_entry *prepare_draw(BOOL immediate)
 #endif
 
 	entry = NULL;
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	/* the dynamic lighting's model variant, where the draw has a light of
+	the feature's (plasma_occlusion_gl.c): stock for good if it fails */
+	plasma = plasma_gl_draw_prepare(immediate, program->lighting.lights, program->plasma_failed);
+#endif
 	if (program->lighting.lights && !program->lighting_failed && per_pixel_lighting())
 	{
 		key.per_pixel_lighting = (unsigned char)program->lighting.lights;
-		entry = program_get(vertex_shader_get(program, immediate, TRUE), fragment_shader_get(&key));
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+		if (plasma)
+		{
+			key.plasma_model = (unsigned char)plasma;
+			entry = program_get(vertex_shader_get(program, immediate, TRUE, 0), fragment_shader_get(&key));
+			key.plasma_model = 0;
+			if (!entry)
+				plasma = plasma_variant_missing(program);
+		}
+		if (!entry)
+#endif
+		entry = program_get(vertex_shader_get(program, immediate, TRUE, 0), fragment_shader_get(&key));
 #ifdef HALO_WEB
 		/* (still compiling: the draw waits for it, not lit for each vertex) */
 		if (!entry && program_pending)
@@ -5206,8 +5339,16 @@ static struct program_entry *prepare_draw(BOOL immediate)
 			key.per_pixel_lighting = 0;
 		}
 	}
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	if (!entry && plasma)
+	{
+		entry = program_get(vertex_shader_get(program, immediate, FALSE, plasma), fragment_shader_get(&key));
+		if (!entry)
+			plasma = plasma_variant_missing(program);
+	}
+#endif
 	if (!entry)
-		entry = program_get(vertex_shader_get(program, immediate, FALSE), fragment_shader_get(&key));
+		entry = program_get(vertex_shader_get(program, immediate, FALSE, 0), fragment_shader_get(&key));
 	if (!entry)
 	{
 		stats.skipped_link++;
@@ -5224,6 +5365,10 @@ static struct program_entry *prepare_draw(BOOL immediate)
 #endif
 	draw_flush();
 	state_program(entry->program);
+#ifdef HALO_GL_DYNAMIC_LIGHTING
+	if (plasma)
+		plasma_gl_draw_bind(&entry->plasma);
+#endif
 	if (key.source_blend && entry->blend_constant >= 0)
 	{
 		float blend_constant[4];
@@ -6276,6 +6421,12 @@ static unsigned long stream_upload_swizzled(const struct vertex_shader_object *d
 		free(scratch);
 		scratch_size = size + 65536;
 		scratch = malloc(scratch_size);
+		/* (out of memory: the colours go up unswapped) */
+		if (!scratch)
+		{
+			scratch_size = 0;
+			return stream_upload(data, size);
+		}
 	}
 	memcpy(scratch, data, size);
 	for (vertex = 0; vertex + stride <= size; vertex += stride)
@@ -6758,6 +6909,10 @@ static WORD *quad_indices(const WORD *indices, unsigned long count, unsigned lon
 	WORD *result = malloc(quads * 6 * sizeof(WORD) + 2);
 	unsigned long quad;
 
+	/* (out of memory: none, and the draw is dropped) */
+	*out_count = 0;
+	if (!result)
+		return NULL;
 	for (quad = 0; quad < quads; quad++)
 	{
 		WORD v0 = indices ? indices[quad * 4] : (WORD)(quad * 4);
@@ -6804,9 +6959,12 @@ void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_v
 		unsigned long count;
 		WORD *indices = quad_indices(NULL, vertex_count, &count);
 
-		glDrawElements(GL_TRIANGLES, (GLsizei)count, GL_UNSIGNED_SHORT,
-			(const void *)index_upload(indices, count * sizeof(WORD)));
-		free(indices);
+		if (indices)
+		{
+			glDrawElements(GL_TRIANGLES, (GLsizei)count, GL_UNSIGNED_SHORT,
+				(const void *)index_upload(indices, count * sizeof(WORD)));
+			free(indices);
+		}
 	}
 	else
 	{
@@ -7047,6 +7205,8 @@ void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type, UINT 
 	if (primitive_type == D3DPT_QUADLIST)
 	{
 		indices = quad_indices(index_data, vertex_count, &count);
+		if (!indices)
+			return;
 		source = indices;
 	}
 #ifdef HALO_GLES
@@ -7055,6 +7215,11 @@ void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type, UINT 
 		/* the indices are copied anyway: rebase them */
 		WORD *rebased = malloc(count * sizeof(WORD) + 2);
 
+		if (!rebased)
+		{
+			free(indices);
+			return;
+		}
 		for (index = 0; index < count; index++)
 			rebased[index] = (WORD)(source[index] - minimum);
 		glDrawElements(primitive_mode(primitive_type), (GLsizei)count, GL_UNSIGNED_SHORT,
@@ -7275,7 +7440,7 @@ void WINAPI D3DDevice_End(void)
 				free(placed);
 			}
 		}
-		else
+		else if (indices)
 		{
 			glDrawElements(GL_TRIANGLES, (GLsizei)index_count, GL_UNSIGNED_SHORT,
 				(const void *)index_upload(indices, index_count * sizeof(WORD)));
@@ -7319,6 +7484,32 @@ void WINAPI D3DDevice_SetVertexData2f(INT reg, FLOAT a, FLOAT b)
 void WINAPI D3DDevice_SetVertexData4f(INT reg, FLOAT a, FLOAT b, FLOAT c, FLOAT d)
 {
 	set_attribute(reg, a, b, c, d);
+}
+
+void WINAPI D3DDevice_DrawVerticesImmediate(D3DPRIMITIVETYPE type, DWORD mask, CONST FLOAT *data, UINT count)
+{
+	unsigned long registers = (unsigned long)__builtin_popcountl(mask);
+	UINT vertex;
+	int reg, index;
+
+	if (!count || !(mask & 1))
+		return;
+	D3DDevice_Begin(type);
+	for (vertex = 0; vertex < count; vertex++)
+	{
+		const float *in = data + vertex * registers * 4;
+
+		/* (register 0, which completes the vertex, last) */
+		for (reg = 31, index = (int)registers; reg >= 0; reg--)
+		{
+			if (mask & (1UL << reg))
+			{
+				index--;
+				D3DDevice_SetVertexData4f(reg, in[index * 4], in[index * 4 + 1], in[index * 4 + 2], in[index * 4 + 3]);
+			}
+		}
+	}
+	D3DDevice_End();
 }
 
 void WINAPI D3DDevice_SetVertexData2s(INT reg, SHORT a, SHORT b)
@@ -7729,6 +7920,8 @@ static void write_screenshot(struct render_target_entry *target)
 	if (!directory)
 		return;
 	pixels = malloc(image_size);
+	if (!pixels)
+		return;
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_get(target->target.texture, 0));
 #ifdef HALO_GLES
 	/* (OpenGL ES reads a half float target only as floats) */
@@ -7736,6 +7929,11 @@ static void write_screenshot(struct render_target_entry *target)
 	{
 		float *texels = malloc(image_size * sizeof(float));
 
+		if (!texels)
+		{
+			free(pixels);
+			return;
+		}
 		glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, GL_RGBA, GL_FLOAT, texels);
 		for (row = 0; row < image_size; row++)
 		{
@@ -8162,6 +8360,13 @@ static void front_buffer_take(void)
 		left = 0;
 		width = (GLint)back_buffer->target.gl_width;
 	}
+	/* The loading feature expands the original effect across this width.
+	Capture all of it back into the stock feedback texture, not its centre. */
+	if (loading_widescreen_active())
+	{
+		left = 0;
+		width = (GLint)back_buffer->target.gl_width;
+	}
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, read);
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw);
 	glDisable(GL_SCISSOR_TEST);
@@ -8257,6 +8462,9 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 				hdr.float_window ? hdr.sdr_white : 0.0f)))
 		{
 			glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_get(back_buffer->target.texture, 0));
+			/* Creating the source framebuffer binds both targets. A cached
+			map can reach this first blit without a loading-screen draw. */
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 			/* row 0 of the render target is the top of the picture */
 			glBlitFramebuffer(0, 0, (GLint)back_buffer->target.gl_width, (GLint)back_buffer->target.gl_height,
 				x, y + height, x + width, y, GL_COLOR_BUFFER_BIT, GL_LINEAR);

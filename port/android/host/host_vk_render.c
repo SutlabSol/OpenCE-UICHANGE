@@ -1846,7 +1846,7 @@ static void command_present(const struct vk_command_present *command)
 		host_vk_wait_fence(frame->fence, "a picture's readback", frame->number);
 		retire(frame->number);
 		if (!B.dead)
-			memcpy((void *)(uintptr_t)command->readback, readback.mapped, (size_t)readback.size);
+			memcpy((void *)host_pointer(command->readback), readback.mapped, (size_t)readback.size);
 	}
 	host_vk_data_frame_end();
 	host_vk_services_tick();
@@ -2002,6 +2002,8 @@ static int device_create(void)
 	/* the device: swapchain, and dynamic rendering (the 1.3 feature, or the extension with what it depends on
 	before 1.2: host_vk_startup found them) */
 	enabled_add(names, &name_count, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+	/* (a portability implementation's, MoltenVK's on macOS: a device that offers it must have it enabled) */
+	enabled_add(names, &name_count, "VK_KHR_portability_subset");
 	if (host_vk.render_passes)
 	{
 		/* (render passes: host_vk_passes.c) */
@@ -2040,10 +2042,13 @@ static int device_create(void)
 		features.features.fillModeNonSolid = available.features.fillModeNonSolid;
 		features.features.occlusionQueryPrecise = available.features.occlusionQueryPrecise;
 		features.features.textureCompressionBC = available.features.textureCompressionBC;
+		/* (ASTC 4x4 for DXT1, its bits moved, where BC is not: host_vk_astc_supported) */
+		features.features.textureCompressionASTC_LDR = available.features.textureCompressionASTC_LDR;
 		B.sampler_anisotropy = available.features.samplerAnisotropy != 0;
 		B.fill_mode_non_solid = available.features.fillModeNonSolid != 0;
 		B.occlusion_query_precise = available.features.occlusionQueryPrecise != 0;
 		B.texture_compression_bc = available.features.textureCompressionBC != 0;
+		B.texture_compression_astc = available.features.textureCompressionASTC_LDR != 0;
 	}
 	/* multisampling in the GPU's tile memory (VK_EXT_multisampled_render_to_single_sampled), where the device has it
 	for both target formats, and debug.original_multisample does not keep the images of samples: the counts it can */
@@ -2178,12 +2183,13 @@ static int device_create(void)
 	if (host_vk_self_test)
 		clears_selftest();
 	host_logf(HOST_LOG_INFO, "vk: device ready: queue family %u, colour targets %s, depth targets %s, blit filter %s, "
-		"renderings %s; anisotropy %d, non-solid fill %d, precise occlusion %d, BC textures %d", B.family, "B8G8R8A8_UNORM",
+		"renderings %s; anisotropy %d, non-solid fill %d, precise occlusion %d, BC textures %d, ASTC textures %d", B.family,
+		"B8G8R8A8_UNORM",
 		B.depth_format == VK_FORMAT_D24_UNORM_S8_UINT ? "D24_UNORM_S8_UINT" : "D32_SFLOAT_S8_UINT",
 		B.blit_filter == VK_FILTER_LINEAR ? "linear" : "nearest",
 		host_vk.render_passes ? "as render passes (host_vk_passes.c)" : host_vk.api >= VK_API_VERSION_1_3 ?
 		"by dynamic rendering, from Vulkan 1.3" : "by dynamic rendering, from VK_KHR_dynamic_rendering", B.sampler_anisotropy,
-		B.fill_mode_non_solid, B.occlusion_query_precise, B.texture_compression_bc);
+		B.fill_mode_non_solid, B.occlusion_query_precise, B.texture_compression_bc, B.texture_compression_astc);
 	return 1;
 failed:
 	backend_unavailable("the device's frames could not be made");
@@ -2227,10 +2233,20 @@ uint32_t host_vk_bc_supported(void)
 	return 1;
 }
 
+uint32_t host_vk_astc_supported(void)
+{
+	const VkFormatFeatureFlags wanted = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+		(host_vk.api >= VK_API_VERSION_1_1 ? VK_FORMAT_FEATURE_TRANSFER_DST_BIT : 0);
+
+	if (!host_vk_backend_ensure() || !B.texture_compression_astc)
+		return 0;
+	return (features_of(VK_FORMAT_ASTC_4x4_UNORM_BLOCK) & wanted) == wanted;
+}
+
 /* runs size bytes of commands at commands (a guest address), now */
 static void submit_run(uint32_t commands, uint32_t size)
 {
-	const unsigned char *at = (const unsigned char *)(uintptr_t)commands;
+	const unsigned char *at = (const unsigned char *)host_pointer(commands);
 	const unsigned char *end = at + size;
 	static int said_unknown;
 
@@ -2248,7 +2264,7 @@ static void submit_run(uint32_t commands, uint32_t size)
 	while (!B.dead && at + sizeof(struct vk_command_header) <= end)
 	{
 		const struct vk_command_header *header = (const struct vk_command_header *)at;
-		uint32_t offset = (uint32_t)(at - (const unsigned char *)(uintptr_t)commands);
+		uint32_t offset = (uint32_t)(at - (const unsigned char *)host_pointer(commands));
 
 		if (header->size < sizeof(*header) || (header->size & 3) || at + header->size > end)
 		{
@@ -2292,6 +2308,10 @@ static void submit_run(uint32_t commands, uint32_t size)
 		case VK_COMMAND_TEXTURE_DATA:
 			if (header->size >= sizeof(struct vk_command_texture_data))
 				host_vk_texture_data_command((const struct vk_command_texture_data *)header);
+			break;
+		case VK_COMMAND_PLASMA_OCCLUSION:
+			if (header->size >= sizeof(struct vk_command_plasma_occlusion))
+				host_vk_plasma_occlusion_command((const struct vk_command_plasma_occlusion *)header);
 			break;
 		case VK_COMMAND_DATA_PATCH:
 			if (header->size >= sizeof(struct vk_command_data_patch) &&

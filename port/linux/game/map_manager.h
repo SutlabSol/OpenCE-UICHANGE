@@ -21,6 +21,19 @@ first back to the map list):
 	              which to keep (a shot chosen, or a Theater shot taken,
 	              while it has a picture)
 
+Opened from Mods > CUSTOM EDITION MAPS (map_manager_open_library), the
+lists start a level higher, at the whole of custom_maps:
+	LIBRARY       REQUIRED FILES (bitmaps.map, sounds.map and loc.map: found
+	              or missing), IMPORT CE MAP (where the platform has it),
+	              MANAGE MAPS
+	MANAGE        NEW FOLDER, then custom_maps' folders and the maps at its
+	              top
+	FOLDER        a folder's maps, DELETE FOLDER
+(OPEN FOLDER, the desktop's button at the screen's top right, is the
+menu's: menu_functions.c's "port ce maps folder".)
+A map chosen in either opens its MAP list, whose B comes back to it, as a
+map deleted does.
+
 Only the custom_maps folder's maps are managed (not a Custom Edition
 install's), and nothing is changed while a Custom Edition map is loaded.
 */
@@ -42,6 +55,12 @@ enum
 	_map_manager_leaving,
 	/* the map is gone (deleted): the screen goes back to the map list */
 	_map_manager_closes,
+	/* (the library's) IMPORT CE MAP: the menu's to do (menu_functions.c's
+	map_import_start) */
+	_map_manager_import,
+	/* (the library's) BROWSE MAPS: the map archive's screen, the menu's to
+	open (menu_functions.c's archive functions) */
+	_map_manager_browse,
 };
 
 /* ---------- structures */
@@ -59,8 +78,19 @@ void map_manager_open_at(
 	boolean pictures,
 	boolean choosing);
 
-/* the screen opened (map_manager_open_at's map), or closed (its picture
-let go) */
+/* the screen opens next at the library (the whole of custom_maps), with
+IMPORT CE MAP where the platform has it; set before the screen is opened,
+instead of map_manager_open_at */
+void map_manager_open_library(
+	boolean can_import);
+
+/* text said over the row chosen's details for a while (what an import
+did), as the last thing done is */
+void map_manager_say(
+	char const *text);
+
+/* the screen opened (map_manager_open_at's map, or the library), or closed
+(its picture let go) */
 void map_manager_open(
 	void);
 void map_manager_close(
@@ -74,6 +104,10 @@ boolean map_manager_present(
 looked at again when it has changed, a list left whose map or folder is no
 longer there, and what was typed taken */
 void map_manager_poll(
+	void);
+
+/* whether the library's own list is shown (its first: REQUIRED FILES...) */
+boolean map_manager_library_shown(
 	void);
 
 /* the list shown (an index of its own, which changes as lists are opened),
@@ -105,7 +139,9 @@ void map_manager_details(
 	char *text,
 	long text_size);
 
-/* A on a row: _map_manager_stays, _typing, _leaving or _closes */
+/* A on a row: _map_manager_stays, _typing, _leaving or _closes (never in
+the library, whose map deleted goes back to its list), or the library's
+_import */
 short map_manager_choose(
 	short row);
 

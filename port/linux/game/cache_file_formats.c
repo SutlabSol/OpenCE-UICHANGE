@@ -333,6 +333,11 @@ Xbox's 102 (ui_widget_event_handler_functions.c), which this build has not */
 #define UI_WIDGET_CHILD_BYTES 0x50
 #define UI_WIDGET_CHILD_VERTICAL_OFFSET 0x36
 #define XBOX_WIDGET_FUNCTION_COUNT 102
+/* its game data inputs (struct ui_widget_game_data_input_reference: the
+function first), of which the Xbox has 41 */
+#define UI_WIDGET_GAME_DATA_INPUTS_OFFSET 0x48
+#define UI_WIDGET_GAME_DATA_INPUT_BYTES 0x24
+#define XBOX_GAME_DATA_INPUT_COUNT 41
 /* the multiplayer pause menu's list, and the Xbox's two items of it */
 #define MULTIPLAYER_PAUSE_LIST_NAME "ui\\shell\\multiplayer_game\\pause_game\\mp_pause_list"
 #define MULTIPLAYER_PAUSE_RESUME_NAME "resume_game_button"
@@ -2543,6 +2548,17 @@ enum cache_file_status custom_edition_cache_load(
 		{
 			return load_fail(&state, _cache_file_status_bad_tag_handle, handle);
 		}
+		/* port: an empty slot (group NONE, address NONE, named "MISSINGNO."):
+		Invader writes these where a tag index it builds against has a tag the
+		map leaves out (floodgulch_forge_square). Halo PC never reads them, as
+		nothing references them; give them no data, which the validator skips
+		and refuses any reference to. */
+		if (group_tag == 0xFFFFFFFFUL)
+		{
+			write_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET, 0);
+			write_u32(instance + TAG_INSTANCE_IN_RESOURCE_MAP_OFFSET, 0);
+			continue;
+		}
 		/* port: a protected map's tag names may lie anywhere; only a tag held by a
 		resource map needs its name (to find its entry), and is checked again
 		below. The others are given an empty name after the checksum. */
@@ -2892,6 +2908,171 @@ void *custom_edition_cache_data_get(
 	*size = (uint32_t)data_size;
 
 	return tag_cache + data_offset;
+}
+
+/* a tag name walk's most bytes of names read (the tags' names lie together
+after their instances in a cache as tool.exe writes it) */
+#define TAG_NAMES_WALK_MAXIMUM_BYTES (8UL << 20)
+
+int custom_edition_cache_tag_names_walk(
+	struct cache_file_source *source,
+	custom_edition_tag_name_proc visit,
+	void *context)
+{
+	struct cache_file_identity identity;
+	uint8_t index[TAG_INDEX_BYTES];
+	uint8_t *instances = NULL;
+	uint8_t *names = NULL;
+	uint32_t instances_offset;
+	uint32_t names_first = 0xFFFFFFFFUL;
+	uint32_t names_end = 0;
+	int32_t tag_count;
+	int32_t tag_index;
+	int walked = 0;
+
+	if (!source || !visit || cache_file_identify(source, &identity) != _cache_file_status_ok ||
+		identity.format != _cache_file_format_custom_edition_cache || identity.tag_data_size < TAG_INDEX_BYTES ||
+		!source->read(source->context, identity.tag_data_offset, TAG_INDEX_BYTES, index))
+	{
+		return 0;
+	}
+	tag_count = read_s32(index + TAG_INDEX_COUNT_OFFSET);
+	instances_offset = read_u32(index + TAG_INDEX_INSTANCES_OFFSET) - (uint32_t)CUSTOM_EDITION_TAG_CACHE_ADDRESS;
+	if (tag_count <= 0 || (uint32_t)tag_count > ABSOLUTE_INDEX_MASK + 1 ||
+		!range_fits(instances_offset, (uint32_t)tag_count * TAG_INSTANCE_BYTES, identity.tag_data_size) ||
+		!(instances = malloc((size_t)tag_count * TAG_INSTANCE_BYTES)) ||
+		!source->read(source->context, identity.tag_data_offset + instances_offset,
+			(uint32_t)tag_count * TAG_INSTANCE_BYTES, instances))
+	{
+		free(instances);
+		return 0;
+	}
+	/* (the names' span, cut at the tag data's end and the walk's most) */
+	for (tag_index = 0; tag_index < tag_count; tag_index++)
+	{
+		uint32_t name = read_u32(instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES + TAG_INSTANCE_NAME_OFFSET) -
+			(uint32_t)CUSTOM_EDITION_TAG_CACHE_ADDRESS;
+
+		if (name >= identity.tag_data_size)
+			continue;
+		names_first = name < names_first ? name : names_first;
+		names_end = name + 256 > names_end ? name + 256 : names_end;
+	}
+	if (names_end > identity.tag_data_size)
+		names_end = identity.tag_data_size;
+	if (names_first < names_end && names_end - names_first <= TAG_NAMES_WALK_MAXIMUM_BYTES &&
+		(names = malloc(names_end - names_first + 1)) != NULL &&
+		source->read(source->context, identity.tag_data_offset + names_first, names_end - names_first, names))
+	{
+		names[names_end - names_first] = 0;
+		for (tag_index = 0; tag_index < tag_count; tag_index++)
+		{
+			uint8_t const *instance = instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES;
+			uint32_t name = read_u32(instance + TAG_INSTANCE_NAME_OFFSET) - (uint32_t)CUSTOM_EDITION_TAG_CACHE_ADDRESS;
+
+			if (name < names_first || name >= names_end)
+				continue;
+			walked++;
+			if (!visit(context, read_u32(instance + TAG_INSTANCE_GROUP_OFFSET), (char const *)names + (name - names_first)))
+				break;
+		}
+	}
+	free(names);
+	free(instances);
+
+	return walked;
+}
+
+/* (custom_edition_cache_player_shields': bytes of the tag data at a tag
+cache address, from the file) */
+static int tag_data_read(
+	struct cache_file_source *source,
+	struct cache_file_identity const *identity,
+	uint32_t address,
+	uint32_t bytes,
+	void *out)
+{
+	uint32_t offset = address - (uint32_t)CUSTOM_EDITION_TAG_CACHE_ADDRESS;
+
+	return address >= (uint32_t)CUSTOM_EDITION_TAG_CACHE_ADDRESS &&
+		range_fits(offset, bytes, identity->tag_data_size) &&
+		source->read(source->context, identity->tag_data_offset + offset, bytes, out);
+}
+
+/* (the tag a handle names: its instance's group and data address) */
+static int tag_instance_read(
+	struct cache_file_source *source,
+	struct cache_file_identity const *identity,
+	uint32_t instances_address,
+	int32_t tag_count,
+	uint32_t handle,
+	uint32_t *group,
+	uint32_t *address)
+{
+	uint8_t instance[TAG_INSTANCE_BYTES];
+	uint32_t absolute = handle & ABSOLUTE_INDEX_MASK;
+
+	if (handle == 0xFFFFFFFFUL || (int32_t)absolute >= tag_count ||
+		!tag_data_read(source, identity, instances_address + absolute * TAG_INSTANCE_BYTES, TAG_INSTANCE_BYTES, instance))
+	{
+		return 0;
+	}
+	*group = read_u32(instance + TAG_INSTANCE_GROUP_OFFSET);
+	*address = read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET);
+	return 1;
+}
+
+int custom_edition_cache_player_shields(
+	struct cache_file_source *source,
+	float out[4])
+{
+	struct cache_file_identity identity;
+	uint8_t index[TAG_INDEX_BYTES];
+	uint8_t bytes[0x1C4];
+	uint32_t instances_address;
+	uint32_t group;
+	uint32_t address;
+	int32_t tag_count;
+	int32_t tag_index;
+	int found = 0;
+
+	if (!source || cache_file_identify(source, &identity) != _cache_file_status_ok ||
+		identity.format != _cache_file_format_custom_edition_cache || identity.tag_data_size < TAG_INDEX_BYTES ||
+		!source->read(source->context, identity.tag_data_offset, TAG_INDEX_BYTES, index))
+	{
+		return 0;
+	}
+	tag_count = read_s32(index + TAG_INDEX_COUNT_OFFSET);
+	instances_address = read_u32(index + TAG_INDEX_INSTANCES_OFFSET);
+	if (tag_count <= 0 || (uint32_t)tag_count > ABSOLUTE_INDEX_MASK + 1)
+		return 0;
+	/* (the globals: the first 'matg') */
+	for (tag_index = 0; tag_index < tag_count && !found; tag_index++)
+	{
+		if (tag_instance_read(source, &identity, instances_address, tag_count, (uint32_t)tag_index, &group, &address) &&
+			group == 0x6D617467UL)
+		{
+			found = 1;
+		}
+	}
+	/* (its multiplayer information's unit, that unit's collision model, and
+	the model's damage resistance: game_globals.h, object_definitions.h,
+	damage_resistances.h) */
+	if (!found || !tag_data_read(source, &identity, address + 0x164, 12, bytes) || read_s32(bytes) <= 0 ||
+		!tag_data_read(source, &identity, read_u32(bytes + 4), 0x20, bytes) ||
+		!tag_instance_read(source, &identity, instances_address, tag_count, read_u32(bytes + 0x1C), &group, &address) ||
+		!tag_data_read(source, &identity, address + 0x70, 16, bytes) ||
+		!tag_instance_read(source, &identity, instances_address, tag_count, read_u32(bytes + 12), &group, &address) ||
+		group != 0x636F6C6CUL ||
+		!tag_data_read(source, &identity, address, sizeof(bytes), bytes))
+	{
+		return 0;
+	}
+	memcpy(&out[0], bytes + 0x08, 4);
+	memcpy(&out[1], bytes + 0xCC, 4);
+	memcpy(&out[2], bytes + 0x10C, 4);
+	memcpy(&out[3], bytes + 0x110, 4);
+	return 1;
 }
 
 char const *custom_edition_cache_tag_name(
@@ -3704,19 +3885,36 @@ static void multiplayer_score_hint_convert(
 }
 
 /* Halo PC's widgets run its own functions besides the Xbox's, numbered past
-them: this build has none of those (its menus' own are other numbers, from
-PC_MENU_FUNCTION_BASE), and a handler running one would only log an invalid
-function. Those handlers run none. */
+them: this build answers none by those numbers (its menus' own are other
+numbers, from PC_MENU_FUNCTION_BASE), and a handler running one would only
+log an invalid function. Those handlers run none, unless the port gives the
+function a number of its own (custom_edition_widget_renumber_set: a custom
+campaign's ui.map), as it does the game data inputs past the Xbox's 41. */
+static custom_edition_widget_renumber_proc widget_event_function_renumber;
+static custom_edition_widget_renumber_proc widget_game_data_input_renumber;
+
+void custom_edition_widget_renumber_set(
+	custom_edition_widget_renumber_proc event_function,
+	custom_edition_widget_renumber_proc game_data_input)
+{
+	widget_event_function_renumber = event_function;
+	widget_game_data_input_renumber = game_data_input;
+}
+
 static void widget_pc_functions_clear(
 	struct load_state const *state,
 	uint32_t widget_offset,
+	char const *map_name,
 	struct custom_edition_conversion_report *report)
 {
 	int32_t handler_count;
 	uint32_t handlers_offset;
 	int32_t handler_index;
+	int32_t input_count;
+	uint32_t inputs_offset;
+	int32_t input_index;
 
-	if (!loaded_block_get(
+	if (loaded_block_get(
 			state->tag_cache + widget_offset + UI_WIDGET_EVENT_HANDLERS_OFFSET,
 			CUSTOM_EDITION_TAG_CACHE_ADDRESS,
 			state->used_bytes,
@@ -3724,18 +3922,49 @@ static void widget_pc_functions_clear(
 			&handler_count,
 			&handlers_offset))
 	{
-		return;
-	}
-	for (handler_index = 0; handler_index < handler_count; handler_index++)
-	{
-		uint8_t *handler = state->tag_cache + handlers_offset + (uint32_t)handler_index * UI_WIDGET_EVENT_HANDLER_BYTES;
-		uint32_t flags = read_u32(handler + UI_WIDGET_EVENT_HANDLER_FLAGS_OFFSET);
-
-		if ((flags & UI_WIDGET_EVENT_HANDLER_RUN_FUNCTION_FLAG) &&
-			read_s16(handler + UI_WIDGET_EVENT_HANDLER_FUNCTION_OFFSET) >= XBOX_WIDGET_FUNCTION_COUNT)
+		for (handler_index = 0; handler_index < handler_count; handler_index++)
 		{
+			uint8_t *handler = state->tag_cache + handlers_offset + (uint32_t)handler_index * UI_WIDGET_EVENT_HANDLER_BYTES;
+			uint32_t flags = read_u32(handler + UI_WIDGET_EVENT_HANDLER_FLAGS_OFFSET);
+			int16_t function = read_s16(handler + UI_WIDGET_EVENT_HANDLER_FUNCTION_OFFSET);
+			long renumbered;
+
+			if (!(flags & UI_WIDGET_EVENT_HANDLER_RUN_FUNCTION_FLAG) || function < XBOX_WIDGET_FUNCTION_COUNT)
+				continue;
+			renumbered = widget_event_function_renumber ? widget_event_function_renumber(map_name, function) : -1;
+			if (renumbered >= 0 && renumbered <= INT16_MAX)
+			{
+				write_u16(handler + UI_WIDGET_EVENT_HANDLER_FUNCTION_OFFSET, (uint16_t)renumbered);
+				report->widget_functions_renumbered++;
+				continue;
+			}
 			write_u32(handler + UI_WIDGET_EVENT_HANDLER_FLAGS_OFFSET, flags & ~UI_WIDGET_EVENT_HANDLER_RUN_FUNCTION_FLAG);
 			report->widget_functions_cleared++;
+		}
+	}
+	if (widget_game_data_input_renumber &&
+		loaded_block_get(
+			state->tag_cache + widget_offset + UI_WIDGET_GAME_DATA_INPUTS_OFFSET,
+			CUSTOM_EDITION_TAG_CACHE_ADDRESS,
+			state->used_bytes,
+			UI_WIDGET_GAME_DATA_INPUT_BYTES,
+			&input_count,
+			&inputs_offset))
+	{
+		for (input_index = 0; input_index < input_count; input_index++)
+		{
+			uint8_t *input = state->tag_cache + inputs_offset + (uint32_t)input_index * UI_WIDGET_GAME_DATA_INPUT_BYTES;
+			int16_t function = read_s16(input);
+			long renumbered;
+
+			if (function < XBOX_GAME_DATA_INPUT_COUNT)
+				continue;
+			renumbered = widget_game_data_input_renumber(map_name, function);
+			if (renumbered >= 0 && renumbered <= INT16_MAX)
+			{
+				write_u16(input, (uint16_t)renumbered);
+				report->widget_inputs_renumbered++;
+			}
 		}
 	}
 
@@ -4029,7 +4258,7 @@ enum cache_file_status custom_edition_cache_convert(
 		if (group_tag == UI_WIDGET_DEFINITION_GROUP_TAG &&
 			tag_cache_offset(&state, read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET), UI_WIDGET_DEFINITION_BYTES, &offset))
 		{
-			widget_pc_functions_clear(&state, offset, report);
+			widget_pc_functions_clear(&state, offset, map_name, report);
 			if (!strcmp(custom_edition_cache_tag_name(tag_cache, loaded_bytes, tag_index), MULTIPLAYER_PAUSE_LIST_NAME))
 				multiplayer_pause_list_convert(&state, offset, report);
 		}

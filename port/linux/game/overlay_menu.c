@@ -10,8 +10,9 @@ speed, the bots' difficulty), or a folder of more entries. They began as
 hardran3's OpenCE-Ultrahand and HaloDrones packages' (the bots': its
 difficulty is the bots' bots.skill here), with the bots' vehicles and routes
 besides. A command is run at once: a line for the console
-(hs_compile_and_evaluate), or "config <setting> <value>" (config_set_text,
-saved as the menus save it).
+(hs_compile_and_evaluate), "config <setting> <value>" (config_set_text,
+saved as the menus save it), or "lighting_force_off <setting> <true|false>"
+(lighting_config.c: for this run, not saved).
 
 Holding L and R (the shoulders) and pressing the d-pad's down opens it and
 closes it, on any controller; on the keyboard | (wherever its layout has it:
@@ -25,7 +26,8 @@ toggle off and on (else right goes into a folder and left back out), B goes
 back out of a folder and closes it at the top, Back closes it; the
 keyboard's arrows, Enter and Escape are those; the mouse and the
 touchscreen choose a row with a click or a tap (one outside the panel closes
-it, one on the folder's name goes back out of it) and scroll with the wheel
+it, one on the folder's name goes back out of it, one on a Tag Editor's
+value's left or right arrow steps it down or up) and scroll with the wheel
 or a drag. The game itself goes on underneath: it is not paused.
 
 game.overlay_menu (on by default) lets those buttons open it.
@@ -52,6 +54,8 @@ the data root (below, "the files' entries").
 #include "halo_ui_pointer.h"
 #include "tag_editor.h"
 #include "social_chat.h"
+#include "lighting_config.h"
+#include "lighting_menu.h"
 
 #include "../src/posix.h"
 #include "../../third_party/tomlc17/tomlc17.h"
@@ -176,12 +180,17 @@ enum overlay_entry_state
 	or "config:<setting>=<word>" (on while it is that word), of any kind of
 	setting (config_text) */
 	_overlay_state_config_text,
+	/* a lighting setting forced off for this run (lighting_config.c) */
+	_overlay_state_lighting_forced,
 };
 
 /* ---------- definitions */
 
 struct overlay_folder;
 struct overlay_source;
+
+/* (bots.c's: a bot setting Firefight keeps apart from multiplayer's) */
+char const *bots_setting_key(char const *name);
 
 struct overlay_entry
 {
@@ -335,11 +344,20 @@ static struct overlay_entry overlay_bots_routes_entries[] =
 };
 static struct overlay_source overlay_bots_routes = OVERLAY_FOLDER_OF("Routes", overlay_bots_routes_entries);
 
+/* port: the kind of bot added from now on (bots_common.h) */
+static struct overlay_entry overlay_bots_kind_entries[] =
+{
+	OVERLAY_SETTING_CHOICE("Birchwood", "bots.kind", "birchwood"),
+	OVERLAY_SETTING_CHOICE("Proving Grounds", "bots.kind", "provinggrounds"),
+};
+static struct overlay_source overlay_bots_kind = OVERLAY_FOLDER_OF("Kind", overlay_bots_kind_entries);
+
 static struct overlay_entry overlay_bots_entries[] =
 {
 	OVERLAY_FOLDER("Add Bots", overlay_bots_add),
 	OVERLAY_FOLDER("Drop Bots", overlay_bots_drop),
 	OVERLAY_FOLDER("Difficulty", overlay_bots_skill),
+	OVERLAY_FOLDER("Kind", overlay_bots_kind),
 	OVERLAY_TOGGLE("Vehicles", _overlay_state_config_integer, "config bots.vehicles 1", "config bots.vehicles 0",
 		"bots.vehicles", 0.0f, FALSE),
 	OVERLAY_FOLDER("Routes", overlay_bots_routes),
@@ -421,6 +439,52 @@ static struct overlay_entry overlay_system_entries[] =
 };
 static struct overlay_source overlay_system = OVERLAY_FOLDER_OF("System", overlay_system_entries);
 
+/* debugging: each switches a lighting feature off until the game restarts,
+leaving config.toml as it is. ON here can only turn a feature off: one the
+config has off stays off either way. Not offered where lighting_menu_available
+says the image has no dynamic lighting. */
+#define OVERLAY_FORCE_OFF(label, setting) \
+	OVERLAY_TOGGLE_NOTE(label, _overlay_state_lighting_forced, "lighting_force_off " setting " true", \
+		"lighting_force_off " setting " false", setting, "ON forces it off until restart. The config is not changed")
+static struct overlay_entry overlay_lighting_entries[] =
+{
+	OVERLAY_FORCE_OFF("Projectile Lights", "display.plasma_lighting"),
+	OVERLAY_FORCE_OFF("Muzzle Flash Lights", "display.muzzle_lighting"),
+	OVERLAY_FORCE_OFF("Weapon Glow", "display.weapon_glow"),
+	OVERLAY_FORCE_OFF("Fuel Rod Lights", "display.fuel_rod_lighting"),
+	OVERLAY_FORCE_OFF("Ammo Counter Lights", "display.ammo_counter_lighting"),
+	OVERLAY_FORCE_OFF("Needler Lights", "display.needler_lighting"),
+	OVERLAY_FORCE_OFF("Plasma Prong Lighting", "display.plasma_prong_lighting"),
+	OVERLAY_FORCE_OFF("Jackal Shield Lights", "display.jackal_shield_lighting"),
+	OVERLAY_FORCE_OFF("Covenant Shield Lights", "display.covenant_shield_lighting"),
+	OVERLAY_FORCE_OFF("Vehicle Lights", "display.vehicle_lighting"),
+	OVERLAY_FORCE_OFF("World Emitters", "display.world_lighting"),
+	OVERLAY_FORCE_OFF("Light Occlusion", "display.plasma_occlusion"),
+	OVERLAY_FORCE_OFF("Shield Glow", "display.shield_glow"),
+	OVERLAY_TOGGLE_NOTE("Moving Lights: 384 Rays", _overlay_state_lighting_forced,
+		"lighting_force_off debug.moving_lights_384 true", "lighting_force_off debug.moving_lights_384 false",
+		"debug.moving_lights_384", "ON traces a moving light with 384 rays, OFF with 1536. Until restart"),
+	OVERLAY_TOGGLE_NOTE("Fast Occlusion Math", _overlay_state_lighting_forced,
+		"lighting_force_off debug.fast_occlusion_math true", "lighting_force_off debug.fast_occlusion_math false",
+		"debug.fast_occlusion_math", "ON builds light occlusion with approximate divides: faster, near the same. Until restart"),
+	OVERLAY_TOGGLE_NOTE("Parallel Light Rays", _overlay_state_lighting_forced,
+		"lighting_force_off debug.parallel_light_rays true", "lighting_force_off debug.parallel_light_rays false",
+		"debug.parallel_light_rays", "ON shares a light's occlusion rays with helper threads: the same result. Until restart"),
+	OVERLAY_TOGGLE_NOTE("Background Light Rays", _overlay_state_lighting_forced,
+		"lighting_force_off debug.background_light_rays true", "lighting_force_off debug.background_light_rays false",
+		"debug.background_light_rays", "ON traces moving lights while the frame draws: a frame later. Until restart"),
+	OVERLAY_TOGGLE_NOTE("Full Reach: Nearest 8 Lights", _overlay_state_lighting_forced,
+		"lighting_force_off debug.promoted_cap_8 true", "lighting_force_off debug.promoted_cap_8 false",
+		"debug.promoted_cap_8", "ON shrinks the reach of farther lights. All OFF: every light has its full reach"),
+	OVERLAY_TOGGLE_NOTE("Full Reach: Nearest 6 Lights", _overlay_state_lighting_forced,
+		"lighting_force_off debug.promoted_cap_6 true", "lighting_force_off debug.promoted_cap_6 false",
+		"debug.promoted_cap_6", "ON shrinks the reach of farther lights. All OFF: every light has its full reach"),
+	OVERLAY_TOGGLE_NOTE("Full Reach: Nearest 4 Lights", _overlay_state_lighting_forced,
+		"lighting_force_off debug.promoted_cap_4 true", "lighting_force_off debug.promoted_cap_4 false",
+		"debug.promoted_cap_4", "ON shrinks the reach of farther lights. All OFF: every light has its full reach"),
+};
+static struct overlay_source overlay_lighting = OVERLAY_FOLDER_OF("Force Lighting Off", overlay_lighting_entries);
+
 static struct overlay_entry overlay_root_entries[] =
 {
 	OVERLAY_FOLDER("Cheats", overlay_cheats),
@@ -429,6 +493,7 @@ static struct overlay_entry overlay_root_entries[] =
 	OVERLAY_FOLDER("Game Speed", overlay_speed),
 	OVERLAY_FOLDER("HUD", overlay_hud),
 	OVERLAY_FOLDER("Camera", overlay_camera),
+	OVERLAY_FOLDER("Force Lighting Off", overlay_lighting),
 	OVERLAY_FOLDER("System", overlay_system),
 };
 static struct overlay_source overlay_root = OVERLAY_FOLDER_OF(OVERLAY_TITLE, overlay_root_entries);
@@ -438,7 +503,7 @@ static struct overlay_source overlay_root = OVERLAY_FOLDER_OF(OVERLAY_TITLE, ove
 Entries of one's own, beside the built-in ones: files in the overlay folder
 of the data root (the folder with maps/ and config.toml: the Switch's
 sdmc:/switch/halo/overlay, the PS5's /data/halo/overlay, Android's
-Android/data/com.halo.decomp/files/overlay). Each folder in it is a folder of
+Android/data/com.halo.contentevolved/files/overlay). Each folder in it is a folder of
 the overlay, and each folder in one of those a folder in that, by its name;
 one of a built-in folder's name (Cheats, in any case) adds to it. Each .toml
 file is an entry:
@@ -534,6 +599,10 @@ static struct
 	short rows_top;
 	short row_height;
 	short rows_shown;
+	/* where the last frame drew a Tag Editor's value between its arrows
+	(the screen's coordinates; a click on its left half steps it down, on
+	its right half up) */
+	short value_x0, value_x1;
 	/* the chosen row's label's scroll: the folder and the row, and since
 	when */
 	struct overlay_folder *scroll_folder;
@@ -654,7 +723,8 @@ static boolean overlay_entry_on(
 		return config_integer(entry->state_name) != 0;
 	case _overlay_state_config_equals:
 	{
-		char const *word = config_string(entry->state_name);
+		/* (a bot setting: Firefight's own in a Firefight game, bots.c) */
+		char const *word = config_string(bots_setting_key(entry->state_name));
 
 		return word && entry->state_text && !strcmp(word, entry->state_text);
 	}
@@ -676,6 +746,8 @@ static boolean overlay_entry_on(
 		/* (true, or a number not 0) */
 		return !strcmp(text, "true") || atof(text) != 0.0;
 	}
+	case _overlay_state_lighting_forced:
+		return lighting_forced_off(entry->state_name) != 0;
 	}
 	return FALSE;
 }
@@ -695,13 +767,14 @@ static boolean overlay_run(
 	size_t error_size)
 {
 	error[0] = 0;
-	if (!strncmp(command, "config ", 7))
+	if (!strncmp(command, "config ", 7) || !strncmp(command, "lighting_force_off ", 19))
 	{
 		char name[128];
 		char const *value;
 		size_t length;
+		boolean forcing = command[0] == 'l';
 
-		command += 7;
+		command += forcing ? 19 : 7;
 		length = strcspn(command, " ");
 		if (length >= sizeof(name))
 			length = sizeof(name) - 1;
@@ -710,6 +783,13 @@ static boolean overlay_run(
 		value = command + length;
 		while (*value == ' ')
 			value++;
+		if (forcing)
+		{
+			if (lighting_force_off(name, !strcmp(value, "true")))
+				return TRUE;
+			snprintf(error, error_size, "not a lighting setting");
+			return FALSE;
+		}
 		return config_set_text(name, value, error, error_size) != 0;
 	}
 	if (hs_compile_and_evaluate(command))
@@ -1104,6 +1184,8 @@ static struct overlay_folder *overlay_build_folder(
 	{
 		struct overlay_entry *entry = &source->entries[index];
 
+		if (entry->source == &overlay_lighting && !lighting_menu_available())
+			continue;
 		if (entry->type == _overlay_entry_folder && entry->source && depth + 1 < MAXIMUM_OVERLAY_DEPTH)
 		{
 			char child[OVERLAY_PATH_SIZE];
@@ -1334,6 +1416,21 @@ static void overlay_move(
 	overlay_keep_selection_shown();
 }
 
+/* a Tag Editor's value stepped (by left or right, or a click on its
+arrows) */
+static void overlay_editor_adjust(
+	short row,
+	short direction,
+	boolean fast)
+{
+	char status[96];
+
+	tag_editor_menu_adjust(row, direction, fast, status, sizeof(status));
+	overlay_editor_refresh();
+	if (status[0])
+		overlay_set_status(status);
+}
+
 static void overlay_choose(
 	short row)
 {
@@ -1341,6 +1438,7 @@ static void overlay_choose(
 	struct overlay_entry *entry;
 	char const *command;
 	char why[128];
+	char mapped_command[128];
 	char status[96];
 	boolean on;
 
@@ -1399,6 +1497,15 @@ static void overlay_choose(
 	default:
 		on = TRUE;
 		command = entry->command;
+		/* (a setting's choice: written to the setting the game at hand keeps,
+		a bot setting Firefight's own in a Firefight game: bots.c) */
+		if (entry->state == _overlay_state_config_equals && entry->state_name && entry->state_text &&
+			strcmp(bots_setting_key(entry->state_name), entry->state_name))
+		{
+			snprintf(mapped_command, sizeof(mapped_command), "config %s %s", bots_setting_key(entry->state_name),
+				entry->state_text);
+			command = mapped_command;
+		}
 		break;
 	}
 	if (!command)
@@ -1709,9 +1816,26 @@ void overlay_menu_pointer(
 		else if (click_y >= overlay.rows_top && overlay.row_height > 0)
 		{
 			short row = (short)(overlay.first_row + (click_y - overlay.rows_top) / overlay.row_height);
+			struct overlay_folder *folder = overlay_folder();
+			struct overlay_entry *entry = row < folder->count ? folder->entries[row] : NULL;
 
-			if (row < overlay.first_row + overlay.rows_shown)
+			/* (a Tag Editor's value: a click on its arrows steps it, one on
+			its label chooses the row alone, A's putting back the map's value
+			left to the buttons) */
+			if (row < overlay.first_row + overlay.rows_shown && entry &&
+				entry->type == _overlay_entry_editor_row && entry->editor_kind == _tag_editor_row_value)
+			{
+				overlay.selected[overlay.depth] = row;
+				if (overlay.value_x1 > overlay.value_x0 && click_x >= overlay.value_x0 && click_x < overlay.value_x1)
+				{
+					overlay_editor_adjust(row,
+						(short)(click_x < (overlay.value_x0 + overlay.value_x1) / 2 ? -1 : 1), FALSE);
+				}
+			}
+			else if (row < overlay.first_row + overlay.rows_shown)
+			{
 				overlay_choose(row);
+			}
 		}
 	}
 }
@@ -1801,12 +1925,8 @@ void overlay_menu_update(
 		}
 		else if (editor_kind == _tag_editor_row_value)
 		{
-			char status[96];
-
-			tag_editor_menu_adjust(selected, (short)((pressed & (1UL << HALO_OVERLAY_PAD_LEFT)) ? -1 : 1),
-				(long)(now - overlay.sideways_since) >= FAST_AFTER_MILLISECONDS, status, sizeof(status));
-			if (status[0])
-				overlay_set_status(status);
+			overlay_editor_adjust(selected, (short)((pressed & (1UL << HALO_OVERLAY_PAD_LEFT)) ? -1 : 1),
+				(long)(now - overlay.sideways_since) >= FAST_AFTER_MILLISECONDS);
 		}
 		else if (pressed & (1UL << HALO_OVERLAY_PAD_LEFT))
 		{
@@ -2099,6 +2219,11 @@ void overlay_menu_draw(
 
 			value_room.x0 = (short)(room.x1 - (entry->type == _overlay_entry_editor_row ? OVERLAY_EDITOR_VALUE_WIDTH :
 				OVERLAY_VALUE_WIDTH));
+			if (arrows && entry->type == _overlay_entry_editor_row)
+			{
+				overlay.value_x0 = value_room.x0;
+				overlay.value_x1 = value_room.x1;
+			}
 			if (arrows)
 			{
 				overlay_arrow(value_room.x0, middle, FALSE, BLUE);

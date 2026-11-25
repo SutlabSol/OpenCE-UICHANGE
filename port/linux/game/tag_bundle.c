@@ -1205,7 +1205,8 @@ enum tag_bundle_status tag_bundle_write(
 		memset(header, 0, sizeof(header));
 		write_unsigned_long(header + TAG_BUNDLE_HEADER_SIGNATURE_OFFSET, TAG_BUNDLE_SIGNATURE);
 		write_unsigned_long(header + TAG_BUNDLE_HEADER_VERSION_OFFSET, TAG_BUNDLE_VERSION);
-		write_unsigned_long(header + TAG_BUNDLE_HEADER_FLAGS_OFFSET, FLAG(_tag_bundle_custom_edition_bit));
+		write_unsigned_long(header + TAG_BUNDLE_HEADER_FLAGS_OFFSET,
+			FLAG(_tag_bundle_custom_edition_bit) | source->flags);
 		write_unsigned_long(header + TAG_BUNDLE_HEADER_TAG_COUNT_OFFSET, (unsigned long)bundle.tag_count);
 		write_unsigned_long(header + TAG_BUNDLE_HEADER_TAGS_OFFSET, tags_offset);
 		write_unsigned_long(header + TAG_BUNDLE_HEADER_NAMES_OFFSET, names_offset);

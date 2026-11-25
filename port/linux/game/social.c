@@ -69,7 +69,9 @@ the players and their records social_menu.c's.
 #include "campaign_medals.h"
 #include "campaign_score.h"
 #include "community.h"
+#include "custom_edition_cache.h"
 #include "halo_firefight.h"
+#include "mcc_cache.h"
 #include "network_privacy.h"
 #include "network_replay.h"
 #include "social.h"
@@ -642,6 +644,18 @@ void social_account_answer(
 	social_name_take(answer, "account.");
 	social_answer_totals(answer);
 	social_account_take(answer);
+}
+
+/* this install joined another account (SYNC ACCOUNT, INPUT CODE): the
+redeem's answer has the account joined, whose emblem, rank and records are
+this install's from now on, at once (not at the next start), and an emblem
+chosen here before is not said to it over the account's own */
+void social_account_synced(
+	char const *answer)
+{
+	social.emblem_dirty = FALSE;
+	social.emblem_had = FALSE;
+	social_account_answer(answer);
 }
 
 void social_rank_catch_up(
@@ -1663,6 +1677,76 @@ static void social_presence_join(
 	}
 	else
 		server_json_boolean(json, "private", TRUE);
+}
+
+/* ---------- the chat's /invite */
+
+boolean social_in_any_game(
+	void)
+{
+	return network_replay_playing() || social_network_connection() != _game_connection_local ||
+		(game_in_progress() && !main_menu_is_active());
+}
+
+/* the hosted game's invite: the presence's rules (social_presence_join),
+but the host asked for it, so social.instant_join does not matter: a link
+(to one player: past the password too), else a public game with a
+password's host key (to everyone: the password asked for) */
+boolean social_game_invite_make(
+	boolean to_one_player,
+	struct social_game_invite *invite,
+	char *why,
+	long why_size)
+{
+	struct network_game *game = network_game_get_game();
+	short connection = social_network_connection();
+	char const *map_name;
+	char const *last;
+	boolean locked;
+
+	csmemset(invite, 0, sizeof(*invite));
+	why[0] = 0;
+	if (connection == _game_connection_network_client)
+	{
+		snprintf(why, (size_t)why_size, "Only the game's host can invite players to it");
+		return FALSE;
+	}
+	if (connection != _game_connection_network_server || !game)
+	{
+		snprintf(why, (size_t)why_size, "Host an internet game first: /invite asks players into the game you host");
+		return FALSE;
+	}
+	if (!p2p_hosting_internet() || !p2p_invite_link(invite->link, sizeof(invite->link)) || !invite->link[0])
+	{
+		snprintf(why, (size_t)why_size, "Your game is not on the internet (a LAN game): it cannot be joined by invite");
+		invite->link[0] = 0;
+		return FALSE;
+	}
+	locked = p2p_hosting_listed() && p2p_hosting_password();
+	/* (everyone: a password's game is found in the server browser, which
+	asks for it; its invite would let them past it) */
+	if (locked && !to_one_player)
+	{
+		if (strlen(invite->link) > 12 + 32)
+			snprintf(invite->host_key, sizeof(invite->host_key), "%.32s", invite->link + 12);
+		invite->link[0] = 0;
+		if (!invite->host_key[0])
+		{
+			snprintf(why, (size_t)why_size, "Your game's invite could not be made: try again");
+			return FALSE;
+		}
+	}
+	social_utf8_from_wide(game->name, NUMBEROF(game->name), invite->game, sizeof(invite->game));
+	social_utf8_from_wide(game->variant.human_readable_game_description,
+		NUMBEROF(game->variant.human_readable_game_description), invite->gametype, sizeof(invite->gametype));
+	map_name = game->map.name;
+	last = strrchr(map_name, '\\');
+	snprintf(invite->map, sizeof(invite->map), "%.*s", (int)sizeof(invite->map) - 1, last ? last + 1 : map_name);
+	snprintf(invite->kind, sizeof(invite->kind), "%s", custom_edition_level_name(map_name) ? "ce" :
+		mcc_level_name(map_name) ? "mcc" : "pc");
+	invite->players = MAX(game->player_count, 0);
+	invite->maximum = game->maximum_players;
+	return TRUE;
 }
 
 /* what the game is doing as POST /presence's body (how friends may join a

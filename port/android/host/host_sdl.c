@@ -14,8 +14,12 @@ so the audio callback is handed to a thread that has one.
 #include "host.h"
 
 #include <SDL3/SDL.h>
+#ifdef __ANDROID__
+#include <jni.h>
+#endif
 #include <pthread.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #define HANDLE_COUNT 256
 
@@ -157,11 +161,21 @@ layer opens a context and swaps at each present as it does under GL ES, and its
 event loop runs only while it has a window and a context. */
 static char standin_context;
 
+#ifdef HALO_MACOS
+/* (host_vk_driver_macos.c) */
+extern void *host_vk_metal_layer;
+#endif
+
 uint32_t host_sdl_create_window(const char *title, int width, int height, int64_t flags)
 {
 	if (host_renderer_vulkan)
 	{
 		flags &= ~(int64_t)SDL_WINDOW_OPENGL;
+#ifdef HALO_MACOS
+		/* (MoltenVK's surface is made on the window's CAMetalLayer:
+		port/macos/host/host_vk_driver_macos.c) */
+		flags |= (int64_t)SDL_WINDOW_METAL;
+#endif
 		host_logf(HOST_LOG_INFO, "window: real, without an OpenGL context (a stand-in), the display being Vulkan's");
 	}
 	{
@@ -170,6 +184,18 @@ uint32_t host_sdl_create_window(const char *title, int width, int height, int64_
 		/* the Vulkan backend makes its surface on the game's window: the last made (host_vk.h) */
 		if (host_renderer_vulkan && window)
 			host_vk_window = window;
+#ifdef HALO_MACOS
+		/* (and on macOS on its Metal view's layer, which only the main thread,
+		the game's, can make: host_vk_present.c) */
+		if (host_renderer_vulkan && window)
+		{
+			SDL_MetalView view = SDL_Metal_CreateView(window);
+
+			host_vk_metal_layer = view ? SDL_Metal_GetLayer(view) : NULL;
+			if (!host_vk_metal_layer)
+				host_logf(HOST_LOG_ERROR, "window: no Metal view (%s)", SDL_GetError());
+		}
+#endif
 		return host_sdl_handle_new(_handle_window, window);
 	}
 }
@@ -278,7 +304,56 @@ int host_sdl_gl_swap_window(uint32_t window)
 	return object ? SDL_GL_SwapWindow(object) : 0;
 }
 
-/* ---------- events */
+/* ---------- events
+
+The guest's SDL_Event is the host's but where a member is a pointer: the
+guest's are 4 bytes, so the members from the first pointer on lie elsewhere
+(SDL_TextInputEvent's text at 20, not 24). Text input, text editing and
+drops carry strings, which the guest reads (a name typed into the game, a
+file dropped on its window): those events are written in the guest's layout,
+their strings copied into guest memory, a ring of slots each event takes the
+next of (the guest has read an event's strings long before the ring comes
+round to it again). The other events have no pointer, and are copied. */
+
+#define EVENT_STRING_SLOTS 32
+#define EVENT_STRING_SIZE 1024
+
+struct guest_text_event
+{
+	uint32_t type, reserved;
+	uint64_t timestamp;
+	uint32_t window;
+	uint32_t text;
+	int32_t start, length;
+};
+
+struct guest_drop_event
+{
+	uint32_t type, reserved;
+	uint64_t timestamp;
+	uint32_t window;
+	float x, y;
+	uint32_t source, data;
+};
+
+typedef char guest_text_event_check[sizeof(struct guest_text_event) == 32 ? 1 : -1];
+typedef char guest_drop_event_check[sizeof(struct guest_drop_event) == 40 ? 1 : -1];
+
+/* a string in guest memory, its guest address (0 for none) */
+static uint32_t event_string(const char *text)
+{
+	static char *slots;
+	static unsigned next;
+	char *slot;
+
+	if (!text)
+		return 0;
+	if (!slots && !(slots = host_low_map(EVENT_STRING_SLOTS * EVENT_STRING_SIZE, PROT_READ | PROT_WRITE)))
+		return 0;
+	slot = slots + (next++ % EVENT_STRING_SLOTS) * EVENT_STRING_SIZE;
+	SDL_strlcpy(slot, text, EVENT_STRING_SIZE);
+	return (uint32_t)(uintptr_t)slot;
+}
 
 int host_sdl_poll_event(void *event)
 {
@@ -286,15 +361,97 @@ int host_sdl_poll_event(void *event)
 
 	if (!SDL_PollEvent(&host_event))
 		return 0;
-	/* the layouts agree except for the pointers of text, drop and user
-	events, which the guest does not read */
 	memcpy(event, &host_event, sizeof(host_event));
+	switch (host_event.type)
+	{
+	case SDL_EVENT_TEXT_INPUT:
+	case SDL_EVENT_TEXT_EDITING:
+	{
+		struct guest_text_event *text = event;
+
+		text->window = host_event.text.windowID;
+		text->text = event_string(host_event.type == SDL_EVENT_TEXT_INPUT ? host_event.text.text :
+			host_event.edit.text);
+		text->start = host_event.type == SDL_EVENT_TEXT_EDITING ? host_event.edit.start : 0;
+		text->length = host_event.type == SDL_EVENT_TEXT_EDITING ? host_event.edit.length : 0;
+		break;
+	}
+	case SDL_EVENT_DROP_BEGIN:
+	case SDL_EVENT_DROP_FILE:
+	case SDL_EVENT_DROP_TEXT:
+	case SDL_EVENT_DROP_COMPLETE:
+	case SDL_EVENT_DROP_POSITION:
+	{
+		struct guest_drop_event *drop = event;
+
+		drop->window = host_event.drop.windowID;
+		drop->x = host_event.drop.x;
+		drop->y = host_event.drop.y;
+		drop->source = event_string(host_event.drop.source);
+		drop->data = event_string(host_event.drop.data);
+		break;
+	}
+	}
 	return 1;
 }
 
 /* ---------- text input (Android's keyboard while a name is typed:
-sdl_platform.c). What it types arrives as key events, which the guest reads;
-its text events are not (their text is a pointer) */
+sdl_platform.c)
+
+The game's text bar (HaloActivity.showTextBar, TextBar.java) takes the place
+of SDL's hidden field: a real text field above Android's keyboard, which shows
+what is typed and lets the keyboard suggest and correct. What it types still
+arrives as key events, which the guest reads, as SDL's own field's did. SDL's
+text input is not started meanwhile (its hidden field would take the
+keyboard's focus from the bar); with no bar, it is, as before. */
+
+/* the activity's method name (signature) called with the int given, or
+none when the signature takes none; whether it returned true (a void
+method's call counts) */
+#ifdef __ANDROID__
+static int text_bar_call(const char *name, const char *signature, int argument, int takes_argument)
+{
+	JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+	jobject activity = (jobject)SDL_GetAndroidActivity();
+	jclass activity_class;
+	jmethodID method;
+	int result = 0;
+
+	if (!env || !activity)
+		return 0;
+	activity_class = (*env)->GetObjectClass(env, activity);
+	method = activity_class ? (*env)->GetMethodID(env, activity_class, name, signature) : NULL;
+	if (method && takes_argument)
+		result = (*env)->CallBooleanMethod(env, activity, method, (jint)argument) ? 1 : 0;
+	else if (method)
+	{
+		(*env)->CallVoidMethod(env, activity, method);
+		result = 1;
+	}
+	if ((*env)->ExceptionCheck(env))
+	{
+		(*env)->ExceptionClear(env);
+		result = 0;
+	}
+	if (activity_class)
+		(*env)->DeleteLocalRef(env, activity_class);
+	(*env)->DeleteLocalRef(env, activity);
+	if (!method)
+		host_logf(HOST_LOG_WARN, "HaloActivity.%s could not be called", name);
+	return result;
+}
+#else
+/* (the desktop hosts, Linux's and macOS's, have no text bar: SDL's own text
+input, which a desktop's keyboard types into) */
+static int text_bar_call(const char *name, const char *signature, int argument, int takes_argument)
+{
+	(void)name;
+	(void)signature;
+	(void)argument;
+	(void)takes_argument;
+	return 0;
+}
+#endif
 
 int host_sdl_text_input(uint32_t window, int type)
 {
@@ -305,9 +462,19 @@ int host_sdl_text_input(uint32_t window, int type)
 		return 0;
 	if (type < 0)
 	{
-		SDL_StopTextInput(object);
+		text_bar_call("hideTextBar", "()V", 0, 0);
+		if (SDL_TextInputActive(object))
+			SDL_StopTextInput(object);
 		return 0;
 	}
+	if (text_bar_call("showTextBar", "(I)Z", type, 1))
+	{
+		host_logf(HOST_LOG_INFO, "text input: the text bar (type %d)", type);
+		return 1;
+	}
+#ifdef __ANDROID__
+	host_logf(HOST_LOG_WARN, "text input: no text bar, SDL's hidden field (type %d)", type);
+#endif
 	properties = SDL_CreateProperties();
 	SDL_SetNumberProperty(properties, SDL_PROP_TEXTINPUT_TYPE_NUMBER, type);
 	SDL_SetBooleanProperty(properties, SDL_PROP_TEXTINPUT_MULTILINE_BOOLEAN, false);
@@ -714,11 +881,112 @@ int host_sdl_show_toast(const char *message, int duration, int gravity, int x, i
 #endif
 }
 
+/* ---------- a dialog over the game's window */
+
+#ifdef HALO_MACOS
+/* the game's windows as a dialog shows and after: a window kept in relative
+mouse mode takes the mouse back to its middle as it becomes key again during
+the dialog's modal loop (leaving fullscreen is an animation, which ends with
+the window made key), and the keys then go to it, which reads no events
+until the dialog is answered: the mouse is stuck, Escape does nothing and the
+app cannot be quit. So the windows give up the mouse and fullscreen, the
+change of Space done before the dialog, which is a sheet on the window */
+#define DIALOG_WINDOWS 4
+
+struct dialog_windows
+{
+	int count;
+	SDL_Window *windows[DIALOG_WINDOWS];
+	bool relative[DIALOG_WINDOWS];
+	bool grabbed[DIALOG_WINDOWS];
+	bool fullscreen[DIALOG_WINDOWS];
+};
+
+static SDL_Window *dialog_windows_release(struct dialog_windows *saved)
+{
+	SDL_Window *parent = NULL;
+	SDL_Window **windows;
+	int count = 0;
+	int index;
+
+	memset(saved, 0, sizeof(*saved));
+	windows = SDL_GetWindows(&count);
+	if (!windows)
+		return NULL;
+	for (index = 0; index < count && saved->count < DIALOG_WINDOWS; index++)
+	{
+		SDL_Window *window = windows[index];
+		SDL_WindowFlags flags = SDL_GetWindowFlags(window);
+		int slot = saved->count++;
+
+		saved->windows[slot] = window;
+		saved->relative[slot] = SDL_GetWindowRelativeMouseMode(window);
+		saved->grabbed[slot] = SDL_GetWindowMouseGrab(window);
+		saved->fullscreen[slot] = (flags & SDL_WINDOW_FULLSCREEN) != 0;
+		SDL_SetWindowRelativeMouseMode(window, false);
+		SDL_SetWindowMouseGrab(window, false);
+		if (saved->fullscreen[slot])
+			SDL_SetWindowFullscreen(window, false);
+		/* (the guest may have just left fullscreen itself: updater.c) */
+		SDL_SyncWindow(window);
+		if (!parent && !(flags & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)))
+			parent = window;
+	}
+	SDL_free(windows);
+	SDL_ShowCursor();
+	if (parent)
+		SDL_RaiseWindow(parent);
+	return parent;
+}
+
+static void dialog_windows_restore(const struct dialog_windows *saved)
+{
+	int index;
+
+	for (index = 0; index < saved->count; index++)
+	{
+		SDL_Window *window = saved->windows[index];
+
+		if (saved->fullscreen[index])
+			SDL_SetWindowFullscreen(window, true);
+		if (saved->grabbed[index])
+			SDL_SetWindowMouseGrab(window, true);
+		if (saved->relative[index])
+			SDL_SetWindowRelativeMouseMode(window, true);
+	}
+}
+#endif
+
+static bool dialog_show(const SDL_MessageBoxData *data, int *answer)
+{
+#ifdef HALO_MACOS
+	struct dialog_windows saved;
+	SDL_MessageBoxData question = *data;
+	bool shown;
+
+	question.window = dialog_windows_release(&saved);
+	shown = SDL_ShowMessageBox(&question, answer);
+	dialog_windows_restore(&saved);
+	return shown;
+#else
+	return SDL_ShowMessageBox(data, answer);
+#endif
+}
+
 /* ---------- a message for the player (a host of another network version) */
 
 int host_sdl_show_simple_message_box(uint32_t flags, const char *title, const char *message)
 {
-	return SDL_ShowSimpleMessageBox((SDL_MessageBoxFlags)flags, title, message, NULL) ? 1 : 0;
+	static const SDL_MessageBoxButtonData ok = { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT | SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "OK" };
+	SDL_MessageBoxData data;
+
+	memset(&data, 0, sizeof(data));
+	data.flags = (SDL_MessageBoxFlags)flags;
+	data.title = title;
+	data.message = message;
+	data.numbuttons = 1;
+	data.buttons = &ok;
+	return dialog_show(&data, NULL) ? 1 : 0;
 }
 
 /* ---------- a question for the player (the mods at startup: port_mods.c) */
@@ -728,7 +996,7 @@ int host_sdl_show_message_box(struct host_message_box *box)
 {
 	SDL_MessageBoxButtonData buttons[HOST_MESSAGE_BOX_BUTTONS];
 	SDL_MessageBoxData question;
-	const char *texts = (const char *)(uintptr_t)box->button_texts;
+	const char *texts = (const char *)host_pointer(box->button_texts);
 	uint32_t used = 0;
 	int answer = -1;
 	int index;
@@ -748,11 +1016,11 @@ int host_sdl_show_message_box(struct host_message_box *box)
 	}
 	memset(&question, 0, sizeof(question));
 	question.flags = (SDL_MessageBoxFlags)box->flags;
-	question.title = (const char *)(uintptr_t)box->title;
-	question.message = (const char *)(uintptr_t)box->message;
+	question.title = (const char *)host_pointer(box->title);
+	question.message = (const char *)host_pointer(box->message);
 	question.numbuttons = box->button_count;
 	question.buttons = buttons;
-	if (!SDL_ShowMessageBox(&question, &answer))
+	if (!dialog_show(&question, &answer))
 		return 0;
 	box->chosen = answer;
 	return 1;

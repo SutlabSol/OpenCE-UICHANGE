@@ -32,9 +32,12 @@ where its offset falls in their combined offset space.
 #include "tag_schema.h"
 #include "tag_bundle.h"
 #include "map_share.h"
+#include "custom_campaigns.h"
+#include "mcc_loading.h"
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <xtl.h>
 
 #ifdef HALO_SWITCH
@@ -45,9 +48,10 @@ map's combined space, the top bit set (a mod bitmap's keys have it clear: mod_bi
 go (mod_bitmaps_tags_unloaded) */
 int host_texture_cache_get(uint64_t key, uint32_t buffer, uint32_t size);
 void host_texture_cache_put(uint64_t key, uint32_t buffer, uint32_t size);
-void memory_watch_prepare_write(void *address, unsigned long size);
 #define CUSTOM_EDITION_TEXTURE_KEY(offset) ((1ull << 63) | (uint64_t)(unsigned long)(offset))
 #endif
+/* port: platform.h's (custom_edition_cache_read) */
+void memory_watch_prepare_write(void *address, unsigned long size);
 
 /* ---------- constants */
 
@@ -142,6 +146,9 @@ static int custom_edition_file_read(
 {
 	FILE *stream = context;
 
+	/* (the loading screen drawn again, at most every 50 ms, while the map is
+	read: mcc_loading.c) */
+	mcc_loading_pulse();
 	return fseek(stream, (long)offset, SEEK_SET) == 0 && fread(buffer, 1, size, stream) == size;
 }
 
@@ -323,6 +330,73 @@ static boolean maps_folder_hashed_name(
 map of its name in another folder */
 static char custom_edition_script_map_path[MAP_PATH_SIZE];
 
+static boolean maps_folders_search(
+	char const *name,
+	char *path);
+
+/* the maps folders' answers for a name, as last looked for (a second, five
+for a map not there, or until the maps change: custom_edition_map_paths_forget). A map this machine
+lacks is looked for in each folder and subfolder, and the menus ask for it
+each frame (a server browser's row of a map not downloaded yet), which
+without these took the game to a few frames a second */
+#define MAPS_FOLDERS_ANSWERS 16
+static struct
+{
+	char name[MAP_PATH_SIZE];
+	char path[MAP_PATH_SIZE];
+	boolean found;
+	unsigned long looked_at;
+	unsigned long generation;
+} maps_folders_answers[MAPS_FOLDERS_ANSWERS];
+static short maps_folders_answer_next;
+static unsigned long maps_folders_generation = 1;
+static pthread_mutex_t maps_folders_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static boolean maps_folders_named(
+	char const *name,
+	char *path)
+{
+	unsigned long now = GetTickCount() | 1;
+	unsigned long generation;
+	boolean found;
+	short index;
+
+	if (strlen(name) >= MAP_PATH_SIZE)
+		return maps_folders_search(name, path);
+	pthread_mutex_lock(&maps_folders_lock);
+	for (index = 0; index < MAPS_FOLDERS_ANSWERS; index++)
+	{
+		if (maps_folders_answers[index].looked_at &&
+			maps_folders_answers[index].generation == maps_folders_generation &&
+			now - maps_folders_answers[index].looked_at < (maps_folders_answers[index].found ? 1000u : 5000u) &&
+			!csstrcasecmp(maps_folders_answers[index].name, name))
+		{
+			found = maps_folders_answers[index].found;
+			if (found)
+				strcpy(path, maps_folders_answers[index].path);
+			pthread_mutex_unlock(&maps_folders_lock);
+			return found;
+		}
+	}
+	generation = maps_folders_generation;
+	pthread_mutex_unlock(&maps_folders_lock);
+	found = maps_folders_search(name, path);
+	pthread_mutex_lock(&maps_folders_lock);
+	/* (not kept if the maps changed while it looked) */
+	if (generation == maps_folders_generation)
+	{
+		index = maps_folders_answer_next;
+		maps_folders_answer_next = (short)((maps_folders_answer_next + 1) % MAPS_FOLDERS_ANSWERS);
+		strcpy(maps_folders_answers[index].name, name);
+		strcpy(maps_folders_answers[index].path, found ? path : "");
+		maps_folders_answers[index].found = found;
+		maps_folders_answers[index].looked_at = now;
+		maps_folders_answers[index].generation = generation;
+	}
+	pthread_mutex_unlock(&maps_folders_lock);
+	return found;
+}
+
 /* the file the map `map_name` names (a level name or a file name), in a
 maps folder or one subfolder of it, whatever version a network game is on
 (custom_edition_map_file_named) */
@@ -331,8 +405,6 @@ static boolean custom_edition_map_named(
 	char *path)
 {
 	char const *name = tag_name_strip_path(map_name);
-	char hashed[MAP_PATH_SIZE];
-	short folder;
 
 	if (custom_edition_script_map_path[0])
 	{
@@ -346,6 +418,21 @@ static boolean custom_edition_map_named(
 			return TRUE;
 		}
 	}
+	/* (a mounted custom campaign's map of the name its header gives:
+	custom_campaigns.c) */
+	if (custom_campaign_map_path(map_name, TRUE, path))
+		return TRUE;
+	return maps_folders_named(name, path);
+}
+
+/* (custom_edition_map_named's search of the maps folders) */
+static boolean maps_folders_search(
+	char const *name,
+	char *path)
+{
+	char hashed[MAP_PATH_SIZE];
+	short folder;
+
 	for (folder = 0; folder < NUMBER_OF_MAPS_FOLDERS; folder++)
 	{
 		if (maps_folder_has(maps_folder(folder), name, MAP_FILE_EXTENSION, path) ||
@@ -404,6 +491,9 @@ void custom_edition_map_paths_forget(
 {
 	custom_edition_version_lookup.looked_at = 0;
 	custom_edition_flg1_lookup.looked_at = 0;
+	pthread_mutex_lock(&maps_folders_lock);
+	maps_folders_generation++;
+	pthread_mutex_unlock(&maps_folders_lock);
 }
 
 /* the file that holds the map `map_name` names (a level name or a file
@@ -448,8 +538,16 @@ static boolean custom_edition_resource_map_path(
 	char *path)
 {
 	char const *name = resource_map_type_describe(type);
+	char file_name[MAP_PATH_SIZE];
 	short folder;
 
+	/* (a mounted custom campaign's own, if it has them) */
+	if (strlen(name) + strlen(MAP_FILE_EXTENSION) < sizeof(file_name))
+	{
+		sprintf(file_name, "%s%s", name, MAP_FILE_EXTENSION);
+		if (custom_campaign_file_path(file_name, path))
+			return TRUE;
+	}
 	for (folder = 0; folder < NUMBER_OF_MAPS_FOLDERS; folder++)
 	{
 		if (maps_folder_has(maps_folder(folder), name, MAP_FILE_EXTENSION, path))
@@ -886,6 +984,11 @@ static boolean custom_edition_cache_tags_convert(
 	{
 		error(_error_silent, "custom edition: the multiplayer score hint names the BACK button where Halo PC names a key");
 	}
+	if (conversion.widget_functions_renumbered || conversion.widget_inputs_renumbered)
+	{
+		error(_error_silent, "custom edition: %ld menu event handlers and %ld game data inputs of Halo PC's own functions run the port's",
+			(long)conversion.widget_functions_renumbered, (long)conversion.widget_inputs_renumbered);
+	}
 	if (conversion.widget_functions_cleared || conversion.pause_menu_trimmed)
 	{
 		error(
@@ -927,6 +1030,62 @@ static boolean custom_edition_cache_identify(
 	custom_edition_file_close(&file);
 
 	return identified;
+}
+
+static boolean is_xbox_flg1_forge_map(
+	char const *path);
+
+/* whether the file at `path` is an Xbox cache (version 5) of a multiplayer
+scenario: one of custom_maps' Xbox multiplayer maps
+(custom_xbox_map_level); not a map Forge saved (FLG1: is_xbox_flg1_forge_map),
+which goes Forge's own way */
+static boolean xbox_multiplayer_cache_file(
+	char const *path)
+{
+	struct custom_edition_file file;
+	struct cache_file_identity identity;
+	boolean found = FALSE;
+
+	if (is_xbox_flg1_forge_map(path) || !custom_edition_file_open(&file, path))
+		return FALSE;
+	if (cache_file_identify(&file.source, &identity) == _cache_file_status_ok &&
+		identity.format == _cache_file_format_xbox_cache &&
+		identity.scenario_type == _scenario_type_multiplayer)
+	{
+		found = TRUE;
+	}
+	custom_edition_file_close(&file);
+
+	return found;
+}
+
+boolean custom_xbox_map_level(
+	char const *level_name)
+{
+	/* (the last answer, for a second: the game asks many times a frame, and
+	the file is looked for in the folders each time) */
+	static struct
+	{
+		char name[MAP_PATH_SIZE];
+		boolean found;
+		unsigned long looked_at;
+	} last;
+	char path[MAP_PATH_SIZE];
+	unsigned long now = GetTickCount() | 1;
+
+	if (!level_name ||
+		_strnicmp(level_name, CUSTOM_EDITION_LEVEL_NAME_PREFIX, csstrlen(CUSTOM_EDITION_LEVEL_NAME_PREFIX)) ||
+		strlen(level_name) >= sizeof(last.name))
+	{
+		return FALSE;
+	}
+	if (last.looked_at && now - last.looked_at < 1000 && !csstrcasecmp(last.name, level_name))
+		return last.found;
+	strcpy(last.name, level_name);
+	last.found = custom_edition_map_path(level_name, path) && xbox_multiplayer_cache_file(path);
+	last.looked_at = now;
+
+	return last.found;
 }
 
 static void custom_edition_cache_report_log(
@@ -1031,6 +1190,60 @@ static boolean is_xbox_flg1_forge_map(
 	return is_flg1;
 }
 
+/* (custom_edition_map_tag_names_walk's: the caller's walk, its group a long) */
+struct map_tag_names_walk
+{
+	int (*visit)(void *context, unsigned long group_tag, char const *name);
+	void *context;
+};
+
+static int map_tag_names_visit(
+	void *context,
+	uint32_t group_tag,
+	char const *name)
+{
+	struct map_tag_names_walk *walk = (struct map_tag_names_walk *)context;
+
+	return walk->visit(walk->context, (unsigned long)group_tag, name);
+}
+
+boolean custom_edition_map_tag_names_walk(
+	char const *map_name,
+	int (*visit)(void *context, unsigned long group_tag, char const *name),
+	void *context)
+{
+	struct custom_edition_file file;
+	struct map_tag_names_walk walk;
+	char path[256];
+	int walked;
+
+	if (!map_name || !visit || !custom_edition_map_file_path(map_name, path) || !custom_edition_file_open(&file, path))
+	{
+		return FALSE;
+	}
+	walk.visit = visit;
+	walk.context = context;
+	walked = custom_edition_cache_tag_names_walk(&file.source, map_tag_names_visit, &walk);
+	custom_edition_file_close(&file);
+
+	return walked > 0;
+}
+
+boolean custom_edition_map_player_shields(
+	char const *map_name,
+	float out[4])
+{
+	struct custom_edition_file file;
+	char path[256];
+	int read;
+
+	if (!map_name || !custom_edition_map_file_path(map_name, path) || !custom_edition_file_open(&file, path))
+		return FALSE;
+	read = custom_edition_cache_player_shields(&file.source, out);
+	custom_edition_file_close(&file);
+	return read != 0;
+}
+
 boolean custom_edition_level_name(
 	char const *level_name)
 {
@@ -1038,10 +1251,15 @@ boolean custom_edition_level_name(
 	char path[MAP_PATH_SIZE];
 	unsigned long now;
 
-	if (!level_name ||
-		_strnicmp(level_name, CUSTOM_EDITION_LEVEL_NAME_PREFIX, csstrlen(CUSTOM_EDITION_LEVEL_NAME_PREFIX)) != 0)
+	if (!level_name)
 	{
 		return FALSE;
+	}
+	/* (and a mounted Custom Edition campaign's maps, which keep their own
+	names: custom_campaigns.c) */
+	if (_strnicmp(level_name, CUSTOM_EDITION_LEVEL_NAME_PREFIX, csstrlen(CUSTOM_EDITION_LEVEL_NAME_PREFIX)) != 0)
+	{
+		return custom_campaign_custom_edition_map(level_name);
 	}
 	if (s_in_flg1_check || strlen(level_name) >= MAP_PATH_SIZE)
 	{
@@ -1062,6 +1280,21 @@ boolean custom_edition_level_name(
 	s_in_flg1_check = FALSE;
 
 	return !custom_edition_flg1_lookup.is_flg1;
+}
+
+/* (custom_edition_cache.h) */
+boolean custom_forge_map_level(
+	char const *level_name)
+{
+	return level_name &&
+		!_strnicmp(level_name, CUSTOM_EDITION_LEVEL_NAME_PREFIX, csstrlen(CUSTOM_EDITION_LEVEL_NAME_PREFIX)) &&
+		!custom_edition_level_name(level_name);
+}
+
+boolean custom_edition_shared_level_name(
+	char const *level_name)
+{
+	return custom_edition_level_name(level_name) || custom_forge_map_level(level_name);
 }
 
 boolean custom_edition_map_file_path(
@@ -1268,6 +1501,10 @@ boolean custom_edition_cache_present(
 	{
 		return TRUE;
 	}
+	/* (an Xbox multiplayer map of custom_maps: played as the game's own
+	are, unpacked into the map cache, with no resource maps) */
+	if (xbox_multiplayer_cache_file(path))
+		return TRUE;
 	if (!halo_custom_edition_tag_cache())
 	{
 		error(_error_silent, "custom edition: the map '%s' cannot be played: %s", level_name,
@@ -1326,28 +1563,78 @@ boolean custom_edition_cache_playable(
 {
 	struct cache_file_identity identity;
 
-	return custom_edition_level_name(level_name) && custom_edition_cache_identify(level_name, &identity);
+	return custom_edition_level_name(level_name) &&
+		(custom_edition_cache_identify(level_name, &identity) || custom_xbox_map_level(level_name));
+}
+
+boolean custom_edition_cache_file_forge_name(
+	char const *path,
+	char *name,
+	long size)
+{
+	/* (forge_map_settings.h's FORGE_DISPLAY_NAME_HEADER_*) */
+	enum
+	{
+		FORGE_NAME_OFFSET = 0x1A0,
+		FORGE_NAME_SIZE = 0x44,
+	};
+	struct custom_edition_file file;
+	unsigned char signature[4] = { 0 };
+	unsigned char field[FORGE_NAME_SIZE + 1];
+	boolean found = FALSE;
+	long index;
+
+	if (size <= 0)
+		return FALSE;
+	name[0] = 0;
+	if (!custom_edition_file_open(&file, path))
+		return FALSE;
+	csmemset(field, 0, sizeof(field));
+	if (file.source.read(file.source.context, 0x1FC, 4, signature) &&
+		(*(uint32_t const *)signature == 0x464C4731u || !memcmp(signature, "FLG1", 4)) &&
+		file.source.read(file.source.context, FORGE_NAME_OFFSET, FORGE_NAME_SIZE, field) && !memcmp(field, "FGDN", 4))
+	{
+		for (index = 0; index + 1 < size && field[4 + index] && 4 + index < FORGE_NAME_SIZE; index++)
+		{
+			unsigned char character = field[4 + index];
+
+			name[index] = character >= ' ' && character < 0x7F ? (char)character : '?';
+		}
+		name[index] = 0;
+		found = index > 0;
+	}
+	custom_edition_file_close(&file);
+
+	return found;
 }
 
 short custom_edition_cache_file_scenario_type(
-	char const *path)
+	char const *path,
+	boolean *xbox_map)
 {
 	struct custom_edition_file file;
 	struct cache_file_identity identity;
 	short type = NONE;
 
+	if (xbox_map)
+		*xbox_map = FALSE;
 	if (is_xbox_flg1_forge_map(path))
 	{
 		return 1;
 	}
-	if (!halo_custom_edition_tag_cache() || !custom_edition_file_open(&file, path))
+	if (!custom_edition_file_open(&file, path))
 	{
 		return NONE;
 	}
 	if (cache_file_identify(&file.source, &identity) == _cache_file_status_ok &&
-		identity.format == _cache_file_format_custom_edition_cache)
+		((identity.format == _cache_file_format_custom_edition_cache && halo_custom_edition_tag_cache()) ||
+			/* (an Xbox multiplayer map: custom_xbox_map_level) */
+			(identity.format == _cache_file_format_xbox_cache &&
+				identity.scenario_type == _scenario_type_multiplayer)))
 	{
 		type = (short)identity.scenario_type;
+		if (xbox_map)
+			*xbox_map = identity.format == _cache_file_format_xbox_cache;
 	}
 	custom_edition_file_close(&file);
 
@@ -1613,6 +1900,13 @@ void custom_edition_cache_read(
 #endif
 		custom_edition_bitmap_pixels_arrived(globals->tag_cache, globals->loaded_bytes, tag_index, offset, buffer);
 	}
+	/* port: the pixels written (copied out of the staging buffer, then
+	converted in place) announced, where pages are tracked by their hashes
+	(macOS, the web, an emulator's Android): the texture cache reads a bitmap
+	into the pages of one evicted, and a draw of it in the same frame at the
+	same address, format and size took the other's image */
+	if (tag_index != NONE && size > 0)
+		memory_watch_prepare_write(buffer, (unsigned long)size);
 
 	return;
 }

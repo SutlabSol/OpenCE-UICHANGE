@@ -344,6 +344,8 @@ static long network_connection_datagram_size(
 /* ---------- globals */
 
 boolean global_connection_dont_timeout = FALSE;
+/* port: ui_widget.c's */
+boolean network_game_paused_alone(void);
 
 /* ---------- public code */
 
@@ -1705,7 +1707,13 @@ boolean network_connection_idle(
 		}
 		if (current_time - connection->last_keep_alive_time > (unsigned long)timeout)
 		{
-			if (global_connection_dont_timeout)
+			/* port: paused alone, nothing comes, as nothing is sent: no
+			timeout (ui_widget.c's network_game_paused_alone) */
+			if (network_game_paused_alone())
+			{
+				connection->last_keep_alive_time = current_time;
+			}
+			else if (global_connection_dont_timeout)
 			{
 				error(
 					_error_silent,

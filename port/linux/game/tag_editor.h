@@ -92,6 +92,11 @@ none: its name as the map has it, or not words at all) */
 unsigned short const *tag_editor_pickup_text(
 	long weapon,
 	unsigned char *text_wanted);
+/* the "picked up" message of an imported weapon on a Custom Edition or MCC
+map, whose item texts are the map's: "Picked up <its name>"; NULL for the
+item's own text */
+unsigned short const *tag_editor_imported_item_text(
+	long item);
 /* a weapon's first-person view as its edits move it
 (source/interface/first_person_weapons.c): FALSE when they do not (none,
 or all as it is) */

@@ -140,6 +140,10 @@ campaign profile's, a co-op game's: NULL for none) as campaign.toml; how
 many tags, 0 if none or it cannot be written. An archive made a shared profile's folder
 (whole, or not at all: a folder of that id before is replaced); 0 if it
 cannot be. */
+/* the tags of other groups than the next share's group it holds too (a
+multiplayer profile's players' bipeds and hands), by their names ("path#map":
+a tag of that path and map) */
+void port_tag_profiles_shared_extras_set(const char *const *names, long count);
 long port_tag_profiles_shared_build(long profile, unsigned long group, const char *multiplayer, const char *campaign,
 	const char *archive);
 int port_tag_profiles_shared_unpack(const char *archive, const char *id);
@@ -156,11 +160,24 @@ the tags given (their profile and tag, `count` of them) and archives them as
 _shared_build does, returning how many; _unpack makes the folder of an
 archive, which _scratch_path names a place for. */
 long port_tag_profiles_baked_build(const long *profiles, const long *tags, long count, const char *archive);
+/* ... as _build, MCC's own content kept: a folder of this machine's alone,
+never sent anywhere (a saved map's tags its bake left out, from this
+machine's profiles: forge_runtime_tags.c). _tag_mcc_own, whether a tag is
+MCC's own content (it never leaves this machine: no share, no bake) */
+long port_tag_profiles_baked_build_local(const long *profiles, const long *tags, long count, const char *archive);
+int port_tag_profiles_tag_mcc_own(long profile, long tag);
 int port_tag_profiles_baked_unpack(const char *archive, const char *id);
 int port_tag_profiles_baked_present(const char *id);
 long port_tag_profiles_baked_open(const char *id);
 void port_tag_profiles_baked_close(void);
 void port_tag_profiles_baked_scratch_path(char *path, unsigned long size);
+
+/* The game's own props (tools/prop_assets.py: Firefight's ordnance capsule,
+Forge's weapon rack), from tag_props.bin beside config.toml, unpacked into
+tag_injector/.props once per build and opened, in a slot of their own, for
+the rest of the run: so a level plays them beside a chosen, shared or baked
+profile. Its index, else -1 (the file is not there, or not one). */
+long port_tag_profiles_props_open(void);
 
 long port_tag_profiles_shared_import(const char *id);
 long port_tag_profiles_shared_import_all(void);

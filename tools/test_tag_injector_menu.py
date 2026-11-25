@@ -284,3 +284,41 @@ def test_the_frame_says_what_a_tag_requires_and_what_is_missing():
     tick = injector[injector.index("void tag_injector_tick("):]
     tick = tick[:tick.index("\n}\n")]
     assert "cinematic_in_progress()" in tick and "unit_index == NONE" in tick
+
+
+def test_mcc_maps_are_listed_and_taken_out_as_bundles():
+    """MAPS lists MCC maps beside Custom Edition's, and an MCC map open is
+    read by mcc_tag_bundle.c, whose bundles say they are an MCC map's."""
+    functions = (ROOT / "port/linux/game/menu_functions.c").read_text()
+    injector = (ROOT / "port/linux/game/tag_injector.c").read_text()
+    loader = (ROOT / "port/linux/game/mcc_tag_bundle.c").read_text()
+    kinds = functions[functions.index("_tags_kind_profile,"):]
+    kinds = kinds[:kinds.index("NUMBER_OF_TAGS_KIND_ROWS")]
+    assert "_tags_kind_mcc_campaign" in kinds and "_tags_kind_mcc_multiplayer" in kinds
+    assert '"MCC SINGLEPLAYER"' in functions and '"MCC MULTIPLAYER"' in functions
+    assert "mcc_map_browser_open(&tags_mcc_browser" in functions
+    opened = injector[injector.index("static struct injector_map_header *menu_bundle_open("):]
+    opened = opened[:opened.index("\n}\n")]
+    assert "mcc_tag_bundle_open(" in opened and "custom_edition_cache_bundle_open(" in opened
+    # (every bundle source of the menu's map goes through the dispatch)
+    assert injector.count("custom_edition_cache_bundle_source(") == 1
+    assert "source->flags = FLAG(_tag_bundle_mcc_bit);" in loader
+    assert "mcc_tags_validate_bundle(" in loader
+
+
+def test_mcc_own_content_stays_on_this_machine():
+    """A bundle holding MCC's own content (tag_bundle.h's flag) is left out
+    of network shares and Forge bakes; port_tag_profiles.c's copy of the
+    flag's bit is tag_bundle.h's."""
+    header = (ROOT / "port/linux/game/tag_bundle.h").read_text()
+    profiles = (ROOT / "port/linux/src/port_tag_profiles.c").read_text()
+    bit = int(re.search(r"_tag_bundle_mcc_own_content_bit = (\d+),", header).group(1))
+    assert f"#define BUNDLE_MCC_OWN_CONTENT_FLAG (1UL << {bit})" in profiles
+    assert "#define BUNDLE_SIGNATURE 0x4245434FUL" in profiles
+    assert re.search(r"#define TAG_BUNDLE_SIGNATURE 0x4245434FUL", header)
+    shared = profiles[profiles.index("long port_tag_profiles_shared_build("):]
+    shared = shared[:shared.index("\n}\n")]
+    baked = profiles[profiles.index("long port_tag_profiles_baked_build("):]
+    baked = baked[:baked.index("\n}\n")]
+    assert "tag_mcc_own_content(profile, index)" in shared
+    assert "tag_mcc_own_content(profiles[index], tags[index])" in baked

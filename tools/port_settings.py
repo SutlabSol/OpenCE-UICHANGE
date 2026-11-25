@@ -62,8 +62,8 @@ PLAY = "main_menu/play"
 # goes into it, Left back. The Halo logo is raised for them (its letters
 # from 94 to 167 of its bitmap), on PLAY's screen too, and the build number
 # and renderer sit between it and them (ce_menus.py's CHILD_OFFSETS)
-SOCIAL_HOME = (316, 160, 304, 110)
-SOCIAL_HOME_CHAT = (316, 276, 304, 170)
+SOCIAL_HOME = (316, 156, 302, 130)
+SOCIAL_HOME_CHAT = (316, 290, 302, 136)
 # the lobby (_lobby): two columns, the game at the top left (LOBBY_PANEL:
 # left, top, width, height: its map's picture and name, the gametype and the
 # players), the players' rows under it (LOBBY_ROWS: left, top, width, row
@@ -107,8 +107,10 @@ DAILY_LEVEL_SKULL_CHILDREN = [f'<child widget="{DAILY_LEVEL_SKULL}" x="{421 + (i
                               for index in range(DAILY_LEVEL_SKULLS)]
 CAMPAIGN_BACK_ITEM_PLACE = (192, 391)
 # the profile settings' rows, in order: the PC version's nine, Gameplay before
-# About and Credits after it, all in the nine's room (78 to About's top, 342) so the
-# last one's 32-unit highlight stays beside the description panel. Each is
+# About, then Credits after it (the Steam Workshop is Mods' now: _mods_hub), 78 to 372 (the nine's room,
+# to About's top at 342, grown by a row's pitch for the eleventh) so the
+# last one's 32-unit highlight stays beside the description panel (its foot,
+# 440) and left of the button bar's buttons. Each is
 # moved from its tag's top (the second number; Gameplay's is ours) by its
 # list's child offset (tools/ce_menus.py's CHILD_OFFSETS)
 PROFILE_ROWS = [("name_profile_item", 78), ("controller_setup_profile_item", 111),
@@ -117,7 +119,7 @@ PROFILE_ROWS = [("name_profile_item", 78), ("controller_setup_profile_item", 111
                 ("network_settings_profile_item", 277), ("color_profile_item", 277),
                 ("gameplay_profile_item", None), ("credits_item", None)]
 PROFILE_ROWS_TOP = 78
-PROFILE_ROWS_LAST_TOP = 342
+PROFILE_ROWS_LAST_TOP = 372
 
 
 def profile_row_top(row: str) -> int:
@@ -173,13 +175,9 @@ SCREENS = {
     "video_settings": {
         "screen": "video_settings_screen",
         "header": ("header_profile_video_settings", f"{PE}/video_settings/header_profile_video_settings"),
-        # a 28px step (the other screens' 30 would take the desktop's ten
-        # rows into the help: Graphics' is 27). each platform packs its own
-        # rows, so a row hidden on this machine does not leave a gap
-        "spacing": 28,
-        # (below the desktop's last row, 353: its two lines clear of the
-        # buttons, 414)
-        "help_top": 358, "help_height": 54,
+        # a 26px step so desktop's eleven rows clear the help below row 11
+        "spacing": 26,
+        "help_top": 364, "help_height": 46,
         "platform_places": True,
         # (rows in the place of the row before them: Window Size in
         # Resolution's, port/linux/game/menu_functions.c showing the one the
@@ -187,11 +185,10 @@ SCREENS = {
         # Android's backend and Vulkan driver take places of their own:
         # platform_places packs each platform's rows)
         "same_place": ["display.window_size", "anti_aliasing_android"],
-        # lines of text among the rows, in a place no row of theirs uses:
-        # (text, platform, place), None the place after the platform's last
-        # row. Below Android's rows, wherever they end (place 6 was below
-        # them until Maximum Resolution and Extra Effects came)
-        "notes": [("The graphics backend and driver change when the game restarts.", "android", None)],
+        # ("notes": lines of text among the rows, (text, platform, place),
+        # None the place after the platform's last row. Android's restart
+        # note is gone: below its ten rows it fell on the help, so the
+        # backend's and the driver's helps say it)
         # (buttons of the bar's own, between DEFAULTS and OK: (key, words,
         # menu function, platform, x). Android's IMPORT DRIVER, the app's file
         # picker for a driver archive copied into freedreno_drivers:
@@ -222,7 +219,7 @@ SCREENS = {
             # name left there by hand is kept unless another is chosen:
             # port/android/host/host_vk_driver.c)
             ("VULKAN DRIVER:", "display.vk_driver", [("STOCK", "")],
-             "The phone's own driver, or a zip from the drivers\nfolder (Turnip's, or one IMPORT DRIVER adds).",
+             "The phone's own driver, or a zip IMPORT DRIVER\nadds. Takes effect the next time the game starts.",
              "android"),
             # (the phone's own is MAXIMUM RESOLUTION below: Android keeps
             # display.resolution_scaling "original", whose lines it sets)
@@ -270,6 +267,8 @@ SCREENS = {
              "Draw the HUD from the high-res redraws; off\ndraws the game's own pictures.", None),
             ("HIGH-RES TEXT:", "display.high_res_text", ON_OFF,
              "Draw text and titles with high-res fonts; off\ndraws the game's own.", None),
+            ("WIDESCREEN LOADING:", "display.widescreen_loading", ON_OFF,
+             "Widen the original loading screen, keeping its\nstock sweep and glow trails.", None),
             ("ANTI-ALIASING:", "display.anti_aliasing",
              [("OFF", "off"), ("FXAA", "fxaa"), ("SMAA", "smaa"), ("SSAA 2X", "ssaa2x"), ("MSAA 2X", "msaa2x"),
               ("MSAA 4X", "msaa4x"), ("MSAA 8X", "msaa8x")],
@@ -301,8 +300,14 @@ SCREENS = {
              "Stock picks models' detail by the Xbox's 480 lines;\nnative by this display's; highest, always the best.", None),
             ("SHIELD GLOW:", "display.shield_glow", ON_OFF,
              "Shields light their surroundings as they flare.\nOnline: the host's choice.", None),
-            ("GLOW INTENSITY:", "display.shield_glow_intensity", [("DEFAULT", "default"), ("LIGHT SHOW", "light_show")],
-             "Light Show: three times as far, at full from a\nthird of the flare. Online: the host's choice.", None),
+            # (Dynamic Lighting's first row: STOCK turns every added light off
+            # and hides the other rows, menu_functions.c's
+            # dynamic_lighting_rows_show; a help for each value, in turn)
+            ("LIGHTING:", "display.shield_glow_intensity",
+             [("STOCK", "stock"), ("1X", "default"), ("1.5X", "1.5x"), ("2X", "2x"), ("3X", "light_show")],
+             ["Same lighting as original XBOX.", "Enhanced lighting for glowing objects.",
+              "I don't even know why this setting's here.", "You know there's flashlights, right?",
+              "Look at mr. rave lover over here!"], None),
             # (the OpenGL renderer's alone, as texture filtering: the deko3d
             # and Vulkan ones draw the Xbox's range)
             ("HDR:", "display.hdr", ON_OFF,
@@ -375,7 +380,9 @@ SCREENS = {
     "network_setup": {
         "screen": "network_settings_screen",
         "header": ("header_profile_network_settings", f"{PE}/network_setup/header_profile_network_settings"),
-        "spacing": 30,
+        # (27: ten places, Android's and the desktop's, the last clear of the
+        # help at 350, as Controller Setup's; at 30 the tenth was on it)
+        "spacing": 27,
         # (the router, the clipboard and the updates, which the web build
         # has not: the other rows from the top there)
         "platform_places": True,
@@ -408,10 +415,19 @@ SCREENS = {
     "gamepad_setup": {
         "screen": "gamepad_setup_screen",
         "header": ("header_profile_controller_setting", f"{PE}/controller_edit/header_profile_controller_setting"),
+        # (27: ten rows, the last clear of the help at 350)
         "spacing": 27,
         "rows": [
-            ("LOOK SENSITIVITY:", "profile.look_sensitivity", [(str(step), str(step)) for step in range(1, 11)],
-             "How fast the right stick turns the view.", None),
+            # (1 to 15: 1 to 10 the Xbox's, 11 to 15 on in its steps, player_ui.c's tables)
+            ("LOOK SENSITIVITY:", "profile.look_sensitivity", [(str(step), str(step)) for step in range(1, 16)],
+             "How fast the right stick turns the view left\nand right.", None),
+            # (the profile's own settings.toml's, as Gyro Aim's: SAME is the
+            # game's, half of Look Sensitivity's; 1 to 10 are 40 to 260
+            # degrees a second, and 11 to 15 on in the same steps,
+            # xinput_sdl.c's halo_stick_pitch_rate)
+            ("VERTICAL SENSITIVITY:", "input.stick_vertical_sensitivity",
+             [("SAME", "0")] + [(str(step), str(step)) for step in range(1, 16)],
+             "How fast the right stick turns the view up\nand down. SAME: half of Look Sensitivity's.", None),
             ("INVERT LOOK:", "profile.invert_look", YES_NO, "Pushing the right stick up looks down.", None),
             ("INVERT FLIGHT:", "profile.flight_inversion", YES_NO,
              "Flying vehicles pitch as aircraft do: pushing up\nflies down.", None),
@@ -433,23 +449,29 @@ SCREENS = {
         "categories": [("BUTTON REMAPPING", "controller_remapping",
                         "Custom button layouts for P1-P4.\nUse / Reload stays combined."),
                        ("BUTTON APPEARANCE", "controller_appearance",
-                        "Controller artwork and bumper style.\nRequires High-Res HUD in Graphics.")],
+                        "Keyboard/controller glyphs and PC-menu legends.\nGameplay controller art needs High-Res HUD.")],
     },
     "controller_appearance": {
         "screen": "controller_appearance_screen", "spacing": 30,
         "header": ("header_profile_controller_setting", f"{PE}/controller_edit/header_profile_controller_setting"),
-        "same_place": ["hud_button_style_xbox", "hud_button_style_ps", "hud_button_style_switch"],
+        "same_place": ["hud_button_style_xbox", "hud_button_style_ps", "hud_button_style_switch", "detected_button_style"],
         "rows": [
+            ("MENU GLYPHS:", "display.menu_button_glyphs", ON_OFF,
+             "Use the selected keyboard/controller style in\nexisting PC-menu face-button legends.", None),
+            ("KEYBOARD GLYPHS:", "display.keyboard_glyphs", ON_OFF,
+             "Opt in to automatic keyboard/mouse keycaps.\nRequires Auto Button Detection.", None),
             ("AUTO BUTTON DETECTION:", "input.auto_button_detection", ON_OFF,
-             "Show styles for your controller's family.\nRequires High-Res HUD in Graphics.", None),
-            ("BUTTON STYLE:", "display.hud_button_style", XBOX_BUTTON_STYLES + PS_BUTTON_STYLES + SWITCH_BUTTON_STYLES,
-             "Manual gameplay button artwork, kept when auto\ndetection is on. Requires High-Res HUD.", None),
+             "Detect controller artwork and, with Keyboard\nGlyphs enabled, follow keyboard/mouse activity.", None),
+            ("BUTTON STYLE:", "display.hud_button_style", XBOX_BUTTON_STYLES + PS_BUTTON_STYLES + SWITCH_BUTTON_STYLES + [("KEYBOARD", "keyboard")],
+             "Manual style when auto detection is off. Keyboard\nuses current bindings; controllers need High-Res HUD.", None),
             ("BUTTON STYLE:", "display.hud_button_style_xbox", XBOX_BUTTON_STYLES,
              "Preferred Xbox artwork for automatic detection.\nRequires High-Res HUD in Graphics.", None),
             ("BUTTON STYLE:", "display.hud_button_style_ps", PS_BUTTON_STYLES,
              "Preferred PlayStation artwork for auto detection.\nRequires High-Res HUD in Graphics.", None),
             ("BUTTON STYLE:", "display.hud_button_style_switch", SWITCH_BUTTON_STYLES,
              "Preferred Switch artwork for automatic detection.\nRequires High-Res HUD in Graphics.", None),
+            ("BUTTON STYLE:", "display.detected_button_style", None,
+             "Keyboard/mouse is active. Prompts use your current\nbindings. Turn detection off to choose a fixed style.", None),
             ("BUMPER STYLE:", "display.hud_bumper_style",
              [("ORIGINAL XBOX", "original"), ("MODERN XBOX", "modern")],
              "Original: black/white buttons. Modern: LB/RB.\nKept when automatic detection is on.", None),
@@ -580,14 +602,16 @@ SCREENS["gamepad_setup/layout"]["screen_children"] = [
 # own (a category, as Video Setup's), after the controller's screen's others
 # (the game's own, about 27%, first, then 0% to 50% in steps of 5)
 DEAD_ZONES = [("DEFAULT", "-1")] + [(f"{percent}%", str(percent)) for percent in range(0, 51, 5)]
+# (after Gyro Aim, which every platform here shows; the touch screen's sticks
+# have none: xinput_sdl.c)
 SCREENS["gamepad_setup"]["categories"] = SCREENS["gamepad_setup"].get("categories", []) + [
-    ("STICK DEAD ZONES", "gamepad_setup/dead_zones",
+    ("STICK DEAD ZONES:", "gamepad_setup/dead_zones",
      "How far each stick moves before it does\nanything."),
 ]
-# (eleven places: a 25px step, as Server Setup's 24, puts the last at 323, so
-# that the help's two lines go below it as Video Setup's do, clear of the
-# buttons, 414; at 27 the last would be in the help)
-SCREENS["gamepad_setup"].update({"spacing": 25, "help_top": 358, "help_height": 54})
+# (twelve places: a 23px step puts the last at 326, so that the help's two
+# lines go below it as Video Setup's do, clear of the buttons, 414; at 27 the
+# last would be in the help)
+SCREENS["gamepad_setup"].update({"spacing": 23, "help_top": 358, "help_height": 54})
 SCREENS["gamepad_setup/dead_zones"] = {
     "screen": "dead_zone_settings_screen", "header": SCREENS["gamepad_setup"]["header"], "spacing": 30,
     "rows": [
@@ -601,13 +625,15 @@ SCREENS["gamepad_setup/dead_zones"] = {
 # Video Setup's categories open ordinary settings screens. Each has the same
 # pending edits, Defaults, OK and Cancel as the other settings screens.
 _video = SCREENS["video_settings"]
-_graphics = {"display.show_fps", "display.high_res_hud",
+_graphics = {"display.widescreen_loading", "display.show_fps", "display.high_res_hud",
              "display.high_res_text", "display.anti_aliasing",
              "display.anisotropic_filtering", "display.shadow_resolution", "display.per_pixel_lighting",
              "display.model_detail"}
 # (the visual modifiers: a screen of their own, Extra Effects)
-_extra_effects = {"display.shield_glow", "display.shield_glow_intensity",
-                  "display.overshield_effect", "display.hdr", "display.hdr_output", "display.hdr_tone_mapping",
+_shield_lighting = {"display.shield_glow", "display.shield_glow_intensity"}
+_shield_rows = [row for row in _video["rows"] if row[1] == "display.shield_glow"]
+_intensity_rows = [row for row in _video["rows"] if row[1] == "display.shield_glow_intensity"]
+_extra_effects = {"display.overshield_effect", "display.hdr", "display.hdr_output", "display.hdr_tone_mapping",
                   "display.hdr_paper_white", "display.hdr_peak_brightness"}
 # (each platform's rows packed: the Switch has none of the renderer's rows
 # between the text and the model detail, which left it gaps; the two
@@ -642,15 +668,21 @@ SCREENS["video_settings/hdr_calibration"] = {
          "How bright white is (the menus, the HUD, the\ngrey bars), in nits. Choose what looks right.", None),
     ],
 }
-_video["rows"] = [row for row in _video["rows"] if row[1] not in _graphics | _extra_effects]
+_video["rows"] = [row for row in _video["rows"] if row[1] not in _graphics | _extra_effects | _shield_lighting]
 _video["categories"] = [
     ("GRAPHICS:", "video_settings/graphics", "The HUD, text, anti-aliasing, shadows,\nlighting and HDR."),
     ("FOV AND VIEWMODELS:", "video_settings/fov_viewmodels",
      "The field of view and the first-person\nweapon. Their defaults keep the stock view."),
     ("PERFORMANCE:", "video_settings/performance",
      "How fast the console runs the game: a steadier\nframe rate, or a cooler console.", "switch"),
+    # (hidden in an image without the feature, Android's OpenGL one:
+    # menu_functions.c's dynamic_lighting_row_show)
+    ("DYNAMIC LIGHTING:", "video_settings/dynamic_lighting",
+     "Added light from projectiles, weapons and\nenergy shields. Added lights default to off."),
+    # (with the shield glow's rows moved, the Switch and the PS5 have none of
+    # its rows left: the overshield and HDR are the OpenGL renderer's)
     ("EXTRA EFFECTS:", "video_settings/extra_effects",
-     "Visual modifiers the stock game does not\nhave, such as the shield glow."),
+     "Visual modifiers the stock game does not\nhave, such as HDR and overshields.", "desktop android web"),
     ("CAMPAIGN AI:", "video_settings/campaign_ai",
      "MENDICANT AI: Marines and Covenant fighting\nas units, and how well they aim and fire."),
 ]
@@ -708,6 +740,33 @@ SCREENS["video_settings/campaign_ai/aim_fire"] = {
          "How fast the Marines fire, against the stock\ngame's 1.", None),
     ],
 }
+SCREENS["video_settings/dynamic_lighting"] = {
+    "screen": "dynamic_lighting_settings_screen", "header": _video["header"], "spacing": 26,
+    "help_top": 370, "help_height": 40,
+    "rows": _intensity_rows + [
+        ("PROJECTILE LIGHTS:", "display.plasma_lighting", ON_OFF,
+         "Plasma, grenades, rockets and flame streams cast\nsoft light on nearby surfaces and models.", None),
+        ("MUZZLE FLASH LIGHTS:", "display.muzzle_lighting", ON_OFF,
+         "Weapon flashes light nearby surfaces, including\nWarthog and Scorpion guns. Stock effects remain.", None),
+        ("WEAPON GLOW:", "lighting.weapon_glow", ON_OFF,
+         "Swords, plasma charge, fuel rods, Needler and AR\nscreens cast light on nearby surfaces.", None),
+        ("PLASMA PRONG LIGHTING:", "display.plasma_prong_lighting", ON_OFF,
+         "Short, soft spill from plasma-weapon prongs.", None),
+        ("SHIELD EMITTERS:", "lighting.shield_emitters", ON_OFF,
+         "Jackal and stationary shields cast light\non nearby surfaces.", None),
+        ("VEHICLE LIGHTS:", "display.vehicle_lighting", ON_OFF,
+         "Engine glow and directional headlights illuminate\nvehicles and nearby surfaces.", None),
+        ("WORLD EMITTERS:", "display.world_lighting", ON_OFF,
+         "Visible powerups and teleporters cast soft light.\nStock effects and gameplay remain unchanged.", None),
+        ("LIGHT OCCLUSION:", "display.plasma_occlusion", ON_OFF,
+         "Block added light behind walls and vehicles.\nOff traces no rays, so light can pass through them.", None),
+    ] + _shield_rows + [
+        # (the phone's: lighting_config.c's lighting_budget. Last, so that
+        # the other platforms' rows are where they were)
+        ("OCCLUDED LIGHTS:", "display.occlusion_lights", [("8", "8"), ("6", "6"), ("4", "4")],
+         "How many lights trace occlusion a frame. Fewer\nare faster on a slower phone.", "android"),
+    ],
+}
 # the Switch's clocks (port/switch/host/host_sdl2.c)
 SCREENS["video_settings/performance"] = {
     "screen": "performance_settings_screen", "header": _video["header"], "spacing": 30,
@@ -736,17 +795,25 @@ SCREENS["video_settings/fov_viewmodels"] = {
     ],
 }
 
-# Audio Setup's sound processing (port/linux/src/dsound_sdl.c): the reverb
-# and the resampler, a screen of their own (a category, as Video Setup's);
+# Audio Setup's sound processing (port/linux/src/dsound_sdl.c): reverb,
+# HRTF and the resampler, a screen of their own (a category, as Video Setup's);
 # the devices and the volumes stay on Audio Setup
 _audio = SCREENS["audio_settings"]
 _processing = {"audio.reverb"}
 SCREENS["audio_settings/sound_processing"] = {
     "screen": "sound_processing_settings_screen", "header": _audio["header"], "spacing": 30,
     "rows": [row for row in _audio["rows"] if row[1] in _processing] + [
-        ("RESAMPLER:", "audio.resampler", [("SINC", "sinc"), ("LINEAR", "linear")],
-         "How sounds are converted to the output's rate:\nsinc is clean; linear is brighter, with aliasing.",
+        ("3D HRTF:", "audio.hrtf", ON_OFF,
+         "Xbox-style directional sound for headphones\nand speakers. On by default.", None),
+        ("RESAMPLER:", "audio.resampler", [("XBOX", "xbox"), ("SINC", "sinc"), ("LINEAR", "linear")],
+         "Xbox models the original sound. Sinc reduces\naliasing; linear gives a brighter sound.",
          None),
+        # (AAudio's low latency path, which screen recorders cannot hear on a phone where it
+        # goes straight to the hardware: dsound_sdl.c's audio_realtime_read)
+        ("REALTIME AUDIO:", "audio.realtime", ON_OFF,
+         "Uses realtime audio to reduce latency.\nMay affect screen recordings.", "android"),
+        ("STEREO DOPPLER:", "audio.stereo_doppler", ON_OFF,
+         "Shift stereo sounds' pitch as they come and go,\nas 3D sounds' is. The Xbox played them flat.", None),
     ],
 }
 _audio["rows"] = [row for row in _audio["rows"] if row[1] not in _processing]
@@ -755,23 +822,23 @@ _audio["rows"] = [row for row in _audio["rows"] if row[1] not in _processing]
 # HUD's, on Network Setup)
 _audio["categories"] = [
     ("SOUND PROCESSING:", "audio_settings/sound_processing",
-     "The reverb, and how sounds are converted to the\noutput's rate."),
+     "Directional sound, reverb and how sounds are\nconverted to the output's rate."),
 ]
 
 # Network Setup's map sharing (port/linux/game/map_share.c): this machine's
 # part in another's game, a screen of its own (a category, as Video Setup's)
-SEED_UPLOADS = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 10240)
+# (up to 250 MB/s, the file connection's top: docs/file_share_tcp_plan.md)
+SEED_UPLOADS = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 10240, 16384, 32768, 65536, 131072, 256000)
 _network = SCREENS["network_setup"]
 # (and the multiplayer HUD's rows, and streamer mode, screens of their own:
-# Network Setup has room for nine places)
+# Network Setup has room for ten places, at its spacing of 27)
 _hud_settings = ("display.player_names", "display.player_name_scale", "display.scoreboard_team_layout",
                  "display.scoreboard_background")
 _hud_rows = [row for row in _network["rows"] if row[1] in _hud_settings]
 _network["rows"] = [row for row in _network["rows"] if row[1] not in _hud_settings]
 _network["categories"] = [
     ("MAP SHARING:", "network_setup/map_sharing",
-     "Downloading Custom Edition maps you do not have,\nand helping send them to other players.",
-     "desktop android ps5"),
+     "Download CE maps or MCC Workshop maps.\nManage sharing and downloaded MCC copies."),
     ("MULTIPLAYER HUD:", "network_setup/multiplayer_hud",
      "Players' names above their heads, the\nscoreboard, the text chat and the match clock."),
     ("STREAMER MODE:", "network_setup/streamer_mode",
@@ -783,15 +850,37 @@ _network["categories"] = [
 ]
 SCREENS["network_setup/map_sharing"] = {
     "screen": "map_sharing_settings_screen", "header": _network["header"], "spacing": 30,
+    "categories": [("MCC PACKAGES:", "network_setup/mcc_packages",
+                    "Installed MCC maps, campaign mission order and\noptional Workshop collection folders."),
+                   ("MCC DOWNLOADS:", "network_setup/mcc_downloads",
+                    "Storage and removal of copies received from hosts.\nOriginal packages and saves are kept.")],
     "rows": [
         ("DOWNLOAD MAPS:", "network.map_download", ON_OFF,
-         "Joining a game on a Custom Edition map you do not\nhave: download it from the players (if shared).",
+         "Allow shared map downloads. CE uses players; MCC\nuses the host and asks before downloading.",
          None),
+        ("MAP ARCHIVE FIRST:", "network.map_archive", ON_OFF,
+         "Get a missing CE map from FractumSeraph's map\narchive before asking the host's players.",
+         "desktop android switch ps5"),
         ("HELP SEND MAPS:", "network.map_seed", ON_OFF,
          "In another's game, send its map to players who\njoin without it, as a torrent's peers do.", None),
         ("UPLOAD LIMIT:", "network.map_seed_upload",
          [(f"{kb} KB/S" if kb < 1024 else f"{kb // 1024} MB/S", str(kb)) for kb in SEED_UPLOADS],
          "The most you send of maps to other players, so\nthat the game keeps the rest of your upload.", None),
+    ],
+}
+SCREENS["network_setup/mcc_downloads"] = {
+    "screen": "screen", "header": _network["header"], "title": "MCC DOWNLOADS", "rows": [],
+}
+
+SCREENS["network_setup/mcc_packages"] = {
+    "screen": "mcc_packages_screen", "header": _network["header"], "title": "MCC PACKAGES", "spacing": 30,
+    "rows": [
+        ("STEAM DISCOVERY:", "game.workshop_maps", ON_OFF,
+         "Find installed Halo CE Workshop maps on this PC.\nLocal MCC packages take precedence.", "desktop"),
+        ("CAMPAIGN MISSIONS:", "game.mcc_campaigns", ON_OFF,
+         "Use campaign metadata for mission order and\nprogression. Online, the host chooses the next map.", None),
+        ("COLLECTION FOLDERS:", "game.mcc_collections", ON_OFF,
+         "Group installed MCC packages using the bundled\ncollection list. Works without Steam.", None),
     ],
 }
 
@@ -1093,7 +1182,7 @@ SCREENS["network_setup/server_browser"] = {
         # menu_functions.c's setting_value_index, and writes it again only if another is chosen)
         ("SORT BY:", "network.browser_sort",
          [("DEDICATED FIRST", "servers"), ("PLAYERS", "players"), ("NAME", "name"), ("MAP", "map"),
-          ("GAME TYPE", "type"), ("LOCKED FIRST", "locked")],
+          ("GAME TYPE", "type"), ("LOCKED FIRST", "locked"), ("PING", "ping")],
          "The list's order. Its column titles sort it too;\nchoosing one again reverses it.", None),
         ("MASTER SERVERS:", "network.masters_file", None,
          "The master servers (masters.txt) that answered\nwhen the Server Browser last asked.", None,
@@ -1173,7 +1262,8 @@ SCREENS["network_setup/streamer_mode"] = {
 SCREENS["network_setup/in_game"] = {
     "screen": "in_game_network_settings_screen", "header": _network["header"], "spacing": 30,
     "platform_places": True, "rows": [],
-    "categories": [category for category in _network["categories"] if category[1] != "network_setup/server_browser"],
+    "categories": [category for category in _network["categories"]
+                   if category[1] not in ("network_setup/server_browser", "network_setup/steam_workshop")],
 }
 
 # Controls Setup: the keyboard and mouse's actions, in groups (the order of
@@ -1309,7 +1399,7 @@ def _screen(folder: str, spec: dict, rows: list, list_inputs: list, list_handler
     lines += _widget(f"{base}/help", [("type", "text"), ("controller", 1), ("left", 68),
                                       ("top", spec.get("help_top", 350)), ("width", 482),
                                       ("height", spec.get("help_height", 60)), ("string_list", None if spec.get("dynamic_help") else f"{base}/help_strings"),
-                                      ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
+                                      ("font", spec.get("help_font", "ui\\large_ui")), ("color", "#FFFFFFFF")], [])
     children = [f'<data input="{name}"/>' for name in list_inputs] + list_handlers
     # (each row: its widget, platform, and the place it is in, else the next)
     for index, (row, platform, *place) in enumerate(rows):
@@ -1385,6 +1475,7 @@ def _setting_screen(folder: str, spec: dict) -> list:
                               ("color", "#FF2896FF"), ("text_x", 13), ("text_y", 4)], [])
             extra += _widget(f"{base}/{key}_value",
                              [("type", "text"), ("controller", 1), ("width", value_width), ("height", 22),
+                              ("text", "KEYBOARD" if key == "detected_button_style" else None),
                               ("font", "ui\\small_ui" if wide_value else "ui\\large_ui"), ("color", "#FF2896FF"),
                               ("align", "left" if wide_value else "center"), ("text_y", 5 if wide_value else 1),
                               ("text_flags", "no_focus_test")], [])
@@ -1498,13 +1589,20 @@ def _setting_screen(folder: str, spec: dict) -> list:
                       [label for label, *_ in spec.get("fields", ())])
     if spec.get("words"):
         extra += _strings(f"{base}/words", spec["words"])
-    # (the help of the row whose label is string n is n + 1: the buttons' is 0)
+    # (the help of the row whose label is string n is n + 1: the buttons' is 0.
+    # A row whose help is a list has one for each value: its first in the
+    # row's place, the others last, in turn: menu_functions.c's
+    # settings_value_help, one such row a screen)
+    value_helps = [help_text for _, _, _, help_text, *_ in spec["rows"] if isinstance(help_text, list)]
+    assert len(value_helps) <= 1, f"{folder}: one row with a help for each value at most"
     extra += _strings(f"{base}/help_strings",
-                      [""] + [help_text.replace("\n", "\\n") for _, _, _, help_text, *_ in spec["rows"]] +
+                      [""] + [(help_text[0] if isinstance(help_text, list) else help_text).replace("\n", "\\n")
+                              for _, _, _, help_text, *_ in spec["rows"]] +
                       [help_text.replace("\n", "\\n") for _, _, help_text, *_ in spec.get("categories", ())] +
                       [text.replace("\n", "\\n") for *_, help_text, more in spec.get("actions", ())
                        for text in [help_text, *more]] +
-                      [help_text.replace("\n", "\\n") for _, _, _, help_text, *_ in spec.get("fields", ())])
+                      [help_text.replace("\n", "\\n") for _, _, _, help_text, *_ in spec.get("fields", ())] +
+                      [text.replace("\n", "\\n") for helps in value_helps for text in helps[1:]])
     # (the rows in the order of their places, which up and down follow)
     if spec.get("categories_after_fields"):
         rows.sort(key=lambda row: row[2])
@@ -2282,15 +2380,16 @@ TAG_INJECTOR = f"{PE}/gameplay/tag_injector"
 TAG_INJECTOR_ROWS = MOD_ROWS
 # the details beside the Tag Injector's, Mods' and Social's lists: their left
 # and width (clear of the list's scroll bar)
-DETAILS_LEFT, DETAILS_WIDTH = 422, 194
+DETAILS_LEFT, DETAILS_WIDTH = 398, 216
 # the preview of a tag's model under its details (port/linux/game/tag_preview.c,
 # whose picture is of its shape), and under it, at the frame's foot, what the
 # tag needs to work: left, top, width and height
-TAG_PREVIEW_BOUNDS = (DETAILS_LEFT, 256, DETAILS_WIDTH, 80)
-TAG_NEEDS_BOUNDS = (DETAILS_LEFT, 338, DETAILS_WIDTH, 64)
+TAG_PREVIEW_BOUNDS = (394, 254, 224, 82)
+TAG_NEEDS_BOUNDS = (396, 338, 220, 64)
 # the screens of a category that are no settings screen (_setting_screen),
 # made by a function of their own
-CUSTOM_SCREENS = {"gameplay/tag_injector": {"screen": "tag_injector_screen"}}
+CUSTOM_SCREENS = {"gameplay/tag_injector": {"screen": "tag_injector_screen"},
+                  "network_setup/steam_workshop": {"screen": "steam_workshop_screen"}}
 
 
 def _tag_injector_screen() -> list:
@@ -2325,13 +2424,13 @@ def _tag_injector_screen() -> list:
                           '<on event="left" run="port tags left"/>', '<on event="right" run="port tags right"/>',
                           '<on event="left_mouse" run="mouse emit accept event"/>',
                           f'<child widget="{base}/tag_name" x="12"/>',
-                          f'<child widget="{base}/tag_state" x="250"/>'])
+                          f'<child widget="{base}/tag_state" x="224"/>'])
     lines += _widget(f"{base}/tag_name",
-                     [("type", "text"), ("controller", 1), ("width", 238), ("height", 22), ("font", "ui\\large_ui"),
-                      ("color", "#FF2896FF"), ("text_y", 4)], [])
+                     [("type", "text"), ("controller", 1), ("width", 210), ("height", 22), ("font", "ui\\large_ui"),
+                      ("color", "#FFC8E6FF"), ("text_y", 4)], [])
     lines += _widget(f"{base}/tag_state",
-                     [("type", "text"), ("controller", 1), ("width", 134), ("height", 22), ("font", "ui\\small_ui"),
-                      ("color", "#FF2896FF"), ("align", "center"), ("text_y", 6), ("text_flags", "no_focus_test")],
+                     [("type", "text"), ("controller", 1), ("width", 110), ("height", 22), ("font", "ui\\small_ui"),
+                      ("color", "#FF58B4FF"), ("align", "center"), ("text_y", 6), ("text_flags", "no_focus_test")],
                      [])
     # (in the lobby's frame, sel_list_desc_bkd's: the row chosen's name, the
     # rest, and under it a map's or a profile's tag's model, turning (blank,
@@ -2340,12 +2439,12 @@ def _tag_injector_screen() -> list:
                      [f'<child widget="{base}/tag_details_name"/>', f'<child widget="{base}/tag_details_text"/>',
                       f'<child widget="{base}/tag_preview"/>', f'<child widget="{base}/tag_needs"/>'])
     lines += _widget(f"{base}/tag_details_name",
-                     [("type", "text"), ("controller", 1), ("left", DETAILS_LEFT), ("top", 84), ("width", DETAILS_WIDTH),
+                     [("type", "text"), ("controller", 1), ("left", 396), ("top", 80), ("width", 220),
                       ("height", 44),
                       ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
     lines += _widget(f"{base}/tag_details_text",
-                     [("type", "text"), ("controller", 1), ("left", DETAILS_LEFT), ("top", 130), ("width", DETAILS_WIDTH),
-                      ("height", 272), ("font", "ui\\small_ui"), ("color", "#FF2896FF")], [])
+                     [("type", "text"), ("controller", 1), ("left", 396), ("top", 126), ("width", 220),
+                      ("height", 126), ("font", "ui\\small_ui"), ("color", "#FF58B4FF")], [])
     left, top, width, height = TAG_PREVIEW_BOUNDS
     lines += _widget(f"{base}/tag_preview", [("controller", 1), ("left", left), ("top", top), ("width", width),
                                             ("height", height), ("bitmap", "blank")], [])
@@ -2447,7 +2546,11 @@ def browser_hint_pictures() -> list:
     Kenney's, as large as a hint's: (name, frames), as layout_overlay_pictures"""
     sources = {"hints/switch_l": "switch/kenney/switch_button_l", "hints/switch_r": "switch/kenney/switch_button_r",
                "hints/ps5_l1": "ps5/kenney/playstation_trigger_l1", "hints/ps5_r1": "ps5/kenney/playstation_trigger_r1",
-               "hints/switch_dpad": "switch/kenney/switch_dpad_all", "hints/ps5_dpad": "ps5/kenney/playstation_dpad_all"}
+               "hints/switch_dpad": "switch/kenney/switch_dpad_all", "hints/ps5_dpad": "ps5/kenney/playstation_dpad_all",
+               # (START: the Switch's +, the PS5's OPTIONS, which the menus'
+               # text has no picture of: Host Server's hints, _host_hints)
+               "hints/switch_plus": "switch/kenney/switch_button_plus",
+               "hints/ps5_options": "ps5/kenney/playstation5_button_options"}
     pictures = []
     for name, source in sources.items():
         text = (Path(__file__).resolve().parents[1] / "port/assets/buttons/platforms" / f"{source}.svg").read_text()
@@ -2506,13 +2609,18 @@ def settings_files() -> dict:
     """the files of the port's screens, by their names in ce/"""
     files = {}
     for folder, spec in SCREENS.items():
-        lines = _controller_screen() if folder == "controller_remapping" else _setting_screen(folder, spec)
+        lines = (_mcc_downloads() if folder == "network_setup/mcc_downloads" else
+                 _controller_screen() if folder == "controller_remapping" else _setting_screen(folder, spec))
         if folder == "gameplay":
             lines += _gameplay_profile_item()
         if folder == "gamepad_setup/layout":
             lines += _layout_overlays()
         files[f"{PE}/{folder}".replace("/", ".") + ".xml"] = lines
     files[TAG_INJECTOR.replace("/", ".") + ".xml"] = _tag_injector_screen()
+    files[f"{PE}/network_setup/mcc_download".replace("/", ".") + ".xml"] = _mcc_download()
+    files[f"{PE}/network_setup/mcc_import".replace("/", ".") + ".xml"] = _mcc_import()
+    files[f"{PE}/network_setup/map_import_page".replace("/", ".") + ".xml"] = _map_import_page()
+    files[STEAM_WORKSHOP.replace("/", ".") + ".xml"] = _steam_workshop()
     files[f"{PE}/controls_setup".replace("/", ".") + ".xml"] = _controls_screen()
     files["main_menu.difficulty_select.randomizer.xml"] = _randomizer_screen()
     files["main_menu.difficulty_select.skulls.xml"] = _skulls_screen()
@@ -2576,6 +2684,7 @@ def player_options_row_top(index: int) -> int:
 # GUN TURRETS and CUSTOM (menu_functions.c's VEHICLE_PRESET_PC), and its help
 # among the sets' (its rows' values' in turn: gametype_option_help)
 VEHICLE_EDIT = "main_menu/settings_select/multiplayer_setup/vehicle_options_edit"
+VEHICLE_RIDING_HELP = "Players standing on a vehicle are carried by it.\\nOff: as the original game, riders slide off."
 AIM_ASSIST_HELP = [
     "Players keep their current mouse aim assist setting.",
     "Disable mouse aim assist for mouse/keyboard players.\\nController and touch aim assist are unchanged.",
@@ -2701,11 +2810,43 @@ FLOOD_SCREENS = [
     ]),
 ]
 
+# the server browser's Filters' rows: the PC version's four (ce_menus.py's
+# CHILD_OFFSETS places them), then the port's (BROWSER_FILTER_ROWS), each
+# BROWSER_FILTER_STEP below the last, their help under them
+# (BROWSER_FILTER_HELP_TOP)
+BROWSER_FILTER_PC_ROWS = ["empty_servers", "full_servers", "game_type", "installed_maps"]
+BROWSER_FILTER_TOP = 73
+BROWSER_FILTER_STEP = 28
+# (each: its key, its label, its values' words, its setting and values, and
+# its help for each value, cap_filter_options' after the PC version's and
+# SHOW MISSING MAPS' third: menu_functions.c's filters_help)
+BROWSER_FILTER_ROWS = [
+    ("vanilla_maps", "VANILLA MAPS", "OFF|ON", "network.browser_vanilla_maps", "false|true", [
+        "Do not show games on the game's own maps.", "Show games on the game's own maps."]),
+    ("custom_edition_maps", "CUSTOM EDITION MAPS", "OFF|ON", "network.browser_custom_edition_maps", "false|true", [
+        "Do not show games on Custom Edition maps.", "Show games on Custom Edition maps."]),
+    ("mcc_maps", "MCC MAPS", "OFF|ON", "network.browser_mcc_maps", "false|true", [
+        "Do not show games on MCC maps.", "Show games on MCC maps."]),
+    ("game_mode", "GAME MODE", "ALL|MULTIPLAYER|CAMPAIGN", "network.browser_mode", "all|multiplayer|campaign", [
+        "Show both multiplayer and campaign co-op\\ngames.", "Show only multiplayer games.",
+        "Show only campaign co-op games."]),
+    ("hosts", "HOSTS", "ALL|DEDICATED|P2P", "network.browser_source", "all|dedicated|players", [
+        "Show dedicated servers and the games players\\nhost.", "Show only dedicated servers.",
+        "Show only the games players host (P2P)."]),
+    ("favorites_only", "FAVORITES ONLY", "NO|YES", "network.browser_favorites_only", "false|true", [
+        "Show every game. FAVORITE (the left trigger, F\\non a keyboard) stars the game chosen.",
+        "Show only your favorite servers."]),
+]
+BROWSER_FILTER_HELP_TOP = BROWSER_FILTER_TOP + BROWSER_FILTER_STEP * (
+    len(BROWSER_FILTER_PC_ROWS) + len(BROWSER_FILTER_ROWS)) + 5
+
 STRING_INSERTS = {
     # (Filters' SHOW MISSING MAPS' third value's help, after the PC version's:
     # menu_functions.c's filters_help)
     f"{MT}/join_game/filters/cap_filter_options": [(11, [
-        "Show servers on maps you do not have if their\\nhost shares them: they download as you join."])],
+        "Show servers on maps you do not have if their\\nhost shares them: they download as you join."]),
+        # (the port's rows' helps: BROWSER_FILTER_ROWS)
+        (12, [text for *_, helps in BROWSER_FILTER_ROWS for text in helps])],
     # (the gametype editor's OPENCE OPTIONS' words, after the PC version's:
     # menu_functions.c's playlist_edit_description)
     f"{PLAYLIST_EDIT}/playlist_edit_list_extended_dsc_text": [(8, [
@@ -2720,9 +2861,10 @@ STRING_INSERTS = {
     f"{TEAMPLAY_EDIT}/cap_teamplay_options": [(10, [text for *_, helps in TEAMPLAY_EXTRA_ROWS for text in helps])],
     f"{SLAYER_EDIT}/var_kills_to_win": [(5, ["75", "100", "150", "200", "250", "500"])],
     f"{VEHICLE_EDIT}/var_vehicle_set": [(8, ["PC"])],
+    f"{VEHICLE_EDIT}/vehicle_options_labels": [(9, ["VEHICLE RIDING:"])],
     f"{VEHICLE_EDIT}/cap_vehicle_options": [(17, [
         "Every vehicle the map places will spawn, as in\\nHalo PC.",
-    ])],
+    ]), (7, [VEHICLE_RIDING_HELP] * 2)],
     f"{SLAYER_EDIT}/cap_slayer": [(11, [
         "Seventy-five kills to win. Settle in for a long\\nfight.",
         "A hundred kills to win. Made for big games.",
@@ -2817,7 +2959,7 @@ STRING_OVERRIDES.update({
 # menu_tags.c's map_strings); the inserted strings (STRING_INSERTS) are the
 # port's own, the rest of their lists the PC version's
 OVERRIDE_ORIGINALS = {
-    f"{PE}/profile_edit_descriptions": [0, None, None, None, None, None, None, 7, None, None],
+    f"{PE}/profile_edit_descriptions": [0, None, None, None, None, None, None, 7, None, None, None],
     f"{MT}/multiplayer_options": [0, 1, 2, 3, None, 5, None, None, None],
     f"{MT}/multiplayer_option_descriptions": [0, 1, None, None, 4, None, None, 5],
     "main_menu/gametype_select/var_gametype_banks": [0, None, 2, None, None, None],
@@ -2883,10 +3025,19 @@ LEADERBOARD_COLUMNS = [
 # CUSTOM MULTIPLAYER maps (_map_kind)
 MAP_KIND_CHOOSER = "main_menu/new_select/list_item_0_map_kind"
 # the map lists' IMPORT (Android's: New Game's and the Map screen's button
-# bars, left of OK): the app's file picker, which copies .map files, and the
-# maps in .zip files, into custom_maps (menu_functions.c's map_import_start,
-# HaloActivity.importMaps)
+# bars, left of OK; the lists' north face button on every platform): on
+# Android the app's file picker, which copies the files chosen into the import
+# inbox (HaloActivity.importMaps); on the consoles the upload page's screen
+# (_map_import_page). The game takes the inbox's files in
+# (port/android/host/host_mcc_import.c: menu_functions.c's map_import_start)
 MAP_IMPORT = "main_menu/new_select/button_map_import"
+# the map lists' DELETE (Android's, left of IMPORT; the west face button on the
+# list too, which the other platforms pass over): the custom map or the folder
+# of maps chosen, at a second press (menu_functions.c's map_delete_press),
+# which MAP_DELETE_STATUS asks for in the place of the map's words, and says
+# what was deleted
+MAP_DELETE = "main_menu/new_select/button_map_delete"
+MAP_DELETE_STATUS = "main_menu/new_select/map_delete_status"
 
 # the main menu's news: this fork's releases' notes, from GitHub (community.c),
 # in a window the main menu's X opens once they came (WIDGET_PATCHES), its
@@ -2982,8 +3133,8 @@ BITMAP_FRAME_PATCHES = {
 PORT_BITMAPS = {
     "main_menu/multiplayer_type_select/gamemode/forge_name_input_box": [
         # (its PNGs' own size: drawn at one pixel each)
-        ("ce/port/gamemode/name_input_box__0.png", 184, 28),
-        ("ce/port/gamemode/name_input_box__1.png", 184, 28)],
+        ("ce/port/gamemode/name_input_box__0.png", 256, 32),
+        ("ce/port/gamemode/name_input_box__1.png", 256, 32)],
 }
 
 
@@ -3000,10 +3151,16 @@ WIDGET_PATCHES = {
     # reopen the main menu when it closes the last screen, as the lobby does.
     f"{MT}/connected/connected_map_select_wrapper": {"set": {
         "flags": "pass_unhandled_to_focused_child pause_game main_menu_if_no_history tag_controller_index force_handle_mouse",
-    }},
+    }, "handlers": [
+        '<on event="b" run="port mcc host folder back"/>',
+        '<on event="back" run="port mcc host folder back"/>',
+    ]},
     # (the main menu's THEATER, after Multiplayer, and MODS, before Quit:
     # _theater, _mods)
     # (Campaign and Multiplayer moved into PLAY: _play)
+    # (the Halo logo over the main menu, PLAY and the campaign/Forge choosers:
+    # Content Evolved's, ce_menus.py's main_menu/halo_logo, not the Xbox map's)
+    "main_menu/halo_logo": {"set": {"bitmap": "main_menu/halo_logo"}},
     "main_menu/main_menu_select_list": {
         "remove": ["main_menu/main_menu_item_load_camp", "main_menu/main_menu_item_multiplayer"],
         "insert_before": {
@@ -3031,6 +3188,9 @@ WIDGET_PATCHES = {
         f'<child widget="{SOCIAL}/social_hint" x="{SOCIAL_HINT_PLACE[0]}" y="{SOCIAL_HINT_PLACE[1]}"/>',
         f'<child widget="{NEWS}/x_butn_news" x="{NEWS_HINT_PLACE[0]}" y="{NEWS_HINT_PLACE[1]}"/>',
         f'<child widget="{NEWS}/news_hint" x="{NEWS_HINT_PLACE[0]}" y="{NEWS_HINT_PLACE[1]}"/>']}},
+    f"{VEHICLE_EDIT}/vehicle_options_menu": {"insert_before": {
+        f"{VEHICLE_EDIT}/op_team": [
+            f'<child widget="{VEHICLE_EDIT}/op_vehicle_riding" x="54" y="100"/>']}},
     f"{PLAYER_EDIT}/player_options_menu": {"insert_before": {
         f"{PLAYER_EDIT}/player_button_bar": [
             f'<child widget="{PLAYER_EDIT}/op_{row}" x="54" y="{player_options_row_top(index)}"/>'
@@ -3051,8 +3211,8 @@ WIDGET_PATCHES = {
     f"{PE}/profile_edit_extended_description": {"children": [
         f'<child widget="{LAYOUT}/{controller}/overlay_small" x="4" platform="{spec["platform"]}"/>'
         for controller, spec in CONTROLLERS.items()]},
-    # (Gameplay and Credits, in About's place: Gameplay's screen is the gameplay file's; the rows'
-    # places, PROFILE_ROWS)
+    # (Gameplay and Credits, in About's place: Gameplay's screen is the gameplay file's; the rows' places,
+    # PROFILE_ROWS; the Steam Workshop is Mods' now, _mods_hub)
     f"{PE}/profile_edit_select_list": {"remove": [f"{PE}/about_item"], "insert_before": {
         f"{PE}/profile_edit_button_bar": [f'<child widget="{PE}/gameplay_profile_item"/>',
                                           f'<child widget="{PE}/credits_item"/>'],
@@ -3120,11 +3280,27 @@ WIDGET_PATCHES = {
         '<on event="deleted" run="dispose sp level list"/>',
         '<on event="custom_activation" run="solo level set map" open="main_menu/difficulty_select/difficulty_select_list_screen"/>',
         *MAP_MANAGE_HANDLERS,
+        '<on event="b" run="port mcc solo folder back"/>',
+        '<on event="back" run="port mcc solo folder back"/>',
+    ]},
+    # (B on the screens: an MCC list's folders and difficulties, a custom
+    # list's folders, before the screen goes: menu_functions.c's
+    # mcc_solo_back and mcc_host_back)
+    "main_menu/solo_level_select/solo_level_select_screen": {"handlers": [
+        '<on event="b" run="port mcc solo folder back"/>',
+        '<on event="back" run="port mcc solo folder back"/>',
+    ]},
+    f"{MT}/mp_map_select/mp_map_select_screen": {"handlers": [
+        '<on event="created" run="net server defer start"/>',
+        '<on event="b" run="port mcc host folder back"/>',
+        '<on event="back" run="port mcc host folder back"/>',
     ]},
     # (each description shows the other kind's maps too: a campaign level's
     # picture, name and words on the Map screen, a multiplayer map's on New
     # Game's)
     f"{MT}/mp_map_select/mp_map_right_item": {"children": [
+        '<child widget="main_menu/new_select/mcc_folder_name"/>',
+        '<child widget="main_menu/new_select/mcc_folder_help"/>',
         '<child widget="main_menu/solo_level_select/replay_level_right_name"/>',
         '<child widget="main_menu/solo_level_select/replay_level_right_pic"/>',
         '<child widget="main_menu/solo_level_select/replay_level_right_data"/>',
@@ -3139,6 +3315,8 @@ WIDGET_PATCHES = {
     # corner instead: _level_records)
     "main_menu/solo_level_select/replay_level_right_item": {"remove": ["main_menu/solo_level_select/difficulty_indicator"],
                                                             "children": [
+        '<child widget="main_menu/new_select/mcc_folder_name"/>',
+        '<child widget="main_menu/new_select/mcc_folder_help"/>',
         f'<child widget="{MT}/mp_map_select/mp_map_right_name"/>',
         f'<child widget="{MT}/mp_map_select/mp_map_right_pic"/>',
         f'<child widget="{MT}/mp_map_select/mp_map_right_data"/>',
@@ -3204,6 +3382,15 @@ WIDGET_PATCHES = {
     f"{MT}/join_game/filters/installed_maps_spinner": {"set": {
         "string_list": None, "strings": "NO|YES|IF DOWNLOADABLE", "setting": "network.browser_maps",
         "values": "no|yes|downloadable"}},
+    # (the port's rows after them: the map kinds, the game mode, the hosts -
+    # the source tab's setting - and favorites, BROWSER_FILTER_ROWS; the help
+    # under them all)
+    f"{MT}/join_game/filters/filters_options_menu": {"insert_before": {f"{MT}/join_game/filters/filters_button_bar": [
+        f'<child widget="{MT}/join_game/filters/op_{key}" x="64" '
+        f'y="{BROWSER_FILTER_TOP + BROWSER_FILTER_STEP * (len(BROWSER_FILTER_PC_ROWS) + index)}"/>'
+        for index, (key, *_) in enumerate(BROWSER_FILTER_ROWS)]}},
+    f"{MT}/join_game/filters/filters_help": {"set": {"top": BROWSER_FILTER_HELP_TOP,
+                                                     "height": 414 - BROWSER_FILTER_HELP_TOP}},
     f"{MT}/join_game/ticker_rules_info": {"set": {"text_y": 1}},
     # (Item Options' loadout rows, over its buttons)
     "main_menu/settings_select/multiplayer_setup/item_options_edit/item_options_menu": {"insert_before": {
@@ -3235,6 +3422,10 @@ WIDGET_PATCHES = {
         f"{MT}/join_game/join_game_button_refresh": f"{MT}/join_game/button_clipboard",
         f"{MT}/join_game/join_game_button_update": f"{MT}/join_game/join_game_button_refresh",
     },
+        # (the server browser's FAVORITE in the clipboard button's place,
+        # which Direct Link alone shows: menu_functions.c's browser_initialize)
+        "insert_before": {f"{MT}/join_game/join_game_button_filters": [
+            f'<child widget="{MT}/join_game/button_favorite" x="128" y="1" platform="desktop android web"/>']},
         # (the Switch's and the PS5's: hints of the buttons in their place,
         # browser_hints; a touchscreen keeps the buttons)
         "child_platforms": {f"{MT}/join_game/{button}": "desktop android web"
@@ -3253,7 +3444,10 @@ WIDGET_PATCHES = {
         # and the wheel go through the rows, as they are pressed as the d-pad)
         '<on event="left" run="port browser column previous"/>', '<on event="right" run="port browser column next"/>',
         '<on event="right_stick_up" run="port browser sort increasing"/>',
-        '<on event="right_stick_down" run="port browser sort decreasing"/>']},
+        '<on event="right_stick_down" run="port browser sort decreasing"/>',
+        # (the left trigger - F on a keyboard - stars the game chosen as a
+        # favorite, or takes its star: menu_functions.c's browser_shortcut)
+        '<on event="left_trigger" run="port browser favorite"/>']},
     # (Select Profile's buttons as hints on the Switch and the PS5,
     # PROFILE_HINTS; a touchscreen keeps them)
     f"{PROFILE}/profile_manager_button_bar": {"child_platforms": {
@@ -3322,6 +3516,10 @@ PAUSE_BOX_BUTTONS = [3, 4]
 PAUSE_BOX_EXTRA_HEIGHTS = [195, 225]
 
 
+# the in-game join box's width (the pause box's: menu_tags.c's PAUSE_BOX_WIDTH)
+INGAME_JOIN_WIDTH = 226
+
+
 def pause_box_height(buttons: int) -> int:
     return 159 + (buttons - 2) * 35
 
@@ -3383,7 +3581,7 @@ TITLE_COLOR = (0x29, 0x95, 0xFD, 255)
 
 
 def _header(name: str, bitmap: str, platform=None) -> list:
-    return _widget(name, [("controller", 1), ("left", 35), ("top", 11), ("width", 363), ("height", 59),
+    return _widget(name, [("controller", 1), ("left", 35), ("top", 11), ("width", 512), ("height", 59),
                           ("bitmap", bitmap), ("platform", platform)], [])
 
 
@@ -3487,6 +3685,32 @@ def _join_game_extras() -> list:
                                                   ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
                      ['<on event="a" run="direct ip connect go"/>', '<on event="start" run="direct ip connect go"/>',
                       '<on event="left_mouse" run="mouse emit accept event"/>'])
+    lines += _widget(f"{base}/button_favorite", [("type", "text"), ("width", 128), ("height", 24),
+                                                 ("bitmap", "bitmaps/text_button_background"),
+                                                 ("text", "FAVORITE"), ("font", "ui\\small_ui"),
+                                                 ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
+                     ['<on event="a" run="port browser favorite"/>', '<on event="start" run="port browser favorite"/>',
+                      '<on event="left_mouse" run="mouse emit accept event"/>'])
+    # (the Filters' rows of the port's, as the PC version's are: a label,
+    # then a spinner of the setting, BROWSER_FILTER_ROWS)
+    for key, label, strings, setting, values, _ in BROWSER_FILTER_ROWS:
+        row = f"{base}/filters/op_{key}"
+        lines += _widget(row, [("width", 512), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
+                               ("bitmap", "bitmaps/option_bkds"), ("color", "#FF2896FF")],
+                         [f'<child widget="{row}_label"/>', f'<child widget="{row}_spinner" x="300" y="1"/>'])
+        lines += _widget(f"{row}_label", [("type", "text"), ("width", 300), ("height", 22), ("text", label),
+                                          ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("text_x", 13),
+                                          ("text_y", 4)], [])
+        lines += _widget(f"{row}_spinner", [("type", "spinner"), ("left", 3), ("top", 2), ("width", 187),
+                                            ("height", 20),
+                                            ("flags", "pass_unhandled_to_focused_child left_right_tabs_items"),
+                                            ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("align", "center"),
+                                            ("list_flags", "items_from_strings"),
+                                            ("header_bitmap", "bitmaps/arrow_sm_left"),
+                                            ("footer_bitmap", "bitmaps/arrow_sm_right"),
+                                            ("header_bounds", "7 -6 19 0"), ("footer_bounds", "7 190 19 196"),
+                                            ("strings", strings), ("setting", setting), ("values", values)],
+                         ['<on event="left_mouse" run="mouse spinner 1wide click"/>'])
     return lines
 
 
@@ -3720,11 +3944,12 @@ def _server_settings() -> list:
     firefight_label = 15 + len(COOP_SETUP_SCREENS) + len(CAMPAIGN_SETUP_SCREENS) + len(SERVER_SETUP_SECTIONS)
     for index, (key, _, choices, _) in enumerate(FIREFIGHT_SETUP_ROWS):
         if choices is None:
-            run = "ss firefight skulls"
+            run, target = FIREFIGHT_SETUP_RUNS[key]
+            opening = f' open="{target}"' if target else ""
             extra += _widget(f"{base}/op_{key}", [("width", 512), ("height", 28),
                                                  ("flags", "pass_unhandled_to_focused_child"),
                                                  ("bitmap", "bitmaps/option_bkds"), ("color", "#FF2896FF")],
-                             [f'<on event="a" run="{run}"/>', f'<on event="start" run="{run}"/>',
+                             [f'<on event="a" run="{run}"{opening}/>', f'<on event="start" run="{run}"{opening}/>',
                               '<on event="left_mouse" run="mouse emit accept event"/>',
                               f'<child widget="{base}/{key}_label"/>',
                               f'<child widget="{base}/{key}_value" x="230" y="1"/>'])
@@ -3737,22 +3962,25 @@ def _server_settings() -> list:
                                                      ("color", "#FF2896FF"), ("text_x", 13), ("text_y", 4)], [])
             rows.append((f"{base}/op_{key}", None))
             continue
+        wide = key in FIREFIGHT_WIDE_SPINNERS
+        spinner_width = 206 if wide else 147
         extra += _widget(f"{base}/op_{key}", [("width", 512), ("height", 28),
                                              ("flags", "pass_unhandled_to_focused_child"),
                                              ("bitmap", "bitmaps/option_bkds"), ("color", "#FF2896FF")],
                          [f'<child widget="{base}/{key}_label"/>',
-                          f'<child widget="{base}/{key}_spinner" x="320" y="1"/>'])
+                          f'<child widget="{base}/{key}_spinner" x="{300 if wide else 320}" y="1"/>'])
         extra += _widget(f"{base}/{key}_label", [("type", "text"), ("controller", 1), ("width", 300),
                                                  ("height", 22), ("string_list", f"{base}/labels"),
                                                  ("string_index", firefight_label + index), ("font", "ui\\large_ui"),
                                                  ("color", "#FF2896FF"), ("text_x", 13), ("text_y", 4)], [])
         extra += _widget(f"{base}/{key}_spinner",
-                         [("type", "spinner"), ("left", 3), ("top", 2), ("width", 147), ("height", 20),
+                         [("type", "spinner"), ("left", 3), ("top", 2), ("width", spinner_width), ("height", 20),
                           ("flags", "pass_unhandled_to_focused_child left_right_tabs_items"),
                           ("strings", "|".join(choices)), ("font", "ui\\large_ui"),
                           ("color", "#FF2896FF"), ("align", "center"), ("text_y", 1),
                           ("header_bitmap", "bitmaps/arrow_sm_left"), ("footer_bitmap", "bitmaps/arrow_sm_right"),
-                          ("header_bounds", "7 -6 19 0"), ("footer_bounds", "7 150 19 156")],
+                          ("header_bounds", "7 -6 19 0"),
+                          ("footer_bounds", f"7 {spinner_width + 3} 19 {spinner_width + 9}")],
                          ['<on event="left_mouse" run="mouse spinner 1wide click"/>'])
         rows.append((f"{base}/op_{key}", None))
     extra += _button(f"{base}/button_defaults", 3, [])
@@ -3776,6 +4004,9 @@ def _server_settings() -> list:
     # (Firefight's rows', after them: FIREFIGHT_SETUP_ROWS)
     assert len(labels) == firefight_label
     labels += [f"{title}:" for _, title, _, _ in FIREFIGHT_SETUP_ROWS]
+    # (OBJECTIVE SETTINGS', the last: OBJECTIVE_SETUP_SECTION)
+    objective_label = len(labels)
+    labels.append(f"{OBJECTIVE_SETUP_SECTION[1]}:")
     extra += _strings(f"{base}/labels", labels)
     help_strings = [
         "",
@@ -3813,6 +4044,8 @@ def _server_settings() -> list:
         # (Firefight's rows': menu_functions.c's FF_PLAYER_SCALE_HELP and
         # SERVER_SCORING_HELP)
         *(help_text for _, _, _, help_text in FIREFIGHT_SETUP_ROWS),
+        # (OBJECTIVE SETTINGS': menu_functions.c's OBJECTIVE_SETTINGS_HELP)
+        OBJECTIVE_SETUP_SECTION[2],
     ]
     extra += _strings(f"{base}/help_strings", help_strings)
     # the sections (SERVER_SETUP_SECTIONS): Server Setup itself is a hub of
@@ -3823,7 +4056,7 @@ def _server_settings() -> list:
     by_key = {row[0].rsplit("/", 1)[1][3:]: row for row in rows}
     hub_rows = [(f"{base}/op_server_name", None, 0)]
     section_lines = []
-    for index, (key, title, _, members) in enumerate(SERVER_SETUP_SECTIONS):
+    for index, (key, title, _, members) in enumerate([*SERVER_SETUP_SECTIONS, OBJECTIVE_SETUP_SECTION]):
         target = f"{base}/{key}/{key}_screen"
         extra += _widget(f"{base}/op_{key}", [("width", 512), ("height", 28),
                                              ("flags", "pass_unhandled_to_focused_child"),
@@ -3832,16 +4065,24 @@ def _server_settings() -> list:
                           '<on event="left_mouse" run="mouse emit accept event"/>',
                           f'<child widget="{base}/{key}_label"/>', f'<child widget="{base}/{key}_value" x="230" y="1"/>'])
         extra += _widget(f"{base}/{key}_label", [("type", "text"), ("controller", 1), ("width", 230), ("height", 22),
-                                                 ("string_list", f"{base}/labels"), ("string_index", section_label + index),
+                                                 ("string_list", f"{base}/labels"),
+                                                 ("string_index", objective_label if key == OBJECTIVE_SETUP_SECTION[0]
+                                                  else section_label + index),
                                                  ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("text_x", 13),
                                                  ("text_y", 4)], [])
         extra += _widget(f"{base}/{key}_value", [("type", "text"), ("controller", 1), ("width", 280), ("height", 22),
                                                  ("font", "ui\\small_ui"), ("color", "#FF2896FF"), ("align", "center"),
                                                  ("text_y", 5), ("text_flags", "no_focus_test")], [])
-        hub_rows.append((f"{base}/op_{key}", None, len(hub_rows)))
+        # (OBJECTIVE SETTINGS' place on the hub: after GAME SETTINGS, with
+        # VEHICLES, HUB_FIREFIGHT_ROWS)
+        if key != OBJECTIVE_SETUP_SECTION[0]:
+            hub_rows.append((f"{base}/op_{key}", None, len(hub_rows)))
         # (BOTS after LOBBY SETTINGS, its own screen as before)
         if key == "lobby_settings":
             hub_rows.append((f"{base}/op_{BOTS_SETUP[0]}", None, len(hub_rows)))
+        if key == "game_settings":
+            for hub_key in HUB_FIREFIGHT_ROWS:
+                hub_rows.append((f"{base}/op_{hub_key}", None, len(hub_rows)))
         section = f"{base}/{key}"
         section_spec = {"screen": f"{key}_screen", "spacing": SERVER_SETTINGS_ROW_SPACING, "help_top": 366,
                         "header": (f"header_{key}", f"{section}/header_{key}")}
@@ -3859,6 +4100,11 @@ def _server_settings() -> list:
     # (co-op's options' screens, map sharing's and the bots')
     for key, title, _, screen_rows in [*COOP_SETUP_SCREENS, MAP_SHARE_SETUP, BOTS_SETUP]:
         lines += _setup_option_screen(f"{base}/{key}", key, screen_rows, fit=True)
+    # (Firefight's objectives': the set screen's helps end with the rows'
+    # NOT ON THIS MAP, FF_OBJECTIVES_UNAVAILABLE)
+    for key, title, _, screen_rows in FF_OBJECTIVES_SETUP_SCREENS:
+        lines += _setup_option_screen(f"{base}/{key}", key, screen_rows, fit=True,
+                                      extra_helps=FF_OBJECTIVES_UNAVAILABLE if key == "ff_set_objectives" else ())
     # (no Defaults: the bar is START and CANCEL; B cancels the name's edit
     # first)
     lines = [line.replace(f'<child widget="{base}/button_defaults" y="1"/>', "") for line in lines]
@@ -3933,6 +4179,7 @@ COOP_SETUP_SCREENS = [
             "Revert the checkpoint after everyone dies. A changed\\nteam or missing save uses respawn only.",
             "Respawn at checkpoint positions after everyone dies.\\nThe world keeps its progress.",
         ]),
+        ("coop_vehicle_riding", "VEHICLE RIDING:", ["ON", "OFF"], [VEHICLE_RIDING_HELP] * 2),
     ]),
     ("voice_options", "VOICE AND VOTING", "Voice chat, text chat and votes to kick a player,\\nfor this game.",
      TEAMPLAY_ROWS),
@@ -3947,11 +4194,11 @@ CAMPAIGN_SETUP_SCREENS = [
 # Server Setup's map sharing (port/linux/game/map_share.c), for any game,
 # laid out as co-op's options are (its key, its title, its row's help and
 # its rows: menu_functions.c's gametype_options give their settings' values)
-MAP_SHARE_UPLOADS = (256, 512, 1024, 2048, 4096, 8192, 16384, 20480)
+MAP_SHARE_UPLOADS = (256, 512, 1024, 2048, 4096, 8192, 16384, 20480, 32768, 65536, 131072, 256000)
 MAP_SHARE_SETUP = ("map_share_options", "MAP SHARING",
-                   "Sending players who join without the game's\\nCustom Edition map the map, and how fast.", [
+                   "Sharing Custom Edition maps and MCC packages\\nwith joining players, and how fast.", [
     ("map_share", "SHARE MAPS:", ["ON", "OFF"], [
-        "Players who join without the map download it\\nfrom you and the other players.",
+        "Share CE maps and MCC packages automatically.\\nMCC base resources must be installed locally.",
         "Players who join without the map cannot play.",
     ]),
     ("map_share_upload", "UPLOAD LIMIT:", [f"{kb} KB/S" if kb < 1024 else f"{kb // 1024} MB/S"
@@ -3999,6 +4246,118 @@ BOTS_SETUP = ("bots_options", "BOTS",
         "The bots stay as many as COUNT, as far as the\\ngame has room.",
     ]),
 ])
+# Firefight's objectives (port/linux/game/firefight_objectives.c), Server
+# Setup's WAVE OBJECTIVES and ROUND OBJECTIVES (FIREFIGHT_SETUP_ROWS'): screens
+# of config.toml's settings laid out as BOTS' are (_setup_option_screen), the
+# same for every map. Their key, title, row help and rows (each spinner's key,
+# label, words and the help of each); the set screen's help strings end with
+# FF_OBJECTIVES_UNAVAILABLE's, one for each set objective, shown for a row the
+# map Server Setup plays cannot play (menu_functions.c's
+# ff_objectives_unavailable_help)
+OBJECTIVE_SWITCH = ["ON", "OFF"]
+FF_ROUND_CHANCES = list(range(10, 101, 10))
+FF_SET_CHANCES = list(range(10, 101, 10))
+FF_OBJECTIVES_SETUP_SCREENS = [
+    ("ff_round_objectives", "WAVE OBJECTIVES",
+     "Optional challenges for a wave, beside the fight.\\nKept for every map.", [
+        ("ffo_round_enabled", "WAVE OBJECTIVES:", OBJECTIVE_SWITCH, [
+            "A wave can have an objective of those on below,\\ndone before it is cleared.",
+            "No wave objectives: Firefight as it is.",
+        ]),
+        ("ffo_round_chance", "CHANCE:", [f"{chance}%" for chance in FF_ROUND_CHANCES],
+         ["How likely each wave is to have an objective."] * len(FF_ROUND_CHANCES)),
+        ("ffo_kills", "KILLS:", OBJECTIVE_SWITCH, [
+            "So many kills of a kind: headshots, melee,\\ngrenades, splatters or a weapon class.",
+            "Never this objective.",
+        ]),
+        ("ffo_no_deaths", "NO DEATHS:", OBJECTIVE_SWITCH, [
+            "The wave finished with no player dying. Anyone's\\ndeath fails it for everyone.",
+            "Never this objective.",
+        ]),
+        ("ffo_shields", "SHIELDS INTACT:", OBJECTIVE_SWITCH, [
+            "No more than half the players' shields broken: a\\nfall, your own blast, friendly fire count.",
+            "Never this objective.",
+        ]),
+        ("ffo_kill_first", "KILL MARKED FIRST:", OBJECTIVE_SWITCH, [
+            "An enemy of the wave is marked: kill it before\\nany other.",
+            "Never this objective.",
+        ]),
+        ("ffo_dont_use", "DON'T USE:", OBJECTIVE_SWITCH, [
+            "A weapon class or grenade most of you carry: one\\nshot or throw fails it for everyone.",
+            "Never this objective.",
+        ]),
+        ("ffo_vehicle_kills", "VEHICLE KILLS:", OBJECTIVE_SWITCH, [
+            "So many kills from a vehicle of a kind, one given\\nyou if the map has none of it there.",
+            "Never this objective.",
+        ]),
+        ("ffo_travel", "TRAVEL:", OBJECTIVE_SWITCH, [
+            "Reach a marked point of the map, far from you,\\nbefore the wave is cleared.",
+            "Never this objective.",
+        ]),
+        ("ffo_weapon_only", "USE ONLY:", OBJECTIVE_SWITCH, [
+            "A weapon is dropped to each of you: once it lands,\\nfiring any other fails it.",
+            "Never this objective.",
+        ]),
+    ]),
+    ("ff_set_objectives", "ROUND OBJECTIVES",
+     "Optional set pieces on the map for a round: a\\ncamp, a hill, a flag. Kept for every map.", [
+        ("ffo_set_enabled", "ROUND OBJECTIVES:", OBJECTIVE_SWITCH, [
+            "A round can have an objective of those on below,\\nfrom its 1st or 2nd wave to its end.",
+            "No round objectives: Firefight as it is.",
+        ]),
+        ("ffo_set_chance", "CHANCE:", [f"{chance}%" for chance in FF_SET_CHANCES],
+         ["How likely each round is to have an objective."] * len(FF_SET_CHANCES)),
+        ("ffo_target", "HIGH VALUE TARGET:", OBJECTIVE_SWITCH, [
+            "An enemy camp round a map objective: kill its VIP\\nbefore they teleport out.",
+            "Never this objective.",
+        ]),
+        ("ffo_generator", "ENEMY GENERATOR:", OBJECTIVE_SWITCH, [
+            "An enemy camp round a map objective: destroy its\\ngenerator before time runs out.",
+            "Never this objective.",
+        ]),
+        ("ffo_purge", "CLEAR ENEMY BASE:", OBJECTIVE_SWITCH, [
+            "An enemy camp round a map objective: kill every\\none of them before the round ends.",
+            "Never this objective.",
+        ]),
+        ("ffo_data_link", "DATA LINK:", OBJECTIVE_SWITCH, [
+            "A hill turns on: hold it with no enemy in it.\\nNeeds King of the Hill hills.",
+            "Never this objective.",
+        ]),
+        ("ffo_flag", "FLAG:", OBJECTIVE_SWITCH, [
+            "A flag turns on: carry it to the other base. Every\\nenemy hunts its carrier. Needs 2 flags.",
+            "Never this objective.",
+        ]),
+        ("ffo_rescue", "RESCUE:", OBJECTIVE_SWITCH, [
+            "Marines under attack: reach them in time, clear\\nthe attackers, and they follow you.",
+            "Never this objective.",
+        ]),
+        ("ffo_oddball", "ODDBALL:", OBJECTIVE_SWITCH, [
+            "A boss drops a skull: hold it while every enemy\\nhunts you. Needs an oddball spawn.",
+            "Never this objective.",
+        ]),
+        ("ffo_collect", "COLLECT:", OBJECTIVE_SWITCH, [
+            "Kills drop skulls: carry them to a hill or a flag\\nbase. Die and you drop all you carry.",
+            "Never this objective.",
+        ]),
+        ("ffo_bomb", "BOMB:", OBJECTIVE_SWITCH, [
+            "Carry the bomb to a far target and plant it, then\\ndefend it so it isn't disarmed.",
+            "Never this objective.",
+        ]),
+    ]),
+]
+# (the set screen's extra helps: a row's objective the map cannot play, in
+# enum firefight_set_objective's order, HIGH VALUE TARGET first)
+FF_OBJECTIVES_UNAVAILABLE = [
+    "NOT ON THIS MAP: it has no flag, hill or oddball\\nspawn for a camp. Kept on for other maps.",
+    "NOT ON THIS MAP: it has no flag, hill or oddball\\nspawn for a camp. Kept on for other maps.",
+    "NOT ON THIS MAP: it has no flag, hill or oddball\\nspawn for a camp. Kept on for other maps.",
+    "NOT ON THIS MAP: it has no King of the Hill hills.\\nKept on for other maps.",
+    "NOT ON THIS MAP: it has fewer than 2 flags. Kept\\non for other maps.",
+    "NOT ON THIS MAP: no marines or no spot for them.\\nKept on for other maps.",
+    "NOT ON THIS MAP: it has no oddball spawn. Kept on\\nfor other maps.",
+    "NOT ON THIS MAP: it has no hill or flag base to\\nbank at. Kept on for other maps.",
+    "NOT ON THIS MAP: it needs 2 objective points and\\nan oddball. Kept on for other maps.",
+]
 # Server Setup's sections (_server_settings): the hub's rows, each opening a
 # screen of the rows named (row keys, op_<key>); BOTS is a row of the hub's
 # too, after LOBBY SETTINGS (its own screen: BOTS_SETUP). Their key, title,
@@ -4010,9 +4369,31 @@ SERVER_SETUP_SECTIONS = [
     ("game_settings", "GAME SETTINGS", "The gametype and its rules for this game (co-op's\\noptions, for a co-op game).",
      ["game_type", "player_options", "item_options", "vehicle_options", "indicator_options", "team_options",
       "coop_options", "voice_options", "ff_player_scale", "ff_start_skulls", "scoring"]),
+    # (a Firefight game's on a Custom Edition map with enemies, weapons or
+    # vehicles of its own: menu_functions.c's server_settings_map_content_update)
+    ("map_content", "MAP CONTENT", "Play the map's own enemies, weapons and vehicles\\nin this game, beside the game's or alone.",
+     ["ff_map_content", "ff_mc_enemies", "ff_mc_enemies_list", "ff_mc_weapons", "ff_mc_weapons_list",
+      "ff_mc_vehicles", "ff_mc_vehicles_list", "ff_mc_loadout", "ff_mc_shields", "ff_mc_shield_regen",
+      "ff_mc_health_regen"]),
     ("fork_settings", "FORK SETTINGS", "This fork's own: game modes' settings, the tag\\nprofile, the randomizer and skulls.",
      ["floodfection_options", "tag_profile", "randomizer", "skulls"]),
 ]
+# Server Setup's OBJECTIVE SETTINGS, a Firefight game's, on the hub after its
+# VEHICLES (a map with vehicles for the players), both after GAME SETTINGS: a
+# section of the objectives' two rows, each opening its screen
+# (FF_OBJECTIVES_SETUP_SCREENS). Its label and help the lists' last, so no
+# other's moves (menu_functions.c's OBJECTIVE_SETTINGS_HELP)
+OBJECTIVE_SETUP_SECTION = ("objective_settings", "OBJECTIVE SETTINGS",
+                           "Optional challenges beside the waves: a wave's, and\\na round's set pieces.",
+                           ["ff_round_objectives", "ff_set_objectives"])
+# (the hub's rows after GAME SETTINGS', a Firefight game's: VEHICLES, then
+# OBJECTIVE SETTINGS)
+HUB_FIREFIGHT_ROWS = ["ff_vehicles", OBJECTIVE_SETUP_SECTION[0]]
+# MAP CONTENT's kinds' choices (ADVANCED's rows, the map's own of a kind)
+MAP_CONTENT_KIND_CHOICES = ["ALL ON", "CUSTOM", "OFF"]
+# CUSTOM's list of the map's own of a kind: its rows shown at once (the Tag
+# Injector's list's: 30 apart from 73)
+MAP_CONTENT_TAG_ROWS = 11
 # GAME SETTINGS' rows of a Firefight game's (Content Extended's: firefight.c's
 # player scale, the setting game.campaign_score): key, title, spinner
 # choices (menu_functions.c's ff_player_scale_percents; ON first), help
@@ -4024,7 +4405,67 @@ FIREFIGHT_SETUP_ROWS = [
     # locked on: menu_functions.c's "ss firefight skulls")
     ("ff_start_skulls", "STARTING SKULLS", None,
      "Add skulls for this game. Those the variant starts\\nwith stay on."),
+    # MAP CONTENT's (its section's): the mode, then ADVANCED's kinds, each
+    # shown when the map has some of its own (ALL ON first; CUSTOM shows its
+    # CHOOSE row, below: menu_functions.c's server_settings_map_content_update)
+    ("ff_map_content", "USE CONTENT", ["VANILLA ONLY", "INCLUDE MAP", "ONLY MAP"],
+     "VANILLA ONLY: the game's own. INCLUDE MAP: the map's\\nbeside them. ONLY MAP: the map's in their place."),
+    ("ff_mc_enemies", "MAP ENEMY AI", MAP_CONTENT_KIND_CHOICES,
+     "The map's own enemy AI in the waves: all of them,\\nthose you choose (CUSTOM), or none."),
+    ("ff_mc_weapons", "MAP WEAPONS", MAP_CONTENT_KIND_CHOICES,
+     "The map's own weapons in the drop pods and the\\nenemies' hands: all, those you choose, or none."),
+    ("ff_mc_vehicles", "MAP VEHICLES", MAP_CONTENT_KIND_CHOICES,
+     "The map's own vehicles, the players' and the\\nenemies': all, those you choose, or none."),
+    # (no choices: CUSTOM's rows, each opening the list of the map's of its
+    # kind: menu_functions.c's "ss map content <kind>"; their helps after the
+    # rows' before them, FF_MAP_CONTENT_HELP + 4 + the kind)
+    ("ff_mc_enemies_list", "CHOOSE ENEMY AI", None,
+     "Turn each of the map's enemy AI on or off. Kept for\\nthis map for the next games."),
+    ("ff_mc_weapons_list", "CHOOSE WEAPONS", None,
+     "Turn each of the map's weapons on or off. Kept for\\nthis map for the next games."),
+    ("ff_mc_vehicles_list", "CHOOSE VEHICLES", None,
+     "Turn each of the map's vehicles on or off. Kept for\\nthis map for the next games."),
+    # (no choices: the map's weapons the players spawn with, in place of the
+    # game's loadout, whatever USE CONTENT is; the same list, A choosing
+    # PRIMARY or SECONDARY: menu_functions.c's "ss map content loadout",
+    # FF_MAP_CONTENT_HELP + 7)
+    ("ff_mc_loadout", "PLAYER LOADOUT", None,
+     "Spawn with the map's own weapons in place of the\\ngame's loadout. Kept for this map."),
+    # HEALTH RULES (a map whose player has no shields, or shields that never
+    # come back: firefight_spawner.c's firefight_map_health_detect): the
+    # players' SHIELDS and SHIELD REGEN (MAP'S first) and HEALTH REGEN (Halo
+    # has none: OFF first), kept for the map; FF_MAP_CONTENT_HELP + 8..10
+    ("ff_mc_shields", "SHIELDS", ["MAP'S", "ON", "OFF"],
+     "This map's players have their own shield rules. ON\\ngives shields, OFF takes them. Kept for this map."),
+    ("ff_mc_shield_regen", "SHIELD REGEN", ["MAP'S", "ON", "OFF"],
+     "ON: shields come back as in Halo. OFF: never (only\\nthe map's pickups). Kept for this map."),
+    ("ff_mc_health_regen", "HEALTH REGEN", ["OFF", "ON"],
+     "ON: health comes back after 5 seconds unhurt, as a\\nshield does. Kept for this map."),
+    # GAME SETTINGS' VEHICLES (a map with vehicles placed for the players:
+    # menu_functions.c's server_settings_vehicles_update, FF_VEHICLES_HELP;
+    # firefight_spawner.c's players' vehicles), last so no other's help moves;
+    # its spinner wide (FIREFIGHT_WIDE_SPINNERS)
+    ("ff_vehicles", "VEHICLES", ["ALL AT SPAWN", "ORDNANCE REWARDS", "NONE"],
+     "The map's vehicles for the players: all from the\\nstart, one with each ordnance drop, or none."),
+    # (no choices: the objectives' screens, FF_OBJECTIVES_SETUP_SCREENS; their
+    # value what each chose: menu_functions.c's FF_ROUND_OBJECTIVES_HELP and
+    # after it, server_settings_objectives_update)
+    ("ff_round_objectives", "WAVE OBJECTIVES", None,
+     "Optional challenges for a wave, beside the fight.\\nKept for every map."),
+    ("ff_set_objectives", "ROUND OBJECTIVES", None,
+     "Optional set pieces on the map for a round: a\\ncamp, a hill, a flag. Kept for every map."),
 ]
+# (the rows whose spinners are wider, for their words: nearer their labels)
+FIREFIGHT_WIDE_SPINNERS = {"ff_vehicles"}
+# (the rows of no choices: what A runs, and the screen it opens, if any)
+FIREFIGHT_SETUP_RUNS = {
+    "ff_start_skulls": ("ss firefight skulls", None),
+    **{f"ff_mc_{kind}_list": (f"ss map content {kind}", f"{MT}/server_settings/map_content/map_content_tags_screen")
+       for kind in ("enemies", "weapons", "vehicles")},
+    "ff_mc_loadout": ("ss map content loadout", f"{MT}/server_settings/map_content/map_content_tags_screen"),
+    **{key: ("ss firefight objectives", f"{MT}/server_settings/{key}/{key}_screen")
+       for key in ("ff_round_objectives", "ff_set_objectives")},
+}
 # Server Setup's TAG PROFILE (port/linux/game/tag_multiplayer.c, the setting
 # game.multiplayer_tag_profile), a multiplayer game's on one of the game's own
 # maps: the Tag Injector's multiplayer profile it plays (its key, its title
@@ -4040,7 +4481,8 @@ TAG_PROFILE_ROWS = 9
 SETUP_OPTIONS_PLACE = 6
 # (their screens' titles)
 TITLES.update({f"{MT}/server_settings/{key}/header_{key}": title
-               for key, title, _, _ in [*COOP_SETUP_SCREENS, MAP_SHARE_SETUP, BOTS_SETUP, *SERVER_SETUP_SECTIONS]})
+               for key, title, _, _ in [*COOP_SETUP_SCREENS, MAP_SHARE_SETUP, BOTS_SETUP, *SERVER_SETUP_SECTIONS,
+                                        OBJECTIVE_SETUP_SECTION, *FF_OBJECTIVES_SETUP_SCREENS]})
 # (the rows of a co-op options screen in one place, the one shown: PER
 # PLAYER's and MULTIPLIER's, by EXTRA ENEMIES')
 SETUP_OPTION_SAME_PLACE = set()
@@ -4089,7 +4531,77 @@ def _tag_profile_screen() -> list:
     return lines
 
 
-def _setup_option_screen(base: str, key: str, rows: list, fit: bool = False) -> list:
+def _map_content_tags_screen() -> list:
+    """MAP CONTENT's CUSTOM list (a kind's CHOOSE row opens it), laid out as
+    the Tag Injector's is: on the left the map's own of the kind, a row each
+    with its name and ON or OFF, A turning it over (the host's choice for the
+    map, kept: menu_functions.c's "map content tags update" and "map content
+    tag toggle"); on the right, in the lobby's frame, the kind and how many
+    are on, the tag's path, and its model turning (tag_preview.c's, the map
+    opened as the Tag Injector opens one); ALL ON, ALL OFF and OK"""
+    base = f"{MT}/server_settings/map_content"
+    lines = _widget(f"{base}/map_content_tags_screen",
+                    [("width", 640), ("height", 480), ("flags", "pass_unhandled_to_focused_child"),
+                     ("bitmap", "bitmaps/gradient")],
+                    ['<on event="b" back="true"/>', '<on event="back" back="true"/>',
+                     '<child widget="main_menu/new_select/sel_list_desc_bkd"/>',
+                     f'<child widget="{base}/header_map_content"/>',
+                     f'<child widget="{base}/mc_tags_menu"/>'])
+    children = ['<data input="map content tags update"/>', '<on event="created" run="map content tags init"/>',
+                '<on event="deleted" run="map content tags close"/>']
+    extra = []
+    for index in range(MAP_CONTENT_TAG_ROWS):
+        row = f"{base}/mc_tag_{index}"
+        children.append(f'<child{attributes([("widget", row), ("x", 20), ("y", 73 + 30 * index)])}/>')
+        extra += _widget(row, [("width", 390), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
+                               ("bitmap", "bitmaps/sel_list_item_bkd_top" if index == 0 else "bitmaps/sel_list_item_bkd"),
+                               ("color", "#FF2896FF")],
+                         ['<on event="a" run="map content tag toggle"/>',
+                          '<on event="start" run="map content tag toggle"/>',
+                          '<on event="left_mouse" run="mouse emit accept event"/>',
+                          f'<child widget="{row}_name" x="12"/>', f'<child widget="{row}_value" x="250"/>'])
+        extra += _widget(f"{row}_name", [("type", "text"), ("controller", 1), ("width", 238), ("height", 22),
+                                         ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("text_y", 4),
+                                         ("text_flags", "no_focus_test")], [])
+        extra += _widget(f"{row}_value", [("type", "text"), ("controller", 1), ("width", 134), ("height", 22),
+                                          ("font", "ui\\small_ui"), ("color", "#FF2896FF"), ("align", "center"),
+                                          ("text_y", 6), ("text_flags", "no_focus_test")], [])
+    children.append(f'<child{attributes([("widget", f"{base}/mc_tags_button_bar"), ("y", 414)])}/>')
+    lines += _widget(f"{base}/mc_tags_menu",
+                     [("type", "column_list"), ("width", 640), ("height", 480),
+                      ("flags", "pass_unhandled_to_focused_child up_down_tabs_children"),
+                      ("description", f"{base}/mc_tags_help")], children)
+    # (in the lobby's frame: the kind and its count, the code's; the tag's
+    # path and what A does, the list's description; its model, turning
+    # (blank, its picture the code's: ui_widget.c draws a tag_preview's))
+    lines += _widget(f"{base}/mc_tags_help", [("width", 640), ("height", 480)],
+                     [f'<child widget="{base}/mc_tags_title"/>', f'<child widget="{base}/mc_tags_text"/>',
+                      f'<child widget="{base}/tag_preview"/>'])
+    lines += _widget(f"{base}/mc_tags_title",
+                     [("type", "text"), ("controller", 1), ("left", DETAILS_LEFT), ("top", 84), ("width", DETAILS_WIDTH),
+                      ("height", 44), ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
+    lines += _widget(f"{base}/mc_tags_text",
+                     [("type", "text"), ("controller", 1), ("left", DETAILS_LEFT), ("top", 130), ("width", DETAILS_WIDTH),
+                      ("height", 120), ("font", "ui\\small_ui"), ("color", "#FF2896FF")], [])
+    left, top, width, height = TAG_PREVIEW_BOUNDS
+    lines += _widget(f"{base}/tag_preview", [("controller", 1), ("left", left), ("top", top), ("width", width),
+                                            ("height", height), ("bitmap", "blank")], [])
+    lines += _widget(f"{base}/mc_tags_button_bar",
+                     [("type", "column_list"), ("width", 640), ("height", 28),
+                      ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],
+                     [f'<child widget="{base}/mc_tags_all_on" x="250" y="1"/>',
+                      f'<child widget="{base}/mc_tags_all_off" x="380" y="1"/>',
+                      f'<child widget="{base}/mc_tags_ok" x="510" y="1"/>'])
+    lines += _text_button(f"{base}/mc_tags_all_on", "ALL ON", ['<on event="a" run="map content tags all on"/>',
+                                                             '<on event="start" run="map content tags all on"/>'])
+    lines += _text_button(f"{base}/mc_tags_all_off", "ALL OFF", ['<on event="a" run="map content tags all off"/>',
+                                                               '<on event="start" run="map content tags all off"/>'])
+    lines += _text_button(f"{base}/mc_tags_ok", "OK", ['<on event="a" back="true"/>', '<on event="start" back="true"/>'])
+    lines += extra
+    return lines
+
+
+def _setup_option_screen(base: str, key: str, rows: list, fit: bool = False, extra_helps=()) -> list:
     """a screen of options laid out as the gametype's are (Teamplay
     Options'), its spinners setting config.toml's settings (menu_functions.c's
     "port setup options init" and "port setup options save", OK), each
@@ -4105,8 +4617,8 @@ def _setup_option_screen(base: str, key: str, rows: list, fit: bool = False) -> 
                                            ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
     children = ['<data input="game settings lists text update"/>',
                 '<on event="created" run="port setup options init"/>']
-    # (30 apart; with fit, closer for more rows than eight, the last 28 tall
-    # clear of the help at 341: Server Setup's, whose rows are all shown, as
+    # (30 apart; with fit, closer for more rows than eight, the last clear of the help at 341
+    # and the rows no taller than their spacing: Server Setup's, whose rows are all shown, as
     # OpenCE Options' are not)
     places = len([row_key for row_key, *_ in rows if row_key not in SETUP_OPTION_SAME_PLACE])
     # (without fit, more than nine rows are closer, to stay above the help
@@ -4129,7 +4641,7 @@ def _setup_option_screen(base: str, key: str, rows: list, fit: bool = False) -> 
     lines += _button(f"{base}/{key}_button_ok", 1, ['<on event="a" run="port setup options save" back="true"/>',
                                                      '<on event="start" run="port setup options save" back="true"/>'])
     for index, (row_key, label, strings, _) in enumerate(rows):
-        lines += _widget(f"{base}/op_{row_key}", [("width", 512), ("height", 28),
+        lines += _widget(f"{base}/op_{row_key}", [("width", 512), ("height", min(28, spacing)),
                                                  ("flags", "pass_unhandled_to_focused_child"),
                                                  ("bitmap", "bitmaps/option_bkds"), ("color", "#FF2896FF")],
                          [f'<child widget="{base}/{row_key}_label"/>',
@@ -4149,7 +4661,7 @@ def _setup_option_screen(base: str, key: str, rows: list, fit: bool = False) -> 
                          ['<on event="left_mouse" run="mouse spinner 1wide click"/>'])
         lines += _strings(f"{base}/var_{row_key}", strings)
     lines += _strings(f"{base}/{key}_labels", [label for _, label, *_ in rows])
-    lines += _strings(f"{base}/cap_{key}", [text for *_, helps in rows for text in helps])
+    lines += _strings(f"{base}/cap_{key}", [text for *_, helps in rows for text in helps] + list(extra_helps))
     return lines
 # Server Setup's rows of the gametype's options: the gametype editor's
 # screens
@@ -4398,6 +4910,53 @@ def _lobby() -> list:
                          [f'<on event="a" run="{run}"{opened}/>', f'<on event="start" run="{run}"{opened}/>',
                           '<on event="left_mouse" run="mouse emit accept event"/>'])
     lines += _join4(base)
+    lines += _ingame_join(base)
+    return lines
+
+
+def _ingame_join(base: str) -> list:
+    """joining a network game in progress: a controller with no player
+    presses START in the game, and this box of its own (in its quarter of
+    the screen: menu_functions.c's ingame_join_open) shows a profile, left
+    and right choosing another; A joins with it, B goes back to watching.
+    It looks as the pause menu does (the port's box, the key in its footer
+    band, the controller's own button icons), but of the port's own widgets
+    alone: a multiplayer map has none of ui.map's"""
+    height = pause_box_height(3)
+    lines = _widget(f"{base}/ingame_join_screen", [("width", 640), ("height", 480)],
+                    ['<on event="created" run="port ingame join open"/>',
+                     '<on event="a" run="port ingame join select" close="current"/>',
+                     '<on event="start" run="port ingame join select" close="current"/>',
+                     '<on event="b" close="current"/>', '<on event="back" close="current"/>',
+                     '<on event="left" run="port ingame join previous"/>',
+                     '<on event="right" run="port ingame join next"/>',
+                     '<data input="port ingame join update"/>',
+                     f'<child widget="{base}/ingame_join_box"/>'])
+    # (the box: the pause box's three pieces, its 3-button frame; the strip
+    # tiles across)
+    lines += _widget(f"{base}/ingame_join_box", [("width", INGAME_JOIN_WIDTH), ("height", height)],
+                     [f'<child widget="{base}/ingame_join_box_left" x="0" y="0"/>',
+                      f'<child widget="{base}/ingame_join_box_center" x="16" y="0"/>',
+                      f'<child widget="{base}/ingame_join_box_right" x="{INGAME_JOIN_WIDTH - 16}" y="0"/>',
+                      f'<child widget="{base}/ingame_join_title" x="0" y="34"/>',
+                      f'<child widget="{base}/ingame_join_name" x="0" y="82"/>',
+                      f'<child widget="{base}/ingame_join_hint" x="0" y="{height - 26}"/>'])
+    for piece, width in (("left", 16), ("center", INGAME_JOIN_WIDTH - 32), ("right", 16)):
+        lines += _widget(f"{base}/ingame_join_box_{piece}", [("width", width), ("height", height),
+                                                            ("bitmap", f"pause/joinbox_{piece}")], [])
+    lines += _widget(f"{base}/ingame_join_title", [("type", "text"), ("width", INGAME_JOIN_WIDTH), ("height", 30),
+                                                   ("font", "ui\\large_ui"), ("color", "#FFFFFFFF"),
+                                                   ("align", "center"), ("text_flags", "no_focus_test")], [])
+    lines += _widget(f"{base}/ingame_join_name", [("type", "text"), ("width", INGAME_JOIN_WIDTH), ("height", 30),
+                                                  ("font", "ui\\large_ui"), ("color", "#FF2896FF"),
+                                                  ("align", "center"), ("text_flags", "no_focus_test")], [])
+    # (the key: menu_tags.c puts the pause screens' own in its place, B=CANCEL
+    # A=SELECT; these words are for a map whose pause screens have none)
+    lines += _widget(f"{base}/ingame_join_hint", [("type", "text"), ("width", INGAME_JOIN_WIDTH), ("height", 24),
+                                                  ("text", "B=CANCEL    A=JOIN"),
+                                                  ("font", "ui\\small_ui"), ("color", "#FF2896FF"),
+                                                  ("align", "center"), ("text_y", 3),
+                                                  ("text_flags", "no_focus_test")], [])
     return lines
 
 
@@ -4463,16 +5022,16 @@ def _join4(base: str) -> list:
     lines += _widget(f"{base}/join4_qtr_ready",
                      [("width", 254), ("height", 164), ("bitmap", f"{xbox}4way_profile_border")],
                      ['<on event="created" run="port join4 ready"/>',
-                      '<on event="a" run="port join4 done" back="true"/>',
-                      '<on event="start" run="port join4 done" back="true"/>',
+                      '<on event="a" run="port join4 done"/>',
+                      '<on event="start" run="port join4 done"/>',
                       f'<on event="b" run="port join4 unready" replace="{base}/join4_qtr_select"/>',
                       '<on event="back"/>',
                       *selected])
     # (a player in the game already)
     lines += _widget(f"{base}/join4_qtr_playing",
                      [("width", 254), ("height", 164), ("bitmap", f"{xbox}4way_profile_border")],
-                     ['<on event="a" run="port join4 done" back="true"/>',
-                      '<on event="start" run="port join4 done" back="true"/>',
+                     ['<on event="a" run="port join4 done"/>',
+                      '<on event="start" run="port join4 done"/>',
                       '<on event="b"/>', '<on event="back"/>',
                       *selected])
     lines += _widget(f"{base}/join4_hint", [("type", "text"), ("width", 345), ("height", 24),
@@ -4552,6 +5111,499 @@ def _coop() -> list:
     return lines
 
 
+# ---------- hosting from the menus (port/linux/game/host_dashboard.c,
+# server_director.c): Multiplayer's HOST SERVER, the app a dedicated server
+# with no player of its own. Its screens (menu_functions.c's "port host"
+# functions): the Host Hub, its playlists (each a rotation of rounds, a map
+# and a gametype, kept in d:\playlists.txt) on the left and the one chosen's
+# rounds on the right, A launching it (a "+ NEW PLAYLIST" row first opening
+# the builder), X editing it, Y deleting it (at a second press), START the
+# server's settings; the Playlist Builder, its maps on the left and the
+# playlist's rounds on the right, left and right going from one to the
+# other, a map's A choosing its gametype (Select Gametype) and adding the
+# round; and Server Settings, config.toml's server.* that hosting reads
+
+HOST = f"{MT}/host"
+HOST_ROWS = 10
+HOST_MAP_ROWS = 8
+HOST_ENTRY_ROWS = 5
+HOST_GAMETYPE_ROWS = 10
+# their look, the Host Server mockup's (the PC menus' blue outlines, dark
+# panels and tabs): its pictures (host_pictures) and their places
+HOST_BLUE, HOST_DARK, HOST_DEEP = "#2896ff", "#0a2649", "#050d1c"
+HOST_TEXT, HOST_WHITE = "#FF8CA8E8", "#FFFFFFFF"
+HOST_COLUMN_WIDTH, HOST_LEFT_X, HOST_RIGHT_X = 260, 40, 340
+# (inside the menus' band, bitmaps/gradient's lines at 70 and 409, as the
+# other screens keep theirs; the title above it, the buttons below)
+HOST_TAB_Y, HOST_PANEL_Y, HOST_PANEL_BOTTOM = 76, 108, 400
+HOST_ROW_WIDTH, HOST_ROW_HEIGHT, HOST_ENTRY_HEIGHT = 240, 26, 36
+HOST_PILL_WIDTHS = (116, 76)
+
+
+def _host_svg(width: int, height: int, body: list) -> str:
+    return "\n".join([f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+                      f'viewBox="0 0 {width} {height}">', *body, "</svg>", ""])
+
+
+def _host_box(width: int, height: int, radius: float, fill_opacity: float = 0.82, glow: bool = True) -> list:
+    """a rounded box, its blue outline over a dark gradient, a faint lighter
+    rim inside it as the PC menus' boxes have"""
+    return [f'  <defs><linearGradient id="body" x1="0" y1="0" x2="0" y2="1">',
+            f'    <stop offset="0" stop-color="{HOST_DARK}"/>', f'    <stop offset="1" stop-color="{HOST_DEEP}"/>',
+            "  </linearGradient></defs>",
+            f'  <rect x="1" y="1" width="{width - 2}" height="{height - 2}" rx="{radius}" fill="url(#body)" '
+            f'fill-opacity="{fill_opacity}"/>',
+            *([f'  <rect x="3" y="3" width="{width - 6}" height="{height - 6}" rx="{max(radius - 2, 1)}" fill="none" '
+               f'stroke="#9fd0ff" stroke-opacity="0.18" stroke-width="1"/>'] if glow else []),
+            f'  <rect x="1" y="1" width="{width - 2}" height="{height - 2}" rx="{radius}" fill="none" '
+            f'stroke="{HOST_BLUE}" stroke-width="2"/>']
+
+
+def _host_arrow(x: float, y: float, size: float, direction: str, color: str = HOST_BLUE) -> str:
+    """a small solid triangle pointing left, right, up or down, its middle at x, y"""
+    points = {"right": [(x - size / 2, y - size), (x + size / 2, y), (x - size / 2, y + size)],
+              "left": [(x + size / 2, y - size), (x - size / 2, y), (x + size / 2, y + size)],
+              "up": [(x - size, y + size / 2), (x, y - size / 2), (x + size, y + size / 2)],
+              "down": [(x - size, y - size / 2), (x, y + size / 2), (x + size, y - size / 2)]}[direction]
+    return f'  <polygon points="{" ".join(f"{px:.2f},{py:.2f}" for px, py in points)}" fill="{color}"/>'
+
+
+def _host_band(width: int, height: int, frame: int) -> str:
+    """a row's background: nothing (0), the row chosen's band with its arrow
+    (1), a round picked up to be moved, with its up and down arrows (2)"""
+    if frame == 0:
+        return _host_svg(width, height, [])
+    body = [f'  <rect x="1" y="1" width="{width - 2}" height="{height - 2}" rx="4" '
+            f'fill="{HOST_BLUE}" fill-opacity="{0.22 if frame == 1 else 0.42}"/>',
+            f'  <rect x="1" y="1" width="{width - 2}" height="{height - 2}" rx="4" fill="none" stroke="{HOST_BLUE}" '
+            f'stroke-opacity="0.6" stroke-width="1"/>',
+            _host_arrow(8, height / 2, 5, "right", "#5fb4ff")]
+    if frame == 2:
+        body += [_host_arrow(width - 12, height / 2 - 6, 4, "up", "#ffffff"),
+                 _host_arrow(width - 12, height / 2 + 6, 4, "down", "#ffffff")]
+    return _host_svg(width, height, body)
+
+
+def host_pictures() -> list:
+    """the Host Server screens' pictures (ce_menus.py draws them): the tabs,
+    the chooser, the panels, the rows' bands and the pill buttons"""
+    # (a tab: its column's, lit (1) while the focus is in it)
+    tabs = []
+    for lit in (False, True):
+        body = _host_box(HOST_COLUMN_WIDTH, 28, 10, 0.9)
+        if lit:
+            body.append(f'  <rect x="2" y="2" width="{HOST_COLUMN_WIDTH - 4}" height="24" rx="9" fill="{HOST_BLUE}" '
+                        'fill-opacity="0.5"/>')
+        tabs.append((_host_svg(HOST_COLUMN_WIDTH, 28, body), HOST_COLUMN_WIDTH, 28))
+    pictures = [(f"{HOST}/tab", tabs)]
+    height = HOST_PANEL_BOTTOM - HOST_PANEL_Y
+    pictures.append((f"{HOST}/panel", [(_host_svg(HOST_COLUMN_WIDTH, height,
+                                                  _host_box(HOST_COLUMN_WIDTH, height, 12, 0.72)),
+                                        HOST_COLUMN_WIDTH, height)]))
+    # (the bands and the pills have three frames, so that the game's lists
+    # leave them be: menu_functions.c's host_list_update lights the one
+    # chosen only in the list the focus is in)
+    pictures.append((f"{HOST}/row", [(_host_band(HOST_ROW_WIDTH, HOST_ROW_HEIGHT, frame), HOST_ROW_WIDTH,
+                                      HOST_ROW_HEIGHT) for frame in range(3)]))
+    pictures.append((f"{HOST}/entry_row", [(_host_band(HOST_ROW_WIDTH, HOST_ENTRY_HEIGHT, frame), HOST_ROW_WIDTH,
+                                            HOST_ENTRY_HEIGHT) for frame in range(3)]))
+    for width in HOST_PILL_WIDTHS:
+        frames = []
+        for focused in (False, True, True):
+            body = _host_box(width, 24, 11, 0.9, glow=False)
+            if focused:
+                body.append(f'  <rect x="2" y="2" width="{width - 4}" height="20" rx="10" fill="{HOST_BLUE}" '
+                            'fill-opacity="0.45"/>')
+            frames.append((_host_svg(width, 24, body), width, 24))
+        pictures.append((f"{HOST}/pill_{width}", frames))
+    return pictures
+# Server Settings' rows: a label, the setting, its choices (shown, written),
+# and its help; None for a value typed (A: its keyboard, the function)
+HOST_SETTINGS = [
+    ("SERVER NAME:", "server.name", None, "The server's name in the lists of games (15\\ncharacters), needed to host. Enter sets it.",
+     "port host edit server name", "server_name"),
+    ("PASSWORD:", "server.password", None, "Players must type it to join; NONE for an open\\nserver. Enter sets it.",
+     "port host edit server password", "password"),
+    ("LISTING:", "server.public", [("PUBLIC", "true"), ("PRIVATE", "false")],
+     "PUBLIC: listed in everyone's server browser.\\nPRIVATE: joined on the LAN or by its invite.", None, None),
+    ("MAXIMUM PLAYERS:", "server.max_players", [(str(count), str(count)) for count in (2, 4, 8, 12, 16, 24, 32, 48, 64)],
+     "The most players the server takes.", None, None),
+    ("PLAYERS TO START:", "server.min_players", [(str(count), str(count)) for count in (1, 2, 4, 6, 8)],
+     "Players in the lobby before it counts down to the\\nnext round.", None, None),
+    ("LOBBY COUNTDOWN:", "server.lobby_seconds", [(f"{seconds} S", str(seconds)) for seconds in (5, 10, 15, 30, 60)],
+     "Seconds the lobby counts down once enough players\\nare in.", None, None),
+    ("MAP SHARING:", "network.map_share", [("ON", "true"), ("OFF", "false")],
+     "Players who join without a Custom Edition map\\ndownload it from the server.", None, None),
+    ("UPLOAD LIMIT:", "network.map_share_upload",
+     [(f"{kb} KB/S" if kb < 1024 else f"{kb // 1024} MB/S", str(kb)) for kb in MAP_SHARE_UPLOADS],
+     "The most the server sends of maps, so that the\\ngame keeps the rest of the upload.", None, None),
+    ("VOTE KICKING:", "network.votekick", [("ON", "true"), ("OFF", "false")],
+     "Players can vote to kick a player from the server.", None, None),
+    ("MESSAGE OF THE DAY:", "server.motd", None, "A notice each player is shown on joining; NONE\\nfor none. Enter sets it.",
+     "port host edit motd", "motd"),
+]
+# B on a screen with a text field: the typing cancelled, else back
+# Round Options' rows: the gametype editor's screens, as Server Setup's
+# (SETUP_OPTION_SCREENS) but its gametype's row
+HOST_ROUND_OPTIONS = [
+    ("player_options", "PLAYER OPTIONS", "player_options_edit/player_options_screen"),
+    ("item_options", "ITEM OPTIONS", "item_options_edit/item_options_screen"),
+    ("vehicle_options", "VEHICLE OPTIONS", "vehicle_options_edit/vehicle_options_screen"),
+    ("indicator_options", "INDICATOR OPTIONS", "indicator_options_edit/indicator_options_screen"),
+    ("team_options", "TEAMPLAY OPTIONS", "teamplay_options_edit/teamplay_options_screen"),
+]
+
+HOST_BACK = ['<on event="b" run="port host back" back="true"/>', '<on event="back" run="port host back" back="true"/>']
+
+
+def _host_text(name: str, x: int, y: int, width: int, height: int, text, font: str = "large",
+               color: str = HOST_TEXT, align=None, text_y: int = 0, text_x: int = 0) -> list:
+    """a text of the Host screens (its own words, or None: the game's)"""
+    return _widget(name, [("type", "text"), ("controller", 1), ("left", x), ("top", y), ("width", width),
+                          ("height", height), ("text", text), ("font", f"ui\\{font}_ui"), ("color", color),
+                          ("align", align), ("text_x", text_x or None), ("text_y", text_y or None),
+                          ("text_flags", "no_focus_test")], [])
+
+
+def _host_picture(name: str, x: int, y: int, width: int, height: int, bitmap: str) -> list:
+    return _widget(name, [("controller", 1), ("left", x), ("top", y), ("width", width), ("height", height),
+                          ("bitmap", bitmap)], [])
+
+
+def _host_frame(base: str, key: str, x: int, title: str, panel: str, panel_top: int) -> list:
+    """a column's tab, with its title, and its panel"""
+    lines = _widget(f"{base}/{key}_tab", [("type", "text"), ("controller", 1), ("left", x), ("top", HOST_TAB_Y),
+                                          ("width", HOST_COLUMN_WIDTH), ("height", 28), ("bitmap", f"{HOST}/tab"),
+                                          ("text", title), ("font", "ui\\large_ui"), ("color", HOST_WHITE),
+                                          ("align", "center"), ("text_y", 4), ("text_flags", "no_focus_test")], [])
+    lines += _host_picture(f"{base}/{key}_panel", x, panel_top, HOST_COLUMN_WIDTH, HOST_PANEL_BOTTOM - panel_top,
+                           f"{HOST}/{panel}")
+    return lines
+
+
+# (START's picture on each console: browser_hint_pictures)
+HOST_START_PICTURES = {"switch": "hints/switch_plus", "ps5": "hints/ps5_options"}
+
+
+def _host_hints(base: str, hints: list, platform=None, suffix: str = "") -> list:
+    """the footer's buttons, each its picture and what it does, the last
+    ending at the right column's right edge (left-aligned each, so that the
+    picture stays beside its words); a hint whose text starts with
+    "%start-button" has the console's own picture of START (the menus' text
+    has none) before its words. For the platforms given (suffix naming
+    their widgets), or all"""
+    lines, children = [], []
+    widths = [22 + 7 * len(text.split(" ", 1)[1]) for _, text in hints]
+    x = HOST_RIGHT_X + HOST_COLUMN_WIDTH - sum(widths) - 14 * (len(hints) - 1)
+    for (key, text), width in zip(hints, widths):
+        name = f"{base}/hint_{key}{suffix}"
+        if text.startswith("%start-button "):
+            lines += _host_text(name, x + 20, 418, width, 24, text.split(" ", 1)[1], "small", HOST_WHITE, text_y=4)
+            for console, bitmap in HOST_START_PICTURES.items():
+                lines += _widget(f"{name}_{console}", [("controller", 1), ("left", x + 2), ("top", 422), ("width", 14),
+                                                       ("height", 14), ("bitmap", bitmap)], [])
+                children.append(f'<child widget="{name}_{console}" platform="{console}"/>')
+        else:
+            lines += _host_text(name, x, 418, width + 8, 24, text, "small", HOST_WHITE, text_y=4)
+        children.append(f'<child{attributes([("widget", name), ("platform", platform)])}/>')
+        x += width + 14
+    return lines, children
+
+
+def _host_row(name: str, height: int, bitmap: str, handlers: list, texts: list) -> list:
+    """a row of one of the Host screens' lists (host_list_update's list_item_N:
+    its band's frame by its state, its words list_item_text, and a round's
+    gametype under them, list_item_detail)"""
+    return _widget(name, [("width", HOST_ROW_WIDTH), ("height", height), ("bitmap", bitmap)],
+                   handlers + ['<on event="left_mouse" run="mouse emit accept event"/>'] +
+                   [f'<child widget="{text}"/>' for text in texts])
+
+
+def _host_pill(name: str, width: int, text: str, handlers: list) -> list:
+    return _widget(name, [("type", "text"), ("width", width), ("height", 24), ("bitmap", f"{HOST}/pill_{width}"),
+                          ("text", text), ("font", "ui\\small_ui"), ("color", HOST_WHITE), ("align", "center"),
+                          ("text_y", 4)], handlers + ['<on event="left_mouse" run="mouse emit accept event"/>'])
+
+
+def _host() -> list:
+    lines = _widget(f"{MT}/multiplayer_type_host_item",
+                    [("type", "text"), ("left", 51), ("width", 232), ("height", 32), ("bitmap", "bitmaps/list_item_bkd"),
+                     ("string_list", f"{MT}/multiplayer_options"), ("string_index", 8), ("font", "ui\\large_ui"),
+                     ("color", "#FF2896FF"), ("text_x", 13), ("text_y", 5)],
+                    [f'<on event="a" open="{HOST}/host_screen"/>', f'<on event="start" open="{HOST}/host_screen"/>',
+                     '<on event="left_mouse" run="mouse emit accept event"/>'])
+    # (the rows' words: a row's, a round's map and its gametype under it)
+    lines += _host_text(f"{HOST}/rows/list_item_text", 0, 0, HOST_ROW_WIDTH, HOST_ROW_HEIGHT, None, text_x=22,
+                        text_y=4)
+    # (large_ui's lines are 21 apart: a box less tall than that shows none)
+    lines += _host_text(f"{HOST}/entries/list_item_text", 0, 0, HOST_ROW_WIDTH, 22, None, text_x=22, text_y=2)
+    lines += _host_text(f"{HOST}/entries/list_item_detail", 0, 19, HOST_ROW_WIDTH, 17, None, "small", text_x=40)
+
+    # the Host Hub: the playlists on the left, the one chosen on the right
+    hub = f"{HOST}/hub"
+    # (the consoles': their controller alone, START's picture their own and
+    # no pills, so that the rows are all there is to choose; the others' the
+    # pills, START unnamed)
+    hints, hint_children = _host_hints(hub, [("host", "%a-button =HOST"), ("edit", "%x-button =EDIT"),
+                                             ("delete", "%y-button =DELETE"), ("settings", "%start-button =SETTINGS"),
+                                             ("back", "%b-button =BACK")], "switch ps5", "_console")
+    other_hints, other_children = _host_hints(hub, [("host", "%a-button =HOST"), ("edit", "%x-button =EDIT"),
+                                                    ("delete", "%y-button =DELETE"), ("back", "%b-button =BACK")],
+                                              "desktop android web")
+    hints += other_hints
+    hint_children += other_children
+    lines += _widget(f"{HOST}/host_screen", [("width", 640), ("height", 480),
+                                             ("flags", "pass_unhandled_to_focused_child"),
+                                             ("bitmap", "bitmaps/gradient")],
+                     ['<on event="b" back="true"/>', '<on event="back" back="true"/>',
+                      f'<child widget="{hub}/title"/>', f'<child widget="{hub}/playlists_tab"/>',
+                      f'<child widget="{hub}/playlists_panel"/>', f'<child widget="{hub}/preview_tab"/>',
+                      f'<child widget="{hub}/preview_panel"/>', f'<child widget="{HOST}/playlist_list"/>',
+                      *hint_children])
+    lines += _host_text(f"{hub}/title", 0, 20, 640, 32, "HOST SERVER", color=HOST_BLUE, align="center")
+    lines += _host_frame(hub, "playlists", HOST_LEFT_X, "PLAYLISTS", "panel", HOST_PANEL_Y)
+    lines += _host_frame(hub, "preview", HOST_RIGHT_X, "PLAYLIST PREVIEW", "panel", HOST_PANEL_Y)
+    lines += hints
+    rows = [f'<child widget="{hub}/list_item_{index}" x="{HOST_LEFT_X + 10}" y="{HOST_PANEL_Y + 8 + 28 * index}"/>'
+            for index in range(HOST_ROWS)]
+    # (the pills, under the preview: the list's, after its rows)
+    pills = [("button_edit", "EDIT", "port host edit", f"{HOST}/builder_screen"),
+             ("button_delete", "DELETE", "port host delete", None),
+             ("button_settings", "SETTINGS", None, f"{HOST}/settings/settings_screen")]
+    pill_x = HOST_RIGHT_X + (HOST_COLUMN_WIDTH - 3 * HOST_PILL_WIDTHS[1] - 2 * 6) // 2
+    rows += [f'<child widget="{hub}/{key}" x="{pill_x + index * (HOST_PILL_WIDTHS[1] + 6)}" y="{HOST_PANEL_BOTTOM - 34}" '
+             'platform="desktop android web"/>' for index, (key, *_) in enumerate(pills)]
+    lines += _widget(f"{HOST}/playlist_list",
+                     [("type", "column_list"), ("width", 640), ("height", 480),
+                      ("flags", "pass_unhandled_to_focused_child up_down_tabs_children"),
+                      ("description", f"{HOST}/playlist_details")],
+                     ['<data input="port host playlists update"/>',
+                      '<on event="created" run="port host init"/>',
+                      f'<on event="x" run="port host edit" open="{HOST}/builder_screen"/>',
+                      '<on event="y" run="port host delete"/>',
+                      f'<on event="start" open="{HOST}/settings/settings_screen"/>', *rows])
+    for index in range(HOST_ROWS):
+        lines += _host_row(f"{hub}/list_item_{index}", HOST_ROW_HEIGHT, f"{HOST}/row",
+                           [f'<on event="a" run="port host choose" open="{HOST}/builder_screen"/>'],
+                           [f"{HOST}/rows/list_item_text"])
+    for key, text, function, target in pills:
+        handlers = [f'<on event="{event}"{attributes([("run", function), ("open", target)])}/>' for event in ("a",)]
+        lines += _host_pill(f"{hub}/{key}", HOST_PILL_WIDTHS[1], text, handlers)
+    # (in the preview: the playlist's name and its rounds)
+    lines += _widget(f"{HOST}/playlist_details", [("width", 640), ("height", 480)],
+                     [f'<child widget="{HOST}/playlist_details_name"/>', f'<child widget="{HOST}/playlist_details_text"/>'])
+    lines += _host_text(f"{HOST}/playlist_details_name", HOST_RIGHT_X + 16, HOST_PANEL_Y + 10, HOST_COLUMN_WIDTH - 32,
+                        24, None, color=HOST_WHITE)
+    lines += _host_text(f"{HOST}/playlist_details_text", HOST_RIGHT_X + 16, HOST_PANEL_Y + 40, HOST_COLUMN_WIDTH - 32,
+                        HOST_PANEL_BOTTOM - HOST_PANEL_Y - 84, None, "small")
+
+    # the Playlist Builder: the maps (MULTIPLAYER's or CUSTOM MAPS', the
+    # chooser over them) and the playlist's rounds side by side, left and
+    # right going from one to the other (the screen's), up and down through
+    # each; X saves it
+    builder = f"{HOST}/builder"
+    hints, hint_children = _host_hints(builder, [("save", "%x-button =SAVE PLAYLIST"), ("select", "%a-button =SELECT"),
+                                                 ("back", "%b-button =BACK")])
+    # (the consoles': the maps' kind a label over the list, not a row to
+    # choose, the shoulders changing it, their hint at the left of the bar
+    # while the focus is in the maps: menu_functions.c's host_maps_update)
+    kind_x = HOST_LEFT_X + 4
+    kind_children = [f'<child widget="{builder}/kind_label" x="{HOST_LEFT_X + 10}" y="{HOST_PANEL_Y + 8}" '
+                     'platform="switch ps5"/>',
+                     f'<child widget="{builder}/hint_kind" x="{kind_x + 34}" y="418" platform="switch ps5"/>']
+    for console, pictures in (("switch", ("switch_l", "switch_r")), ("ps5", ("ps5_l1", "ps5_r1"))):
+        for index, (side, picture) in enumerate(zip(("l", "r"), pictures)):
+            name = f"{builder}/hint_kind_{side}_{console}"
+            lines += _widget(name, [("controller", 1), ("width", 14), ("height", 14), ("bitmap", f"hints/{picture}")],
+                             [])
+            kind_children.append(f'<child widget="{name}" x="{kind_x + 16 * index}" y="422" platform="{console}"/>')
+    # (Y removing the round the focus is on: its hint in the same place,
+    # while the focus is on a round, menu_functions.c's host_entries_update)
+    kind_children.append(f'<child widget="{builder}/hint_remove" x="{kind_x}" y="418"/>')
+    lines += _host_text(f"{builder}/hint_remove", 0, 0, 100, 24, "%y-button =REMOVE", "small", HOST_WHITE, text_y=4)
+    lines += _host_text(f"{builder}/hint_kind", 0, 0, 120, 24, "MAP TYPE", "small", HOST_WHITE, text_y=4)
+    lines += _host_text(f"{builder}/kind_label", 0, 0, HOST_ROW_WIDTH, HOST_ROW_HEIGHT, None, text_x=22, text_y=4)
+    lines += _widget(f"{HOST}/builder_screen", [("width", 640), ("height", 480),
+                                                ("flags", "pass_unhandled_to_focused_child left_right_tabs_children"),
+                                                ("bitmap", "bitmaps/gradient")],
+                     [*HOST_BACK, '<on event="x" run="port host save" back="true"/>',
+                      f'<child widget="{builder}/title"/>', f'<child widget="{builder}/maps_tab"/>',
+                      f'<child widget="{builder}/maps_panel"/>', f'<child widget="{builder}/entries_tab"/>',
+                      f'<child widget="{builder}/entries_panel"/>', f'<child widget="{builder}/status"/>',
+                      f'<child widget="{builder}/map_list"/>', f'<child widget="{builder}/entry_list"/>',
+                      *hint_children, *kind_children])
+    lines += _host_text(f"{builder}/title", 0, 20, 640, 32, None, color=HOST_BLUE, align="center")
+    lines += _host_frame(builder, "maps", HOST_LEFT_X, "SELECT MAP", "panel", HOST_PANEL_Y)
+    lines += _host_frame(builder, "entries", HOST_RIGHT_X, "CURRENT PLAYLIST", "panel", HOST_PANEL_Y)
+    lines += _host_text(f"{builder}/status", HOST_LEFT_X, 50, HOST_RIGHT_X + HOST_COLUMN_WIDTH - HOST_LEFT_X, 18,
+                        None, "small", HOST_WHITE, align="center")
+    lines += hints
+    # (the maps' kind's row first, as the rounds' name's, then the maps)
+    rows = [f'<child widget="{builder}/op_kind" x="{HOST_LEFT_X + 10}" y="{HOST_PANEL_Y + 8}" '
+            'platform="desktop android web"/>']
+    rows += [f'<child widget="{builder}/maps/list_item_{index}" x="{HOST_LEFT_X + 10}" '
+             f'y="{HOST_PANEL_Y + 40 + 28 * index}"/>' for index in range(HOST_MAP_ROWS)]
+    lines += _widget(f"{builder}/map_list",
+                     [("type", "column_list"), ("width", 640), ("height", 480),
+                      ("flags", "pass_unhandled_to_focused_child up_down_tabs_children")],
+                     ['<data input="port host maps update"/>', '<on event="created" run="port host maps init"/>',
+                      '<on event="white" run="port host map kind"/>',
+                      '<on event="black" run="port host map kind"/>', *rows])
+    # (the maps' kind: MULTIPLAYER or CUSTOM MAPS, A changing it)
+    lines += _widget(f"{builder}/op_kind", [("type", "text"), ("width", HOST_ROW_WIDTH), ("height", HOST_ROW_HEIGHT),
+                                            ("bitmap", f"{HOST}/row"), ("font", "ui\\large_ui"),
+                                            ("color", HOST_TEXT), ("text_x", 22), ("text_y", 4),
+                                            ("text_flags", "no_focus_test")],
+                     ['<on event="a" run="port host map kind"/>', '<on event="start" run="port host map kind"/>',
+                      '<on event="left_mouse" run="mouse emit accept event"/>'])
+    for index in range(HOST_MAP_ROWS):
+        lines += _host_row(f"{builder}/maps/list_item_{index}", HOST_ROW_HEIGHT, f"{HOST}/row",
+                           [f'<on event="a" run="port host map choose" open="{HOST}/gametype_screen"/>',
+                            f'<on event="start" run="port host map choose" open="{HOST}/gametype_screen"/>'],
+                           [f"{HOST}/rows/list_item_text"])
+    # (its name's row first, then the rounds, then REMOVE ALL and REORDER)
+    rows = [f'<child widget="{builder}/op_name" x="{HOST_RIGHT_X + 10}" y="{HOST_PANEL_Y + 8}"/>']
+    rows += [f'<child widget="{builder}/entries/list_item_{index}" x="{HOST_RIGHT_X + 10}" '
+             f'y="{HOST_PANEL_Y + 40 + HOST_ENTRY_HEIGHT * index}"/>' for index in range(HOST_ENTRY_ROWS)]
+    pill_x = HOST_RIGHT_X + (HOST_COLUMN_WIDTH - 2 * HOST_PILL_WIDTHS[0] - 8) // 2
+    rows += [f'<child widget="{builder}/button_remove_all" x="{pill_x}" y="{HOST_PANEL_BOTTOM - 34}"/>',
+             f'<child widget="{builder}/button_reorder" x="{pill_x + HOST_PILL_WIDTHS[0] + 8}" '
+             f'y="{HOST_PANEL_BOTTOM - 34}"/>']
+    lines += _widget(f"{builder}/entry_list",
+                     [("type", "column_list"), ("width", 640), ("height", 480),
+                      ("flags", "pass_unhandled_to_focused_child up_down_tabs_children")],
+                     ['<data input="port host entries update"/>',
+                      '<on event="y" run="port host entry remove"/>',
+                      '<on event="white" run="port host entry up"/>', '<on event="black" run="port host entry down"/>',
+                      *rows])
+    lines += _widget(f"{builder}/op_name", [("type", "text"), ("width", HOST_ROW_WIDTH), ("height", HOST_ROW_HEIGHT),
+                                            ("bitmap", f"{HOST}/row")],
+                     ['<on event="a" run="port host name edit"/>', '<on event="start" run="port host name edit"/>',
+                      '<on event="left_mouse" run="mouse emit accept event"/>',
+                      f'<child widget="{builder}/name_value"/>'])
+    lines += _host_text(f"{builder}/name_value", 0, 0, HOST_ROW_WIDTH, HOST_ROW_HEIGHT, None, color=HOST_WHITE,
+                        text_x=22, text_y=4)
+    for index in range(HOST_ENTRY_ROWS):
+        lines += _host_row(f"{builder}/entries/list_item_{index}", HOST_ENTRY_HEIGHT, f"{HOST}/entry_row",
+                           ['<on event="a" run="port host entry grab"/>', '<on event="up" run="port host entry up"/>',
+                            '<on event="down" run="port host entry down"/>'],
+                           [f"{HOST}/entries/list_item_text", f"{HOST}/entries/list_item_detail"])
+    lines += _host_pill(f"{builder}/button_remove_all", HOST_PILL_WIDTHS[0], "REMOVE ALL",
+                        ['<on event="a" run="port host remove all"/>'])
+    lines += _host_pill(f"{builder}/button_reorder", HOST_PILL_WIDTHS[0], "REORDER",
+                        ['<on event="a" run="port host reorder"/>'])
+
+    # Select Gametype: the gametypes a round can play, A opening Round
+    # Options for the round
+    gametype = f"{HOST}/gametype"
+    x = (640 - HOST_COLUMN_WIDTH) // 2
+    hints, hint_children = _host_hints(gametype, [("select", "%a-button =SELECT"), ("back", "%b-button =BACK")])
+    lines += _widget(f"{HOST}/gametype_screen", [("width", 640), ("height", 480),
+                                                 ("flags", "pass_unhandled_to_focused_child"),
+                                                 ("bitmap", "bitmaps/gradient")],
+                     ['<on event="b" back="true"/>', '<on event="back" back="true"/>',
+                      f'<child widget="{gametype}/title"/>', f'<child widget="{gametype}/types_tab"/>',
+                      f'<child widget="{gametype}/types_panel"/>', f'<child widget="{gametype}/gametype_list"/>',
+                      *hint_children])
+    lines += _host_text(f"{gametype}/title", 0, 20, 640, 32, "SELECT GAME TYPE", color=HOST_BLUE, align="center")
+    lines += _host_frame(gametype, "types", x, None, "panel", HOST_PANEL_Y)
+    lines += hints
+    rows = [f'<child widget="{gametype}/list_item_{index}" x="{x + 10}" y="{HOST_PANEL_Y + 10 + 28 * index}"/>'
+            for index in range(HOST_GAMETYPE_ROWS)]
+    lines += _widget(f"{gametype}/gametype_list",
+                     [("type", "column_list"), ("width", 640), ("height", 480),
+                      ("flags", "pass_unhandled_to_focused_child up_down_tabs_children")],
+                     ['<data input="port host gametypes update"/>', *rows])
+    for index in range(HOST_GAMETYPE_ROWS):
+        lines += _host_row(f"{gametype}/list_item_{index}", HOST_ROW_HEIGHT, f"{HOST}/row",
+                           [f'<on event="a" run="port host gametype choose" open="{HOST}/round_screen"/>',
+                            f'<on event="start" run="port host gametype choose" open="{HOST}/round_screen"/>'],
+                           [f"{HOST}/rows/list_item_text"])
+
+    # Round Options: the round's own options, the gametype editor's screens
+    # (Server Setup's) editing a copy of its gametype, whose changes are the
+    # round's rules (menu_functions.c's host_round_add); ADD ROUND (X) adds
+    # it and goes back to the Builder, B back to Select Gametype
+    round_base = f"{HOST}/round"
+    hints, hint_children = _host_hints(round_base, [("add", "%x-button =ADD ROUND"), ("select", "%a-button =SELECT"),
+                                                    ("back", "%b-button =BACK")])
+    lines += _widget(f"{HOST}/round_screen", [("width", 640), ("height", 480),
+                                              ("flags", "pass_unhandled_to_focused_child"),
+                                              ("bitmap", "bitmaps/gradient")],
+                     ['<on event="b" run="port host round back" back="true"/>',
+                      '<on event="back" run="port host round back" back="true"/>',
+                      '<on event="x" run="port host round add" back="true"/>',
+                      f'<child widget="{round_base}/title"/>', f'<child widget="{round_base}/options_tab"/>',
+                      f'<child widget="{round_base}/options_panel"/>', f'<child widget="{round_base}/status"/>',
+                      f'<child widget="{round_base}/option_list"/>', *hint_children])
+    lines += _host_text(f"{round_base}/title", 0, 20, 640, 32, "ROUND OPTIONS", color=HOST_BLUE, align="center")
+    lines += _host_frame(round_base, "options", x, None, "panel", HOST_PANEL_Y)
+    lines += _host_text(f"{round_base}/status", HOST_LEFT_X, 50, HOST_RIGHT_X + HOST_COLUMN_WIDTH - HOST_LEFT_X, 18,
+                        None, "small", HOST_WHITE, align="center")
+    lines += hints
+    rows = [f'<child widget="{round_base}/op_{key}" x="{x + 10}" y="{HOST_PANEL_Y + 10 + 28 * index}"/>'
+            for index, (key, _, _) in enumerate(HOST_ROUND_OPTIONS)]
+    rows.append(f'<child widget="{round_base}/button_add" x="{x + (HOST_COLUMN_WIDTH - HOST_PILL_WIDTHS[0]) // 2}" '
+                f'y="{HOST_PANEL_BOTTOM - 34}"/>')
+    lines += _widget(f"{round_base}/option_list",
+                     [("type", "column_list"), ("width", 640), ("height", 480),
+                      ("flags", "pass_unhandled_to_focused_child up_down_tabs_children")],
+                     ['<data input="port host round update"/>', *rows])
+    for key, title, screen in HOST_ROUND_OPTIONS:
+        target = f"main_menu/settings_select/multiplayer_setup/{screen}"
+        lines += _widget(f"{round_base}/op_{key}", [("type", "text"), ("width", HOST_ROW_WIDTH),
+                                                    ("height", HOST_ROW_HEIGHT), ("bitmap", f"{HOST}/row"),
+                                                    ("text", title), ("font", "ui\\large_ui"), ("color", HOST_TEXT),
+                                                    ("text_x", 22), ("text_y", 4), ("text_flags", "no_focus_test")],
+                         [f'<on event="a" run="port host round edit" open="{target}"/>',
+                          f'<on event="start" run="port host round edit" open="{target}"/>',
+                          '<on event="left_mouse" run="mouse emit accept event"/>'])
+    lines += _host_pill(f"{round_base}/button_add", HOST_PILL_WIDTHS[0], "ADD ROUND",
+                        ['<on event="a" run="port host round add" back="true"/>'])
+
+    # Server Settings, as a settings screen: spinners writing config.toml
+    # at OK, the values typed at once
+    base = f"{HOST}/settings"
+    # (ten rows, closer together, as Create Game's: the help above the buttons)
+    spec = {"screen": "settings_screen", "spacing": 24, "help_top": 330,
+            "header": ("header_settings", f"{MT}/server_settings/header_server_settings")}
+    rows, extra = [], []
+    for index, (label, setting, choices, _, function, key) in enumerate(HOST_SETTINGS):
+        if choices is None:
+            extra += _value_row(base, key, index, function)
+            rows.append((f"{base}/op_{key}", None))
+            continue
+        key = setting.split(".", 1)[1]
+        extra += _widget(f"{base}/op_{key}", [("width", 512), ("height", 28),
+                                              ("flags", "pass_unhandled_to_focused_child"),
+                                              ("bitmap", "bitmaps/option_bkds"), ("color", "#FF2896FF")],
+                         [f'<child widget="{base}/{key}_label"/>', f'<child widget="{base}/{key}_spinner" x="320" y="1"/>'])
+        extra += _widget(f"{base}/{key}_label", [("type", "text"), ("controller", 1), ("width", 300), ("height", 22),
+                                                 ("string_list", f"{base}/labels"), ("string_index", index),
+                                                 ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("text_x", 13),
+                                                 ("text_y", 4)], [])
+        extra += _widget(f"{base}/{key}_spinner",
+                         [("type", "spinner"), ("left", 3), ("top", 2), ("width", 147), ("height", 20),
+                          ("flags", "pass_unhandled_to_focused_child left_right_tabs_items"),
+                          ("strings", "|".join(shown for shown, _ in choices)), ("setting", setting),
+                          ("values", "|".join(value for _, value in choices)), ("font", "ui\\large_ui"),
+                          ("color", "#FF2896FF"), ("align", "center"), ("text_y", 1),
+                          ("header_bitmap", "bitmaps/arrow_sm_left"), ("footer_bitmap", "bitmaps/arrow_sm_right"),
+                          ("header_bounds", "7 -6 19 0"), ("footer_bounds", "7 150 19 156")],
+                         ['<on event="created" run="port setting load"/>'])
+        rows.append((f"{base}/op_{key}", None))
+    extra += _button(f"{base}/button_defaults", 3, ['<on event="a" run="port settings defaults"/>',
+                                                    '<on event="start" run="port settings defaults"/>'])
+    extra += _button(f"{base}/button_ok", 1, ['<on event="a" run="port settings save" back="true"/>',
+                                              '<on event="start" run="port settings save" back="true"/>'])
+    extra += _strings(f"{base}/labels", [label for label, *_ in HOST_SETTINGS])
+    extra += _strings(f"{base}/help_strings", [""] + [help_text for _, _, _, help_text, *_ in HOST_SETTINGS])
+    screen = _screen(base, spec, rows, ["port host settings update", "port settings help"], [], extra)
+    lines += [line.replace('<on event="b" back="true"/>', HOST_BACK[0])
+              .replace('<on event="back" back="true"/>', HOST_BACK[1]) for line in screen]
+    return lines
+
+
 def _item_options_extras() -> list:
     """Item Options' rows of the port's: the map's weapons (YES or NO), and
     the loadout, CATEGORY (the weapon set) or CUSTOM (each player's primary
@@ -4581,6 +5633,30 @@ def _item_options_extras() -> list:
     lines += _strings(f"{base}/var_map_weapons", ["YES", "NO"])
     lines += _strings(f"{base}/var_loadout", ["CATEGORY", "CUSTOM"])
     lines += _strings(f"{base}/var_loadout_weapon", LOADOUT_WEAPONS)
+    return lines
+
+
+def _vehicle_options_extras() -> list:
+    """the gametype's riding rule, a row of the vehicle options"""
+    base = VEHICLE_EDIT
+    lines = []
+    key, label_index, words = "vehicle_riding", 9, ["ON", "OFF"]
+    lines += _widget(f"{base}/op_{key}", [("width", 512), ("height", 28),
+        ("flags", "pass_unhandled_to_focused_child"), ("bitmap", "bitmaps/option_bkds"),
+        ("color", "#FF2896FF")], [f'<child widget="{base}/{key}_label"/>',
+        f'<child widget="{base}/{key}_spinner" x="286" y="1"/>'])
+    lines += _widget(f"{base}/{key}_label", [("type", "text"), ("controller", 1),
+        ("width", 280), ("height", 22), ("string_list", f"{base}/vehicle_options_labels"),
+        ("string_index", label_index), ("font", "ui\\large_ui"), ("color", "#FF2896FF"),
+        ("text_x", 13), ("text_y", 4)], [])
+    lines += _widget(f"{base}/{key}_spinner", [("type", "spinner"), ("top", 2),
+        ("width", 206), ("height", 20), ("flags", "pass_unhandled_to_focused_child left_right_tabs_items"),
+        ("string_list", f"{base}/var_{key}"), ("font", "ui\\large_ui"),
+        ("color", "#FF2896FF"), ("align", "center"), ("text_y", 4),
+        ("list_flags", "items_from_strings"), ("header_bitmap", "bitmaps/arrow_sm_left"),
+        ("footer_bitmap", "bitmaps/arrow_sm_right"), ("header_bounds", "7 -13 19 -7"),
+        ("footer_bounds", "7 208 19 214")], ['<on event="left_mouse" run="mouse spinner 1wide click"/>'])
+    lines += _strings(f"{base}/var_{key}", words)
     return lines
 
 
@@ -4661,7 +5737,7 @@ def _floodfection_options() -> list:
                                                      ("bitmap", "bitmaps/gradient")],
                      [f'<child widget="{base}/header_floodfection"/>', f'<child widget="{base}/floodfection_menu"/>'])
     lines += _widget(f"{base}/header_floodfection", [("type", "text"), ("controller", 1), ("left", 35), ("top", 11),
-                                                     ("width", 363), ("height", 59), ("text", "FLOODFECTION"),
+                                                     ("width", 512), ("height", 59), ("text", "FLOODFECTION"),
                                                      ("font", "ui\\large_ui"), ("color", "#FFFFFFFF"), ("text_x", 13),
                                                      ("text_y", 16)], [])
     lines += _widget(f"{base}/floodfection_help", [("type", "text"), ("controller", 1), ("left", 68), ("top", 341),
@@ -4734,26 +5810,32 @@ def _map_kind() -> list:
     the Custom Edition maps of the custom_maps folder of either kind, or the
     DAILY CHALLENGES (menu_functions.c's map lists), for either controller (split screen
     co-op's New Game takes both)"""
-    lines = _widget(MAP_KIND_CHOOSER, [("width", 256), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
-                                       ("bitmap", "bitmaps/option_bkds_sm"), ("font", "ui\\large_ui"),
-                                       ("color", "#FF2896FF"), ("align", "center"), ("text_y", 3)],
-                    [f'<child widget="{MAP_KIND_CHOOSER}_spinner" x="9" y="2"/>'])
+    lines = _widget(MAP_KIND_CHOOSER, [("width", 232), ("height", 24), ("flags", "pass_unhandled_to_focused_child"),
+                                       ("bitmap", "bitmaps/list_item_bkd"), ("font", "ui\\small_ui"),
+                                       ("color", "#FFB8DCFF"), ("text_y", 2)],
+                    [f'<child widget="{MAP_KIND_CHOOSER}_spinner" x="8" y="2"/>'])
     # (wider than the gametype chooser's, for CUSTOM SINGLEPLAYER, its
     # arrows at the row's ends)
     lines += _widget(f"{MAP_KIND_CHOOSER}_spinner",
-                     [("type", "spinner"), ("width", 238), ("height", 22), ("flags", "left_right_tabs_items"),
-                      ("string_list", "main_menu/new_select/var_map_kinds"), ("font", "ui\\large_ui"),
-                      ("color", "#FF2896FF"), ("align", "center"), ("text_y", 1), ("list_flags", "items_from_strings"),
+                     [("type", "spinner"), ("width", 216), ("height", 20), ("flags", "left_right_tabs_items"),
+                      ("string_list", "main_menu/new_select/var_map_kinds"), ("font", "ui\\small_ui"),
+                      ("color", "#FFB8DCFF"), ("text_y", 3), ("list_flags", "items_from_strings"),
                       ("header_bitmap", "bitmaps/arrow_sm_left"), ("footer_bitmap", "bitmaps/arrow_sm_right"),
-                      ("header_bounds", "7 -6 19 0"), ("footer_bounds", "7 238 19 244")],
+                      ("header_bounds", "3 -7 15 -1"), ("footer_bounds", "3 216 15 222")],
                      ['<on event="left_mouse" run="mouse spinner 1wide click"/>'])
     # (and the daily challenges, today's and the days before: community.c's,
     # each played at its own difficulty with its own randomizer and skulls)
     lines += _strings("main_menu/new_select/var_map_kinds",
-                      ["SINGLEPLAYER", "MULTIPLAYER", "CUSTOM SINGLEPLAYER", "CUSTOM MULTIPLAYER", "DAILY CHALLENGES",
+                      ["S I N G L E P L A Y E R", "M U L T I P L A Y E R", "CUSTOM SINGLEPLAYER",
+                       "CUSTOM MULTIPLAYER", "DAILY CHALLENGES",
                        # (Content Extended's saved Forge maps: port/forge's
                        # forge_hooks.c lists them, a build without Forge none)
-                       "FORGE MAPS"])
+                       "F O R G E   M A P S", "MCC SINGLEPLAYER", "MCC MULTIPLAYER"])
+    for name, top, height, color in (("name", 204, 54, "#FFD8EEFF"), ("help", 270, 124, "#FFB8DCFF")):
+        lines += _widget(f"main_menu/new_select/mcc_folder_{name}",
+                         [("type", "text"), ("controller", 1), ("left", 410), ("top", top),
+                          ("width", 214), ("height", height), ("font", "ui\\small_ui"),
+                          ("color", color)], [])
     lines += _text_button(MAP_IMPORT, "IMPORT MAP", ['<on event="a" run="port map import"/>'])
     return lines
 
@@ -4765,8 +5847,8 @@ def _level_records() -> list:
     lines at most, from 258, at LEVEL_DATA_TEXT_SCALE), where the
     difficulties' icons were; and those icons' badges (LEVEL_BADGE), over
     the picture's bottom"""
-    lines = _widget(LEVEL_RECORD, [("type", "text"), ("controller", 1), ("left", 417), ("top", 334),
-                                   ("width", 146), ("height", 64), ("font", "ui\\small_ui"), ("color", "#FFFFFFFF")],
+    lines = _widget(LEVEL_RECORD, [("type", "text"), ("controller", 1), ("left", 410), ("top", 342),
+                                   ("width", 214), ("height", 60), ("font", "ui\\small_ui"), ("color", "#FFD8EEFF")],
                     [])
     # (the difficulty_indicator's picture, half its size)
     lines += _widget(LEVEL_BADGE, [("controller", 1), ("width", LEVEL_BADGE_SIZE[0]), ("height", LEVEL_BADGE_SIZE[1]),
@@ -4882,14 +5964,14 @@ DAILY_HISTORY_ROWS = 10
 # longest 27 characters, in it; the day TODAY for today's; PLAYERS online only,
 # and PLAYERS and RANK with scoring on)
 DAILY_HISTORY_COLUMNS = [
-    ("date", "DAY", 8, 86, None, True),
-    ("level", "MISSION", 98, 244, None, False),
-    ("difficulty", "DIFFICULTY", 346, 92, None, False),
-    ("players", "PLAYERS", 440, 64, "right", False),
-    ("mine", "RANK", 508, 48, "right", False),
+    ("date", "DAY", 10, 82, None, True),
+    ("level", "MISSION", 96, 216, None, False),
+    ("difficulty", "DIFFICULTY", 316, 84, None, False),
+    ("players", "PLAYERS", 400, 56, "right", False),
+    ("mine", "RANK", 458, 44, "right", False),
 ]
-DAILY_HISTORY_LEFT = 40
-DAILY_HISTORY_WIDTH = 560
+DAILY_HISTORY_LEFT = 64
+DAILY_HISTORY_WIDTH = 512
 
 
 def _daily() -> list:
@@ -4984,7 +6066,7 @@ def _daily() -> list:
     for index in range(DAILY_HISTORY_ROWS):
         lines += _widget(f"{DAILY}/history_row_{index + 1}",
                          [("width", DAILY_HISTORY_WIDTH), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
-                          ("bitmap", "bitmaps/sel_list_item_bkd_top" if index == 0 else "bitmaps/sel_list_item_bkd"),
+                          ("bitmap", "bitmaps/option_bkds"),
                           ("color", "#FF2896FF")],
                          [f'<on event="a" run="port daily choose" open="{DAILY}/daily_screen"/>',
                           f'<on event="start" run="port daily choose" open="{DAILY}/daily_screen"/>',
@@ -5241,11 +6323,13 @@ def multiplayer_files() -> dict:
     return {
         f"{MT}/join_game".replace("/", ".") + ".port.xml": head + _join_game_extras() + ["</menus>", ""],
         f"{MT}/server_settings".replace("/", ".") + ".xml": head + _server_settings() + _tag_profile_screen() +
+            _map_content_tags_screen() +
         _invite_qr_screen() +
         ["</menus>", ""],
         f"{MT}/lobby".replace("/", ".") + ".xml": head + _lobby() + ["</menus>", ""],
         f"{MT}/coop".replace("/", ".") + ".xml": head + _coop() + ["</menus>", ""],
         f"{MT}/local".replace("/", ".") + ".xml": head + _create_local() + ["</menus>", ""],
+        HOST.replace("/", ".") + ".xml": head + _host() + ["</menus>", ""],
         "main_menu/new_select".replace("/", ".") + ".port.xml": head + _map_kind() + ["</menus>", ""],
         "main_menu/solo_level_select".replace("/", ".") + ".port.xml": head + _level_records() + _leaderboard() +
         _map_manager() +
@@ -5257,11 +6341,12 @@ def multiplayer_files() -> dict:
         CREDITS.replace("/", ".") + ".xml": head + _credits_screen() + ["</menus>", ""],
         "main_menu/settings_select/multiplayer_setup/item_options_edit".replace("/", ".") + ".port.xml": head + _item_options_extras() + ["</menus>", ""],
         PLAYER_EDIT.replace("/", ".") + ".port.xml": head + _player_options_extras() + ["</menus>", ""],
+        VEHICLE_EDIT.replace("/", ".") + ".port.xml": head + _vehicle_options_extras() + ["</menus>", ""],
         TEAMPLAY_EDIT.replace("/", ".") + ".port.xml": head + _teamplay_options_extras() + ["</menus>", ""],
         OPENCE_EDIT.replace("/", ".") + ".port.xml": head + _opence_options() + ["</menus>", ""],
         FLOOD_EDIT.replace("/", ".") + ".port.xml": head + _floodfection_options() + ["</menus>", ""],
         MODS.replace("/", ".") + ".xml": [head[0], "<!-- The port's Mods screen, in the PC version's style "
-                                          "(tools/port_settings.py) -->", head[2]] + _mods() + ["</menus>", ""],
+                                          "(tools/port_settings.py) -->", head[2]] + _mods() + _mods_hub() + ["</menus>", ""],
         DAILY.replace("/", ".") + ".xml": [head[0], "<!-- The port's Daily Challenge screens, in the PC version's "
                                            "style (tools/port_settings.py) -->", head[2]] + _daily() +
         ["</menus>", ""],
@@ -5274,7 +6359,25 @@ def multiplayer_files() -> dict:
         # (and Content Extended's: Firefight's rules and Forge's menus)
         **content_extended_menus.files([head[0], "<!-- Content Extended's menus: Firefight's rules and Forge's "
                                         "(tools/content_extended_menus.py) -->", head[2]]),
+        CUSTOM_CAMPAIGN.replace("/", ".") + ".xml": [head[0], "<!-- What the port adds to a custom campaign's own "
+                                                     "menus (tools/port_settings.py) -->", head[2]] +
+        _custom_campaign() + ["</menus>", ""],
     }
+
+
+# ---------- custom campaigns (port/linux/game/custom_campaigns.c,
+# docs/custom_campaigns.md): a campaign with a ui.map of its own shows its own
+# main menu, to which menu_tags.c adds this key, BACK TO HALO (Y, and a tap on
+# it: its name begins y_butn, ui_widget.c's ui_mouse_key_button), and a Y
+# handler on the screen that runs "port custom campaign back"
+CUSTOM_CAMPAIGN = "custom_campaign"
+
+
+def _custom_campaign() -> list:
+    return _widget(f"{CUSTOM_CAMPAIGN}/y_butn_back_to_halo",
+                   [("type", "text"), ("controller", 1), ("width", 200), ("height", 24),
+                    ("text", "%y-button BACK TO HALO"), ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"),
+                    ("text_y", 2), ("text_flags", "no_focus_test")], [])
 
 
 REPLACED_FOLDERS = [f"{MT}/server_settings"]
@@ -5314,11 +6417,73 @@ MENU_ITEM_SPACES = {"MO": 3.17, "OD": 2.8, "DS": 2.3,
                     "SO": 2.6, "OL": 3.0, "LO": 0.4, "T V": 8.5, "VA": -3.5, "AR": 1.0, "RI": 3.2, "IA": 1.2,
                     "AN": 1.1, "NT": 1.7, "TS": 1.6, "SI": 3.3, "IN": 4.2, "GL": 3.3, "E P": 12.0, "YE": 0.5,
                     "ED": 3.3, "DI": 3.4, "IT": 2.0, "T M": 11.0, "MA": 1.2, "AP": 1.0, "PS": 2.0, "TA": 0.4,
-                    "AG": 1.0, "G I": 13.0, "NJ": 3.0, "JE": 3.8, "EC": 2.9, "CT": 1.5, "TO": 1.4}
-# letters no redraw has, drawn from theirs: V from A's strokes, J from L's
+                    "AG": 1.0, "G I": 13.0, "NJ": 3.0, "JE": 3.8, "EC": 2.9, "CT": 1.5, "TO": 1.4,
+                    # (MAPS & MODS': the spaces about the ampersand as
+                    # between words, set by eye)
+                    "S &": 9.0, "& M": 9.0}
+# letters no redraw has, drawn from theirs: V from A's strokes, J from L's, and
+# the ampersand of MAPS & MODS
 MENU_ITEM_LETTERS = {"V": "M0,0L4.67,0L11.44,16.6L18.21,0L22.88,0L14.11,21.5L8.77,21.5Z",
                      "J": "M10.24,0L14.92,0L14.92,14.24C14.92,18.25 11.67,21.5 7.66,21.5L0,21.5L0,17.66L6.79,17.66"
-                          "C8.69,17.66 10.24,16.12 10.24,14.22Z"}
+                          "C8.69,17.66 10.24,16.12 10.24,14.22Z",
+                     # (MAPS & MODS': an ampersand of the redraws' stroke,
+                     # 4.3 wide as M's stems, its ends cut square as theirs)
+                     "&": ("M4.88,9.17L4.81,9.10L4.76,9.05L4.55,8.83L4.49,8.76L4.29,8.54L4.21,8.44L4.04,8.22L3.93,8.06L3.79,7.85"
+                          "L3.69,7.68L3.59,7.48L3.54,7.36L3.44,7.16L3.40,7.04L3.32,6.82L3.28,6.70L3.21,6.48L3.18,6.35L3.13,6.14"
+                          "L3.10,5.99L3.06,5.78L3.04,5.63L3.03,5.42L3.02,5.25L3.01,5.04L3.02,4.87L3.03,4.66L3.05,4.48L3.08,4.27"
+                          "L3.12,4.08L3.17,3.88L3.22,3.71L3.29,3.50L3.35,3.35L3.44,3.14L3.50,3.01L3.60,2.80L3.67,2.68L3.79,2.47"
+                          "L3.86,2.36L3.99,2.16L4.07,2.04L4.22,1.86L4.32,1.74L4.47,1.56L4.59,1.44L4.75,1.29L4.90,1.16L5.06,1.02"
+                          "L5.28,0.87L5.46,0.76L5.69,0.64L5.89,0.54L6.08,0.47L6.29,0.39L6.44,0.34L6.67,0.28L6.79,0.25L7.02,0.20"
+                          "L7.11,0.19L7.35,0.15L7.41,0.14L7.64,0.10L7.68,0.10L7.91,0.07L7.92,0.07L8.14,0.04L8.33,0.02L8.53,-0.0"
+                          "1L8.57,-0.01L8.75,-0.03L8.81,-0.04L8.99,-0.05L9.05,-0.06L9.22,-0.07L9.29,-0.07L9.46,-0.07L9.54,-0.07"
+                          "L9.71,-0.07L9.79,-0.07L9.96,-0.06L10.04,-0.06L10.21,-0.04L10.29,-0.04L10.47,-0.01L10.54,-0.00L10.73,"
+                          "0.02L10.76,0.03L10.96,0.06L10.97,0.06L11.19,0.10L11.21,0.10L11.44,0.15L11.48,0.15L11.71,0.20L11.78,0"
+                          ".22L12.01,0.27L12.10,0.29L12.32,0.36L12.43,0.39L12.65,0.47L12.79,0.52L13.00,0.61L13.18,0.69L13.36,0."
+                          "79L13.58,0.93L13.75,1.04L13.96,1.22L14.11,1.35L14.26,1.51L14.40,1.66L14.52,1.81L14.64,1.98L14.74,2.1"
+                          "2L14.85,2.30L14.93,2.44L15.03,2.63L15.09,2.76L15.18,2.95L15.23,3.08L15.30,3.28L15.34,3.41L15.40,3.61"
+                          "L15.44,3.75L15.48,3.95L15.51,4.10L15.54,4.29L15.55,4.46L15.57,4.65L15.57,4.82L15.57,5.02L15.56,5.18L"
+                          "15.54,5.38L15.52,5.52L15.49,5.72L15.46,5.86L15.42,6.06L15.38,6.19L15.32,6.39L15.28,6.52L15.21,6.71L1"
+                          "5.15,6.84L15.07,7.02L15.01,7.15L14.92,7.33L14.84,7.46L14.74,7.63L14.68,7.72L14.57,7.88L14.51,7.96L14"
+                          ".41,8.09L14.31,8.21L14.21,8.32L14.10,8.44L13.98,8.55L13.87,8.66L13.74,8.77L13.65,8.84L13.49,8.96L13."
+                          "43,9.00L13.25,9.13L13.21,9.16L12.99,9.31L12.97,9.32L12.70,9.49L12.70,9.49L12.38,9.70L12.35,9.72L12.2"
+                          "6,9.78L15.38,12.32L15.86,11.80L16.51,11.12L16.51,11.11L17.04,10.54L17.05,10.53L17.45,10.11L20.56,13."
+                          "09L20.17,13.50L19.64,14.06L19.00,14.74L18.72,15.04L21.97,17.68L19.25,21.02L15.74,18.16L15.26,18.64L1"
+                          "5.23,18.67L14.62,19.27L14.57,19.32L14.06,19.78L13.99,19.85L13.60,20.18L13.50,20.25L13.18,20.49L13.04"
+                          ",20.59L12.78,20.75L12.57,20.87L12.35,20.98L12.07,21.09L11.88,21.15L11.57,21.23L11.40,21.25L11.18,21."
+                          "28L11.02,21.29L10.96,21.29L10.85,21.29L10.81,21.29L10.71,21.31L10.48,21.36L10.37,21.38L10.11,21.42L1"
+                          "0.02,21.43L9.75,21.46L9.68,21.46L9.41,21.48L9.35,21.48L9.08,21.50L9.03,21.50L8.76,21.50L8.73,21.50L8"
+                          ".45,21.50L8.43,21.50L8.15,21.50L8.15,21.50L7.87,21.50L7.61,21.50L7.36,21.50L7.08,21.51L6.79,21.51L6."
+                          "78,21.51L6.48,21.52L6.45,21.52L6.16,21.52L6.10,21.51L5.81,21.51L5.74,21.50L5.45,21.48L5.35,21.48L5.0"
+                          "8,21.45L4.95,21.43L4.69,21.38L4.53,21.35L4.28,21.28L4.13,21.24L3.89,21.16L3.79,21.12L3.55,21.03L3.45"
+                          ",20.99L3.22,20.88L3.11,20.83L2.89,20.72L2.78,20.66L2.57,20.53L2.46,20.46L2.26,20.32L2.15,20.24L1.96,"
+                          "20.09L1.85,20.00L1.67,19.84L1.55,19.73L1.39,19.56L1.28,19.43L1.13,19.25L1.02,19.10L0.90,18.91L0.81,1"
+                          "8.77L0.69,18.56L0.62,18.42L0.52,18.20L0.46,18.07L0.37,17.84L0.32,17.71L0.25,17.47L0.21,17.34L0.15,17"
+                          ".09L0.12,16.96L0.07,16.71L0.05,16.56L0.02,16.32L0.01,16.16L0.00,15.92L0.00,15.74L0.01,15.51L0.02,15."
+                          "34L0.05,15.11L0.08,14.96L0.12,14.73L0.15,14.58L0.22,14.35L0.26,14.21L0.34,13.98L0.39,13.85L0.48,13.6"
+                          "2L0.54,13.50L0.65,13.27L0.71,13.16L0.84,12.93L0.90,12.83L1.05,12.60L1.11,12.50L1.28,12.27L1.34,12.19"
+                          "L1.53,11.96L1.59,11.88L1.79,11.66L1.85,11.59L2.06,11.37L2.13,11.30L2.35,11.09L2.41,11.03L2.66,10.81L"
+                          "2.71,10.77L2.97,10.55L3.02,10.51L3.30,10.29L3.34,10.26L3.65,10.03L3.68,10.00L4.01,9.77L4.04,9.75L4.3"
+                          "9,9.50L4.41,9.49L4.80,9.22L4.84,9.20ZM8.73,6.88L8.75,6.87L9.26,6.57L9.69,6.31L10.05,6.09L10.35,5.89L"
+                          "10.60,5.73L10.80,5.60L10.93,5.50L11.01,5.45L11.04,5.42L11.04,5.42L11.04,5.42L11.07,5.39L11.11,5.32L1"
+                          "1.14,5.26L11.17,5.21L11.20,5.15L11.22,5.09L11.24,5.02L11.26,4.96L11.26,4.91L11.27,4.86L11.27,4.84L11"
+                          ".27,4.83L11.26,4.80L11.25,4.75L11.23,4.69L11.21,4.62L11.18,4.55L11.15,4.50L11.10,4.48L10.98,4.44L10."
+                          "82,4.41L10.65,4.37L10.46,4.34L10.26,4.30L10.07,4.27L9.93,4.25L9.82,4.24L9.72,4.23L9.62,4.23L9.53,4.2"
+                          "3L9.43,4.23L9.32,4.23L9.20,4.24L9.06,4.26L8.88,4.28L8.88,4.28L8.67,4.31L8.66,4.31L8.44,4.34L8.23,4.3"
+                          "6L8.04,4.39L7.88,4.42L7.74,4.45L7.65,4.47L7.63,4.48L7.63,4.48L7.58,4.53L7.53,4.61L7.47,4.69L7.42,4.7"
+                          "8L7.37,4.87L7.34,4.95L7.32,5.00L7.32,5.02L7.32,5.04L7.31,5.07L7.32,5.11L7.32,5.17L7.33,5.23L7.35,5.3"
+                          "1L7.37,5.40L7.41,5.48L7.45,5.57L7.48,5.63L7.50,5.67L7.57,5.75L7.69,5.89L7.84,6.05L8.02,6.23L8.22,6.4"
+                          "1L8.41,6.59L8.59,6.76L8.61,6.77ZM8.30,12.10L8.07,12.24L7.60,12.53L7.20,12.79L6.84,13.03L6.51,13.27L6"
+                          ".21,13.48L5.94,13.68L5.70,13.87L5.49,14.05L5.31,14.21L5.14,14.37L4.99,14.53L4.86,14.68L4.74,14.83L4."
+                          "64,14.97L4.55,15.10L4.48,15.23L4.43,15.34L4.38,15.44L4.35,15.54L4.33,15.63L4.31,15.71L4.30,15.78L4.3"
+                          "0,15.84L4.30,15.91L4.31,16.01L4.33,16.11L4.36,16.22L4.40,16.33L4.44,16.43L4.48,16.52L4.51,16.58L4.54"
+                          ",16.62L4.57,16.66L4.61,16.70L4.67,16.75L4.74,16.81L4.83,16.87L4.93,16.93L5.05,16.99L5.17,17.05L5.30,"
+                          "17.10L5.41,17.13L5.50,17.16L5.62,17.18L5.78,17.20L5.98,17.21L6.20,17.22L6.45,17.22L6.72,17.21L7.00,1"
+                          "7.21L7.00,17.21L7.29,17.20L7.31,17.20L7.59,17.20L7.62,17.20L7.89,17.20L7.90,17.20L8.17,17.20L8.44,17"
+                          ".20L8.69,17.20L8.92,17.20L9.14,17.19L9.34,17.17L9.53,17.16L9.69,17.13L9.89,17.09L9.93,17.08L10.16,17"
+                          ".04L10.36,17.02L10.55,17.00L10.66,16.99L10.68,16.99L10.88,16.85L11.19,16.58L11.63,16.18L12.21,15.61L"
+                          "12.39,15.43Z")}
+# (a letter's id in an item's SVG: & is no name's)
+MENU_ITEM_IDS = {"&": "amp"}
 # Firefight's and Forge's menus' rows, as Campaign's: each picture's name, its
 # words and its width (content_extended_menus.py centres them by it)
 MENU_ITEMS = [("main_menu/menu_solo", "SOLO", 256),
@@ -5362,15 +6527,16 @@ def menu_item_frames(text: str, redraws: Path, width: int = 256, disabled: bool 
         parse_path(letters[letter], pen)
         widths.append(pen.bounds[2])
     # (each pair's space; a pair a space parts is keyed with it, "Y C")
-    pairs = re.findall(r"(?=([A-Z] ?[A-Z]))", text)
+    pairs = re.findall(r"(?=([A-Z&] ?[A-Z&]))", text)
     spaces = [MENU_ITEM_SPACES[pair] for pair in pairs]
     middle = MENU_ITEM_MIDDLE + (width - 256) / 2
     x = middle - (sum(widths) + sum(spaces)) * MENU_ITEM_SCALE / 2
     uses = []
     for index, letter in enumerate(glyphs):
-        uses.append(f'<use href="#g{letter}" transform="translate({x:.2f},{MENU_ITEM_TOP}) scale({MENU_ITEM_SCALE})"/>')
+        uses.append(f'<use href="#g{MENU_ITEM_IDS.get(letter, letter)}" '
+                    f'transform="translate({x:.2f},{MENU_ITEM_TOP}) scale({MENU_ITEM_SCALE})"/>')
         x += (widths[index] + (spaces[index] if index < len(spaces) else 0)) * MENU_ITEM_SCALE
-    paths = [f'    <path id="g{letter}" d="{letters[letter]}"/>' for letter in sorted(set(glyphs))]
+    paths = [f'    <path id="g{MENU_ITEM_IDS.get(letter, letter)}" d="{letters[letter]}"/>' for letter in sorted(set(glyphs))]
     head = ['<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
             f'width="{width}" height="64" viewBox="0 0 {width} 64">', "  <defs>", *paths]
     if disabled:
@@ -5422,9 +6588,11 @@ def _mods() -> list:
     bar: IMPORT (a mod's .zip file, the app's file picker,
     HaloActivity.importMods) and DELETE (the mod chosen, at a second press)"""
     base = MODS
+    # (the main menu's MODS opens the hub, _mods_hub, whose OPENCE MODS is
+    # this screen)
     lines = _widget("main_menu/main_menu_item_mods",
                     [("type", "text"), ("width", 256), ("height", 33), ("bitmap", "main_menu/menu_mods")],
-                    [f'<on event="a" open="{base}/mods_screen"/>', f'<on event="start" open="{base}/mods_screen"/>',
+                    [f'<on event="a" open="{base}/hub_screen"/>', f'<on event="start" open="{base}/hub_screen"/>',
                      '<on event="left_mouse" run="mouse emit accept event"/>'])
     lines += _widget(f"{base}/mods_screen", [("width", 640), ("height", 480),
                                              ("flags", "pass_unhandled_to_focused_child pause_game"),
@@ -5467,29 +6635,29 @@ def _mods() -> list:
                           '<on event="left_mouse" run="mouse emit accept event"/>',
                           f'<child widget="{base}/mod_status" x="8" y="2"/>',
                           f'<child widget="{base}/mod_name" x="34"/>',
-                          f'<child widget="{base}/mod_state" x="318"/>'])
+                          f'<child widget="{base}/mod_state" x="276"/>'])
     lines += _widget(f"{base}/mod_status", [("controller", 1), ("width", 24), ("height", 24),
                                             ("bitmap", "mods/status")], [])
     lines += _widget(f"{base}/mod_name",
-                     [("type", "text"), ("controller", 1), ("width", 284), ("height", 22), ("font", "ui\\large_ui"),
-                      ("color", "#FF2896FF"), ("text_y", 4)], [])
+                     [("type", "text"), ("controller", 1), ("width", 240), ("height", 22), ("font", "ui\\large_ui"),
+                      ("color", "#FFC8E6FF"), ("text_y", 4)], [])
     lines += _widget(f"{base}/mod_state",
-                     [("type", "text"), ("controller", 1), ("width", 66), ("height", 22), ("font", "ui\\large_ui"),
-                      ("color", "#FF2896FF"), ("align", "center"), ("text_y", 4), ("text_flags", "no_focus_test")], [])
+                     [("type", "text"), ("controller", 1), ("width", 58), ("height", 22), ("font", "ui\\large_ui"),
+                      ("color", "#FF58B4FF"), ("align", "center"), ("text_y", 4), ("text_flags", "no_focus_test")], [])
     # (in the lobby's frame, sel_list_desc_bkd's: the mod chosen's name, the
     # icon of what is wrong with it, and the rest)
     lines += _widget(f"{base}/mod_details", [("width", 640), ("height", 480)],
                      [f'<child widget="{base}/mod_details_name"/>', f'<child widget="{base}/mod_details_status"/>',
                       f'<child widget="{base}/mod_details_text"/>'])
     lines += _widget(f"{base}/mod_details_name",
-                     [("type", "text"), ("controller", 1), ("left", DETAILS_LEFT), ("top", 84), ("width", DETAILS_WIDTH),
+                     [("type", "text"), ("controller", 1), ("left", DETAILS_LEFT), ("top", 80), ("width", DETAILS_WIDTH),
                       ("height", 44),
                       ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
-    lines += _widget(f"{base}/mod_details_status", [("controller", 1), ("left", DETAILS_LEFT), ("top", 132), ("width", 16),
+    lines += _widget(f"{base}/mod_details_status", [("controller", 1), ("left", DETAILS_LEFT), ("top", 128), ("width", 16),
                                                     ("height", 16), ("bitmap", "mods/status_small")], [])
     lines += _widget(f"{base}/mod_details_text",
-                     [("type", "text"), ("controller", 1), ("left", DETAILS_LEFT), ("top", 130), ("width", DETAILS_WIDTH),
-                      ("height", 272), ("font", "ui\\small_ui"), ("color", "#FF2896FF")], [])
+                     [("type", "text"), ("controller", 1), ("left", DETAILS_LEFT), ("top", 126), ("width", DETAILS_WIDTH),
+                      ("height", 272), ("font", "ui\\small_ui"), ("color", "#FF58B4FF")], [])
     lines += _widget(f"{base}/button_bar",
                      [("type", "column_list"), ("width", 640), ("height", 28),
                       ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],
@@ -5533,7 +6701,7 @@ def _mods() -> list:
 MAP_MANAGER_ROWS = MOD_ROWS
 # the picture: left, top, width and height (140x114's shape, at the frame's
 # foot)
-MAP_PICTURE_BOUNDS = (412, 239, 200, 163)
+MAP_PICTURE_BOUNDS = (395, 236, 224, 158)
 
 
 def _map_manager() -> list:
@@ -5561,13 +6729,13 @@ def _map_manager() -> list:
                          ['<on event="a" run="port maps choose"/>', '<on event="start" run="port maps choose"/>',
                           '<on event="left_mouse" run="mouse emit accept event"/>',
                           f'<child widget="{base}/map_name" x="12"/>',
-                          f'<child widget="{base}/map_state" x="250"/>'])
+                          f'<child widget="{base}/map_state" x="224"/>'])
     lines += _widget(f"{base}/map_name",
-                     [("type", "text"), ("controller", 1), ("width", 238), ("height", 22), ("font", "ui\\large_ui"),
-                      ("color", "#FF2896FF"), ("text_y", 4)], [])
+                     [("type", "text"), ("controller", 1), ("width", 210), ("height", 22), ("font", "ui\\large_ui"),
+                      ("color", "#FFC8E6FF"), ("text_y", 4)], [])
     lines += _widget(f"{base}/map_state",
-                     [("type", "text"), ("controller", 1), ("width", 134), ("height", 22), ("font", "ui\\small_ui"),
-                      ("color", "#FF2896FF"), ("align", "center"), ("text_y", 6), ("text_flags", "no_focus_test")],
+                     [("type", "text"), ("controller", 1), ("width", 110), ("height", 22), ("font", "ui\\small_ui"),
+                      ("color", "#FF58B4FF"), ("align", "center"), ("text_y", 6), ("text_flags", "no_focus_test")],
                      [])
     # (in the lobby's frame, sel_list_desc_bkd's: the row chosen's title, the
     # rest, and under them its map's picture)
@@ -5575,12 +6743,12 @@ def _map_manager() -> list:
                      [f'<child widget="{base}/map_details_name"/>', f'<child widget="{base}/map_details_text"/>',
                       f'<child widget="{base}/map_picture"/>'])
     lines += _widget(f"{base}/map_details_name",
-                     [("type", "text"), ("controller", 1), ("left", 412), ("top", 84), ("width", 200), ("height", 44),
+                     [("type", "text"), ("controller", 1), ("left", 398), ("top", 80), ("width", 216), ("height", 44),
                       ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
     left, top, width, height = MAP_PICTURE_BOUNDS
     lines += _widget(f"{base}/map_details_text",
-                     [("type", "text"), ("controller", 1), ("left", 412), ("top", 130), ("width", 200),
-                      ("height", top - 130), ("font", "ui\\small_ui"), ("color", "#FF2896FF")], [])
+                     [("type", "text"), ("controller", 1), ("left", 398), ("top", 126), ("width", 216),
+                      ("height", 104), ("font", "ui\\small_ui"), ("color", "#FF58B4FF")], [])
     lines += _widget(f"{base}/map_picture", [("controller", 1), ("left", left), ("top", top), ("width", width),
                                             ("height", height), ("bitmap", "blank")], [])
     lines += _widget(f"{base}/button_bar",
@@ -5595,6 +6763,278 @@ def _map_manager() -> list:
     # placeholder before them threw them off its middle)
     lines += _text_button(MAP_MANAGE_BUTTON, "MANAGE MAP", ['<on event="a" run="port map manage"/>',
                                                                  '<on event="start" run="port map manage"/>'])
+    return lines
+
+
+# ---------- the main menu's MODS (menu_functions.c's "port hub" functions):
+# a hub laid out as the Map Manager is, a row each with its name and state,
+# and on the right, in the lobby's frame, the row chosen's details: CE MAPS
+# (the Map Manager at its library, the whole of custom_maps: "port ce maps
+# init", map_manager.c), MCC MAPS (a hub of its own: REQUIRED FILES, IMPORT
+# MCC MAPS, IMPORT MCC SHARED FILES, STEAM WORKSHOP), OPEN CE MODS (_mods'
+# screen), and under them COMMUNITY CONTENT, greyed and no row (not yet). A
+# row's screen is opened by the code, as an open= handler would, so that its
+# B comes back to the row. CE MAPS and MCC MAPS have the desktop's OPEN
+# FOLDER at their top right, in their button bars (left and right from BACK)
+MODS_HUB = f"{MODS}/hub"
+MODS_MCC = f"{MODS}/mcc_maps"
+MODS_CE = f"{MODS}/ce_maps"
+# (each hub's rows: the code hides those it has no item for)
+MODS_HUB_ROWS = 3
+MODS_MCC_ROWS = 4
+# OPEN FOLDER's place: the screen's top right, beside its title, from its
+# button bar (at 414)
+MODS_FOLDER_BUTTON_PLACE = (470, 32 - 414)
+MODS_FOLDER_BUTTON_WIDTH = 150
+
+
+def _mods_folder_bar(base: str, back_run, folder_run: str) -> list:
+    """a screen's button bar: BACK (back_run, else back=), and the
+    desktop's OPEN FOLDER (folder_run) at the screen's top right"""
+    x, y = MODS_FOLDER_BUTTON_PLACE
+    lines = _widget(f"{base}/button_bar",
+                    [("type", "column_list"), ("width", 640), ("height", 28),
+                     ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],
+                    [*([f'<child widget="{base}/button_folder" x="{x}" y="{y}" platform="desktop"/>']
+                       if folder_run else []),
+                     f'<child widget="{base}/button_back" x="510" y="1"/>'])
+    back = ([f'<on event="a" run="{back_run}"/>', f'<on event="start" run="{back_run}"/>'] if back_run else
+            ['<on event="a" back="true"/>', '<on event="start" back="true"/>'])
+    lines += _text_button(f"{base}/button_back", "BACK", back)
+    if folder_run:
+        lines += _text_button(f"{base}/button_folder", "OPEN FOLDER",
+                              [f'<on event="a" run="{folder_run}"/>', f'<on event="start" run="{folder_run}"/>'],
+                              MODS_FOLDER_BUTTON_WIDTH)
+    return lines
+
+
+def _hub_header(name: str, text: str) -> list:
+    """a screen's title as the Steam Workshop's is: words of the large font"""
+    return _widget(name, [("type", "text"), ("controller", 1), ("left", 35), ("top", 11), ("width", 512),
+                          ("height", 59), ("text", text), ("font", "ui\\large_ui"), ("color", "#FFFFFFFF"),
+                          ("text_x", 13), ("text_y", 16)], [])
+
+
+def _hub_screen(base: str, screen: str, list_name: str, header: list, rows: int, folder_run: str = None) -> list:
+    """a hub's screen (screen, its widget's whole name): its rows (op_map_<n>,
+    as the Map Manager's), their details, and BACK"""
+    back = ['<on event="b" back="true"/>', '<on event="back" back="true"/>']
+    lines = _widget(screen, [("width", 640), ("height", 480),
+                             ("flags", "pass_unhandled_to_focused_child pause_game"), ("bitmap", "bitmaps/gradient")],
+                    [*back, '<child widget="main_menu/new_select/sel_list_desc_bkd"/>',
+                     f'<child widget="{base}/{list_name}"/>', *header])
+    lines += _widget(f"{base}/{list_name}", [("type", "column_list"), ("width", 640), ("height", 480),
+                                             ("flags", "pass_unhandled_to_focused_child up_down_tabs_children"),
+                                             ("description", f"{base}/details")],
+                     ['<data input="port hub update"/>', '<on event="created" run="port hub init"/>',
+                      '<on event="deleted" run="port hub close"/>',
+                      *[f'<child widget="{base}/op_map_{index + 1}" x="20" y="{73 + 30 * index}"/>'
+                        for index in range(rows)],
+                      f'<child widget="{base}/button_bar" y="414"/>'])
+    for index in range(rows):
+        lines += _widget(f"{base}/op_map_{index + 1}",
+                         [("width", 390), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
+                          ("bitmap", "bitmaps/sel_list_item_bkd_top" if index == 0 else "bitmaps/sel_list_item_bkd"),
+                          ("color", "#FF2896FF")],
+                         ['<on event="a" run="port hub choose"/>', '<on event="start" run="port hub choose"/>',
+                          '<on event="left_mouse" run="mouse emit accept event"/>',
+                          f'<child widget="{base}/map_name" x="12"/>',
+                          f'<child widget="{base}/map_state" x="252"/>'])
+    # (the name across the row, the state at its right end over it: the
+    # rows' long names have none)
+    lines += _widget(f"{base}/map_name",
+                     [("type", "text"), ("controller", 1), ("width", 336), ("height", 22), ("font", "ui\\large_ui"),
+                      ("color", "#FFC8E6FF"), ("text_y", 4)], [])
+    lines += _widget(f"{base}/map_state",
+                     [("type", "text"), ("controller", 1), ("width", 84), ("height", 22), ("font", "ui\\small_ui"),
+                      ("color", "#FF58B4FF"), ("align", "right"), ("text_y", 6), ("text_flags", "no_focus_test")],
+                     [])
+    lines += _widget(f"{base}/details", [("width", 640), ("height", 480)],
+                     [f'<child widget="{base}/map_details_name"/>', f'<child widget="{base}/map_details_text"/>'])
+    lines += _widget(f"{base}/map_details_name",
+                     [("type", "text"), ("controller", 1), ("left", 398), ("top", 80), ("width", 216), ("height", 44),
+                      ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
+    lines += _widget(f"{base}/map_details_text",
+                     [("type", "text"), ("controller", 1), ("left", 398), ("top", 126), ("width", 216),
+                      ("height", 272), ("font", "ui\\small_ui"), ("color", "#FF58B4FF")], [])
+    lines += _mods_folder_bar(base, None, folder_run)
+    return lines
+
+
+def _mods_hub() -> list:
+    # (the main menu's item opens it: _mods)
+    # (COMMUNITY CONTENT: words where a fourth row would be, greyed, no row
+    # to choose)
+    lines = _hub_screen(MODS_HUB, f"{MODS}/hub_screen", "hub_list",
+                        [f'<child widget="{MODS_HUB}/header_hub"/>', f'<child widget="{MODS_HUB}/community_content"/>'],
+                        MODS_HUB_ROWS)
+    # (its title as the main menu's item has it; OPEN CE MODS' screen keeps MODS')
+    lines += _hub_header(f"{MODS_HUB}/header_hub", "MAPS & MODS")
+    lines += _widget(f"{MODS_HUB}/community_content",
+                     [("type", "text"), ("controller", 1), ("left", 32), ("top", 73 + 30 * MODS_HUB_ROWS),
+                      ("width", 372), ("height", 22), ("text", "COMMUNITY CONTENT (COMING SOON)"),
+                      ("font", "ui\\large_ui"), ("color", "#FF4C5866"), ("text_y", 4),
+                      ("text_flags", "no_focus_test")], [])
+    lines += _hub_screen(MODS_MCC, f"{MODS_MCC}/mcc_maps_screen", "mcc_list",
+                         [f'<child widget="{MODS_MCC}/header_mcc"/>'], MODS_MCC_ROWS, "port mcc maps folder")
+    lines += _hub_header(f"{MODS_MCC}/header_mcc", "MASTER CHIEF COLLECTION MAPS")
+    # (CUSTOM EDITION MAPS: the Map Manager's rows and details, its list's
+    # opening the library's)
+    back = ['<on event="b" run="port maps back"/>', '<on event="back" run="port maps back"/>']
+    lines += _widget(f"{MODS_CE}/ce_maps_screen", [("width", 640), ("height", 480),
+                                                  ("flags", "pass_unhandled_to_focused_child pause_game"),
+                                                  ("bitmap", "bitmaps/gradient")],
+                     [*back, '<child widget="main_menu/new_select/sel_list_desc_bkd"/>',
+                      f'<child widget="{MODS_CE}/maps_list"/>', f'<child widget="{MODS_CE}/header_ce"/>'])
+    lines += _hub_header(f"{MODS_CE}/header_ce", "CUSTOM EDITION MAPS")
+    lines += _widget(f"{MODS_CE}/maps_list", [("type", "column_list"), ("width", 640), ("height", 480),
+                                              ("flags", "pass_unhandled_to_focused_child up_down_tabs_children"),
+                                              ("description", f"{MAPS}/map_details")],
+                     ['<data input="port maps update"/>', '<on event="created" run="port ce maps init"/>',
+                      '<on event="deleted" run="port maps close"/>',
+                      *[f'<child widget="{MAPS}/op_map_{index + 1}" x="20" y="{73 + 30 * index}"/>'
+                        for index in range(MAP_MANAGER_ROWS)],
+                      f'<child widget="{MODS_CE}/button_bar" y="414"/>'])
+    lines += _mods_folder_bar(MODS_CE, "port maps back", "port ce maps folder")
+    lines += _map_archive()
+    return lines
+
+
+# ---------- CE MAPS' BROWSE MAPS (port/linux/src/map_archive.c,
+# menu_functions.c's "port archive" functions): FractumSeraph's map archive,
+# laid out as the Steam Workshop is, with its text boxes' names: on the left
+# the rows (SEARCH, TYPE, SORT, SHOW, a page of 20 maps, PREVIOUS PAGE and
+# NEXT PAGE), scrolling over more; on the right the row chosen's details
+MAP_ARCHIVE = f"{MODS_CE}/browse"
+MAP_ARCHIVE_ROWS = 11
+# the chosen map's screenshot, under its details (archive_picture, the code's:
+# ui_widget.c), 4:3 as the archive's screenshots are (map_archive.c fits each
+# into its square texture so), its bottom inside the details' frame (406)
+MAP_ARCHIVE_PICTURE_BOUNDS = (426, 276, 160, 120)
+
+
+def _map_archive() -> list:
+    base = MAP_ARCHIVE
+    back = ['<on event="b" run="port archive back"/>', '<on event="back" run="port archive back"/>']
+    lines = _widget(f"{MODS_CE}/browse_screen", [("width", 640), ("height", 480),
+                                                ("flags", "pass_unhandled_to_focused_child pause_game"),
+                                                ("bitmap", "bitmaps/gradient")],
+                    [*back, '<child widget="main_menu/new_select/sel_list_desc_bkd"/>',
+                     f'<child widget="{base}/archive_list"/>', f'<child widget="{base}/header_archive"/>'])
+    lines += _hub_header(f"{base}/header_archive", "BROWSE MAPS")
+    rows = [f'<child widget="{base}/op_map_{index + 1}" x="20" y="{73 + 30 * index}"/>'
+            for index in range(MAP_ARCHIVE_ROWS)]
+    lines += _widget(f"{base}/archive_list", [("type", "column_list"), ("width", 640), ("height", 480),
+                                              ("flags", "pass_unhandled_to_focused_child up_down_tabs_children"),
+                                              ("description", f"{base}/archive_details")],
+                     ['<data input="port archive update"/>', '<on event="created" run="port archive init"/>',
+                      '<on event="deleted" run="port archive close"/>', *rows,
+                      f'<child widget="{base}/button_bar" y="414"/>'])
+    for index in range(MAP_ARCHIVE_ROWS):
+        lines += _widget(f"{base}/op_map_{index + 1}",
+                         [("width", 390), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
+                          ("bitmap", "bitmaps/sel_list_item_bkd_top" if index == 0 else "bitmaps/sel_list_item_bkd"),
+                          ("color", "#FF2896FF")],
+                         ['<on event="a" run="port archive choose"/>', '<on event="start" run="port archive choose"/>',
+                          '<on event="left_mouse" run="mouse emit accept event"/>',
+                          f'<child widget="{base}/map_name" x="12"/>',
+                          f'<child widget="{base}/map_state" x="224"/>'])
+    # (the state's right end at 368, short of the details' frame at 381)
+    lines += _widget(f"{base}/map_name",
+                     [("type", "text"), ("controller", 1), ("width", 208), ("height", 22), ("font", "ui\\large_ui"),
+                      ("color", "#FFC8E6FF"), ("text_y", 4)], [])
+    lines += _widget(f"{base}/map_state",
+                     [("type", "text"), ("controller", 1), ("width", 110), ("height", 22), ("font", "ui\\small_ui"),
+                      ("color", "#FF58B4FF"), ("align", "right"), ("text_y", 6), ("text_flags", "no_focus_test")],
+                     [])
+    lines += _widget(f"{base}/archive_details", [("width", 640), ("height", 480)],
+                     [f'<child widget="{base}/map_details_name"/>', f'<child widget="{base}/map_details_text"/>',
+                      f'<child widget="{base}/archive_picture"/>'])
+    lines += _widget(f"{base}/map_details_name",
+                     [("type", "text"), ("controller", 1), ("left", 398), ("top", 80), ("width", 216), ("height", 44),
+                      ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
+    left, top, width, height = MAP_ARCHIVE_PICTURE_BOUNDS
+    lines += _widget(f"{base}/map_details_text",
+                     [("type", "text"), ("controller", 1), ("left", 398), ("top", 126), ("width", 216),
+                      ("height", top - 4 - 126), ("font", "ui\\small_ui"), ("color", "#FF58B4FF")], [])
+    lines += _widget(f"{base}/archive_picture", [("controller", 1), ("left", left), ("top", top), ("width", width),
+                                                ("height", height), ("bitmap", "blank")], [])
+    lines += _widget(f"{base}/button_bar",
+                     [("type", "column_list"), ("width", 640), ("height", 28),
+                      ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],
+                     [f'<child widget="{base}/button_back" x="510" y="1"/>'])
+    lines += _text_button(f"{base}/button_back", "BACK", ['<on event="a" run="port archive back"/>',
+                                                         '<on event="start" run="port archive back"/>'])
+    return lines
+
+
+# ---------- the Steam Workshop (port/linux/src/steam_downloads.c; Mods >
+# MASTER CHIEF COLLECTION MAPS > STEAM WORKSHOP, _mods_hub; the widgets keep
+# their Network Setup names, which mcc_share.c opens): laid out as the Map Manager is, with its
+# text boxes' names (menu_functions.c measures and fills them alike): on the
+# left the rows (the account, MCC's shared files, the sort, a page of the
+# Halo 1 Workshop's items, the pages), a row each with its name and state;
+# on the right, in the lobby's frame, the row chosen's details and, while
+# signing in, the QR code to scan (steam_picture, the code's: ui_widget.c)
+STEAM_WORKSHOP = f"{PE}/network_setup/steam_workshop"
+STEAM_ROWS = 11
+# (a fifth smaller than the frame would hold: 160 overflowed it)
+STEAM_PICTURE_BOUNDS = (442, 260, 128, 128)
+
+
+def _steam_workshop() -> list:
+    base = STEAM_WORKSHOP
+    back = ['<on event="b" run="port steam back"/>', '<on event="back" run="port steam back"/>']
+    lines = _widget(f"{base}/steam_workshop_screen", [("width", 640), ("height", 480),
+                                                       ("flags", "pass_unhandled_to_focused_child"),
+                                                       ("bitmap", "bitmaps/gradient")],
+                    [*back, '<child widget="main_menu/new_select/sel_list_desc_bkd"/>',
+                     f'<child widget="{base}/steam_list"/>', f'<child widget="{base}/header_steam"/>'])
+    lines += _widget(f"{base}/header_steam",
+                     [("type", "text"), ("controller", 1), ("left", 35), ("top", 11), ("width", 512), ("height", 59),
+                      ("text", "STEAM WORKSHOP"), ("font", "ui\\large_ui"), ("color", "#FFFFFFFF"), ("text_x", 13),
+                      ("text_y", 16)], [])
+    rows = [f'<child widget="{base}/op_map_{index + 1}" x="20" y="{73 + 30 * index}"/>' for index in range(STEAM_ROWS)]
+    lines += _widget(f"{base}/steam_list", [("type", "column_list"), ("width", 640), ("height", 480),
+                                            ("flags", "pass_unhandled_to_focused_child up_down_tabs_children"),
+                                            ("description", f"{base}/steam_details")],
+                     ['<data input="port steam update"/>', '<on event="created" run="port steam init"/>',
+                      '<on event="deleted" run="port steam close"/>', *rows,
+                      f'<child widget="{base}/button_bar" y="414"/>'])
+    for index in range(STEAM_ROWS):
+        lines += _widget(f"{base}/op_map_{index + 1}",
+                         [("width", 390), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
+                          ("bitmap", "bitmaps/sel_list_item_bkd_top" if index == 0 else "bitmaps/sel_list_item_bkd"),
+                          ("color", "#FF2896FF")],
+                         ['<on event="a" run="port steam choose"/>', '<on event="start" run="port steam choose"/>',
+                          '<on event="left_mouse" run="mouse emit accept event"/>',
+                          f'<child widget="{base}/map_name" x="12"/>',
+                          f'<child widget="{base}/map_state" x="224"/>'])
+    lines += _widget(f"{base}/map_name",
+                     [("type", "text"), ("controller", 1), ("width", 210), ("height", 22), ("font", "ui\\large_ui"),
+                      ("color", "#FFC8E6FF"), ("text_y", 4)], [])
+    lines += _widget(f"{base}/map_state",
+                     [("type", "text"), ("controller", 1), ("width", 110), ("height", 22), ("font", "ui\\small_ui"),
+                      ("color", "#FF58B4FF"), ("align", "center"), ("text_y", 6), ("text_flags", "no_focus_test")],
+                     [])
+    lines += _widget(f"{base}/steam_details", [("width", 640), ("height", 480)],
+                     [f'<child widget="{base}/map_details_name"/>', f'<child widget="{base}/map_details_text"/>',
+                      f'<child widget="{base}/steam_picture"/>'])
+    lines += _widget(f"{base}/map_details_name",
+                     [("type", "text"), ("controller", 1), ("left", 398), ("top", 80), ("width", 216), ("height", 44),
+                      ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
+    left, top, width, height = STEAM_PICTURE_BOUNDS
+    lines += _widget(f"{base}/map_details_text",
+                     [("type", "text"), ("controller", 1), ("left", 398), ("top", 126), ("width", 216),
+                      ("height", top - 126), ("font", "ui\\small_ui"), ("color", "#FF58B4FF")], [])
+    lines += _widget(f"{base}/steam_picture", [("controller", 1), ("left", left), ("top", top), ("width", width),
+                                              ("height", height), ("bitmap", "blank")], [])
+    lines += _widget(f"{base}/button_bar",
+                     [("type", "column_list"), ("width", 640), ("height", 28),
+                      ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],
+                     [f'<child widget="{base}/button_back" x="510" y="1"/>'])
+    lines += _text_button(f"{base}/button_back", "BACK", ['<on event="a" run="port steam back"/>',
+                                                         '<on event="start" run="port steam back"/>'])
     return lines
 
 
@@ -5660,13 +7100,13 @@ def _theater() -> list:
                          ['<on event="a" run="port theater watch"/>', '<on event="start" run="port theater watch"/>',
                           '<on event="left_mouse" run="mouse emit accept event"/>',
                           f'<child widget="{base}/theater_replay_name" x="12"/>',
-                          f'<child widget="{base}/theater_replay_length" x="290"/>'])
+                          f'<child widget="{base}/theater_replay_length" x="252"/>'])
     lines += _widget(f"{base}/theater_replay_name",
-                     [("type", "text"), ("controller", 1), ("width", 276), ("height", 22), ("font", "ui\\large_ui"),
-                      ("color", "#FF2896FF"), ("text_y", 4)], [])
+                     [("type", "text"), ("controller", 1), ("width", 236), ("height", 22), ("font", "ui\\large_ui"),
+                      ("color", "#FFC8E6FF"), ("text_y", 4)], [])
     lines += _widget(f"{base}/theater_replay_length",
-                     [("type", "text"), ("controller", 1), ("width", 90), ("height", 22), ("font", "ui\\large_ui"),
-                      ("color", "#FF2896FF"), ("align", "right"), ("text_y", 4), ("text_flags", "no_focus_test")], [])
+                     [("type", "text"), ("controller", 1), ("width", 80), ("height", 22), ("font", "ui\\large_ui"),
+                      ("color", "#FF58B4FF"), ("align", "right"), ("text_y", 4), ("text_flags", "no_focus_test")], [])
     # (the Switch's and the PS5's: the replay page's QR code, drawn over this
     # line by menu_functions.c, network_replay_page.c)
     lines += _widget(f"{base}/theater_qr_text",
@@ -5677,8 +7117,8 @@ def _theater() -> list:
     lines += _widget(f"{base}/theater_details", [("width", 640), ("height", 480)],
                      [f'<child widget="{base}/theater_details_text"/>'])
     lines += _widget(f"{base}/theater_details_text",
-                     [("type", "text"), ("controller", 1), ("left", 412), ("top", 84), ("width", 200),
-                      ("height", 318), ("font", "ui\\small_ui"), ("color", "#FF2896FF")], [])
+                     [("type", "text"), ("controller", 1), ("left", 398), ("top", 80), ("width", 216),
+                      ("height", 318), ("font", "ui\\small_ui"), ("color", "#FF58B4FF")], [])
     lines += _widget(f"{base}/button_bar",
                      [("type", "column_list"), ("width", 640), ("height", 28),
                       ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],
@@ -5699,8 +7139,10 @@ def _theater() -> list:
                      ['<on event="a" run="port theater record"/>', '<on event="start" run="port theater record"/>',
                       '<on event="left_mouse" run="mouse emit accept event"/>'])
     lines += _strings(f"{base}/record_strings", ["RECORD: OFF", "RECORD: ON"])
+    # (DELETE alone, as the map lists': the west button's picture beside it
+    # does not fit the button; theater_delete_hint, the consoles', has room)
     lines += _text_button(f"{base}/button_delete", "DELETE", ['<on event="a" run="port theater delete"/>',
-                                                                      '<on event="start" run="port theater delete"/>'])
+                                                             '<on event="start" run="port theater delete"/>'])
     # (its words a string list's, as button_record's: "port theater update"
     # chooses OFF or ON)
     lines += _widget(f"{base}/theater_record_hint", [("type", "text"), ("controller", 1), ("width", 150),
@@ -5754,8 +7196,8 @@ def _play() -> list:
                      '<on event="left_mouse" run="mouse emit accept event"/>'])
     # (its items' places, FIREFIGHT's in the list: Content Extended's, which
     # chooses its gametypes before Multiplayer's screen)
-    places = [("main_menu/main_menu_item_load_camp", 194), ("main_menu/main_menu_item_multiplayer", 192),
-              (FIREFIGHT_ITEM, 192), (DAILY_ITEM, 160), ("main_menu/campaign_select/menu_item_back", 192)]
+    places = [("main_menu/main_menu_item_load_camp", 192), ("main_menu/main_menu_item_multiplayer", 192),
+              (FIREFIGHT_ITEM, 192), (DAILY_ITEM, 192), ("main_menu/campaign_select/menu_item_back", 192)]
     top = {name: MAIN_MENU_ITEM_TOP + 32 + MAIN_MENU_ITEM_SPACING * index for index, (name, _) in enumerate(places)}
     lines += _widget(f"{base}/play_screen", [("width", 640), ("height", 480),
                                              ("flags", "pass_unhandled_to_focused_child")],
@@ -5807,25 +7249,25 @@ def _social() -> list:
                          ['<on event="a" run="port social choose"/>', '<on event="start" run="port social choose"/>',
                           '<on event="left_mouse" run="mouse emit accept event"/>',
                           f'<child widget="{base}/social_name" x="12"/>',
-                          f'<child widget="{base}/social_state" x="250"/>'])
+                          f'<child widget="{base}/social_state" x="224"/>'])
     lines += _widget(f"{base}/social_name",
-                     [("type", "text"), ("controller", 1), ("width", 238), ("height", 22), ("font", "ui\\large_ui"),
-                      ("color", "#FF2896FF"), ("text_y", 4)], [])
+                     [("type", "text"), ("controller", 1), ("width", 210), ("height", 22), ("font", "ui\\large_ui"),
+                      ("color", "#FFC8E6FF"), ("text_y", 4)], [])
     lines += _widget(f"{base}/social_state",
-                     [("type", "text"), ("controller", 1), ("width", 134), ("height", 22), ("font", "ui\\small_ui"),
-                      ("color", "#FF2896FF"), ("align", "center"), ("text_y", 6), ("text_flags", "no_focus_test")],
+                     [("type", "text"), ("controller", 1), ("width", 110), ("height", 22), ("font", "ui\\small_ui"),
+                      ("color", "#FF58B4FF"), ("align", "center"), ("text_y", 6), ("text_flags", "no_focus_test")],
                      [])
     # (in the lobby's frame, sel_list_desc_bkd's: the row chosen's title and
     # the rest)
     lines += _widget(f"{base}/social_details", [("width", 640), ("height", 480)],
                      [f'<child widget="{base}/social_details_name"/>', f'<child widget="{base}/social_details_text"/>'])
     lines += _widget(f"{base}/social_details_name",
-                     [("type", "text"), ("controller", 1), ("left", DETAILS_LEFT), ("top", 84), ("width", DETAILS_WIDTH),
+                     [("type", "text"), ("controller", 1), ("left", DETAILS_LEFT), ("top", 80), ("width", DETAILS_WIDTH),
                       ("height", 44),
                       ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
     lines += _widget(f"{base}/social_details_text",
-                     [("type", "text"), ("controller", 1), ("left", DETAILS_LEFT), ("top", 130), ("width", DETAILS_WIDTH),
-                      ("height", 272), ("font", "ui\\small_ui"), ("color", "#FF2896FF")], [])
+                     [("type", "text"), ("controller", 1), ("left", DETAILS_LEFT), ("top", 126), ("width", DETAILS_WIDTH),
+                      ("height", 272), ("font", "ui\\small_ui"), ("color", "#FF58B4FF")], [])
     lines += _widget(f"{base}/button_bar",
                      [("type", "column_list"), ("width", 640), ("height", 28),
                       ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],
@@ -5856,3 +7298,163 @@ def _social() -> list:
                                             ("text", "%y-button SOCIAL"), ("font", "ui\\small_ui"),
                                             ("color", "#FFCCCCCC"), ("text_flags", "no_focus_test")], [])
     return lines
+
+
+# the MCC host download prompt (mcc_share.c; menu_functions.c's "port mcc
+# share update" packs the shown actions from MCC_DOWNLOAD_ROW_TOP down,
+# MCC_DOWNLOAD_ROW_PITCH apart): the header, the stock panel (controller_border,
+# its frame 520 by 251 at 50, 106 in the picture) with the map's name and
+# what downloading means, the actions in it, and CANCEL under its corner
+MCC_DOWNLOAD_PANEL = (10, -30)
+MCC_DOWNLOAD_ROW_TOP = 202
+MCC_DOWNLOAD_ROW_PITCH = 28
+
+
+def _mcc_download() -> list:
+    """MCC-owned nonblocking consent screen: network updates continue behind it.
+    The list's children keep their order (menu_functions.c focuses them by
+    it): the panel, DOWNLOAD FROM HOST, DOWNLOAD WITH STEAM, OPEN IN STEAM,
+    OPEN IN BROWSER, CANCEL, the header"""
+    base = f"{PE}/network_setup/mcc_download"
+    actions = [("download", "DOWNLOAD FROM HOST", "download"), ("steam", "DOWNLOAD WITH STEAM", "steam"),
+               ("workshop", "OPEN IN STEAM", "workshop"), ("browser", "OPEN IN BROWSER", "browser")]
+    panel_x, panel_y = MCC_DOWNLOAD_PANEL
+    lines = _widget(f"{base}/screen", [("type", "column_list"), ("width", 640), ("height", 480),
+                    ("bitmap", "bitmaps/gradient"),
+                    ("flags", "pass_unhandled_to_focused_child up_down_tabs_children")],
+                    ['<on event="b" run="port mcc share cancel"/>',
+                     '<on event="back" run="port mcc share cancel"/>',
+                     '<on event="deleted" run="port mcc share closed"/>',
+                     '<data input="port mcc share update"/>',
+                     f'<child widget="{base}/panel" x="{panel_x}" y="{panel_y}"/>',
+                     *[f'<child widget="{base}/{name}" x="64" y="{MCC_DOWNLOAD_ROW_TOP + MCC_DOWNLOAD_ROW_PITCH * index}"/>'
+                       for index, (name, _, _) in enumerate(actions)],
+                     f'<child widget="{base}/cancel" x="452" y="338"/>',
+                     f'<child widget="{base}/title"/>'])
+    lines += _widget(f"{base}/title", [("type", "text"), ("controller", 1), ("left", 35), ("top", 11),
+                     ("width", 400), ("height", 59), ("text", "MCC MAP DOWNLOAD"), ("font", "ui\\large_ui"),
+                     ("color", "#FFFFFFFF"), ("text_x", 13), ("text_y", 16)], [])
+    # (the frame's inside, from 66 and 118 of the picture: 16 in from its edges)
+    # (as big as the news's panel, which draws the same picture)
+    lines += _widget(f"{base}/panel", [("width", 640), ("height", 480), ("bitmap", "bitmaps/controller_border")],
+                     [f'<child widget="{base}/map_title" x="66" y="116"/>',
+                      f'<child widget="{base}/description" x="66" y="146"/>'])
+    lines += _widget(f"{base}/map_title", [("type", "text"), ("controller", 1), ("width", 488), ("height", 28),
+                     ("font", "ui\\large_ui"), ("color", "#FFFFFFFF"), ("text_flags", "no_focus_test")],
+                     ['<data input="port mcc share title"/>'])
+    lines += _widget(f"{base}/description", [("type", "text"), ("controller", 1),
+                     ("width", 488), ("height", 84), ("font", "ui\\small_ui"),
+                     ("color", "#FFD2E1F0"), ("text_flags", "no_focus_test")],
+                     ['<data input="port mcc share text"/>'])
+    for name, text, action in actions:
+        # (the settings' rows' pill, as wide as the panel's inside: the
+        # longest action is wider than the Settings list's highlight)
+        lines += _widget(f"{base}/{name}", [("type", "text"), ("width", 512), ("height", 28),
+                         ("bitmap", "bitmaps/option_bkds"), ("text", text), ("font", "ui\\large_ui"),
+                         ("color", "#FF2896FF"), ("align", "center"), ("text_y", 4)],
+                         [f'<on event="a" run="port mcc share {action}"/>',
+                          f'<on event="start" run="port mcc share {action}"/>',
+                          '<on event="left_mouse" run="mouse emit accept event"/>'])
+    lines += _widget(f"{base}/cancel", [("type", "text"), ("width", 128), ("height", 24),
+                     ("bitmap", "bitmaps/text_button_background"), ("text", "CANCEL"), ("font", "ui\\small_ui"),
+                     ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
+                     ['<on event="a" run="port mcc share cancel"/>',
+                      '<on event="start" run="port mcc share cancel"/>',
+                      '<on event="left_mouse" run="mouse emit accept event"/>'])
+    return lines
+
+
+def _mcc_import() -> list:
+    """the map lists' IMPORT's own screen (port/android/host/host_mcc_import.c), opened when a package being imported is on
+    disk already: REPLACE it, or KEEP VERSION ON DISK (B too); it stays up while the packages install, and then
+    says what was imported, with OK"""
+    base = f"{PE}/network_setup/mcc_import"
+    lines = _widget(f"{base}/screen", [("type", "column_list"), ("width", 640), ("height", 480),
+                    ("bitmap", "bitmaps/gradient"),
+                    ("flags", "pass_unhandled_to_focused_child up_down_tabs_children")],
+                    ['<on event="b" run="port mcc import keep"/>',
+                     '<on event="back" run="port mcc import keep"/>',
+                     '<on event="deleted" run="port mcc import closed"/>',
+                     '<data input="port mcc import update"/>',
+                     f'<child widget="{base}/description" x="40" y="80"/>',
+                     f'<child widget="{base}/replace" x="150" y="340"/>',
+                     f'<child widget="{base}/keep" x="150" y="380"/>',
+                     f'<child widget="{base}/title" x="40" y="24"/>'])
+    lines += _widget(f"{base}/title", [("type", "text"), ("width", 560), ("height", 40),
+                     ("text", "IMPORT"), ("font", "ui\\large_ui"), ("color", "#FF2896FF")], [])
+    lines += _widget(f"{base}/description", [("type", "text"), ("controller", 1),
+                     ("width", 560), ("height", 240), ("font", "ui\\small_ui"),
+                     ("color", "#FFFFFFFF")], ['<data input="port mcc import text"/>'])
+    # (their labels are the screen's to set: KEEP VERSION ON DISK becomes OK once it is done)
+    for name, action in [("replace", "replace"), ("keep", "keep")]:
+        lines += _widget(f"{base}/{name}", [("type", "text"), ("width", 340), ("height", 32),
+                         ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("align", "center")],
+                         [f'<on event="a" run="port mcc import {action}"/>',
+                          f'<on event="start" run="port mcc import {action}"/>',
+                          '<on event="left_mouse" run="mouse emit accept event"/>'])
+    return lines
+
+
+def _map_import_page() -> list:
+    """the consoles' IMPORT (map_import_page.c): the upload page's address and QR code, what to upload there, and how
+    the import is going; B closes it"""
+    base = f"{PE}/network_setup/map_import_page"
+    lines = _widget(f"{base}/screen", [("type", "column_list"), ("width", 640), ("height", 480),
+                    ("bitmap", "bitmaps/gradient"),
+                    ("flags", "pass_unhandled_to_focused_child up_down_tabs_children")],
+                    ['<on event="b" back="true"/>', '<on event="back" back="true"/>',
+                     '<on event="deleted" run="port map import page closed"/>',
+                     '<data input="port map import page update"/>',
+                     f'<child widget="{base}/back" x="195" y="430"/>',
+                     f'<child widget="{base}/description" x="40" y="70"/>',
+                     f'<child widget="{base}/map_import_qr_text"/>',
+                     f'<child widget="{base}/title" x="40" y="24"/>'])
+    lines += _widget(f"{base}/title", [("type", "text"), ("width", 560), ("height", 40),
+                     ("text", "IMPORT MAPS"), ("font", "ui\\large_ui"), ("color", "#FF2896FF")], [])
+    lines += _widget(f"{base}/description", [("type", "text"), ("controller", 1),
+                     ("width", 560), ("height", 170), ("font", "ui\\small_ui"),
+                     ("color", "#FFFFFFFF"), ("text_flags", "no_focus_test")],
+                     ['<data input="port map import page text"/>'])
+    # (its QR code drawn above it, from y 252 to 378: menu_functions_text_box_drawn)
+    lines += _widget(f"{base}/map_import_qr_text",
+                     [("type", "text"), ("controller", 1), ("left", 125), ("top", 392), ("width", 390), ("height", 18),
+                      ("text", "Scan it to upload maps."), ("font", "ui\\small_ui"),
+                      ("color", "#FFFFFFFF"), ("align", "center"), ("text_flags", "no_focus_test")], [])
+    lines += _widget(f"{base}/back", [("type", "text"), ("width", 250), ("height", 32), ("text", "BACK"),
+                     ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("align", "center")],
+                     ['<on event="a" back="true"/>', '<on event="start" back="true"/>',
+                      '<on event="left_mouse" run="mouse emit accept event"/>'])
+    return lines
+
+
+def _mcc_downloads() -> list:
+    base = f"{PE}/network_setup/mcc_downloads"
+    lines = _widget(f"{base}/screen", [("type", "column_list"), ("width", 640), ("height", 480),
+                    ("bitmap", "bitmaps/gradient"),
+                    ("flags", "pass_unhandled_to_focused_child up_down_tabs_children")],
+                    ['<on event="created" run="port mcc downloads open"/>',
+                     '<on event="b" back="true"/>', '<on event="back" back="true"/>',
+                     '<data input="port mcc downloads update"/>',
+                     f'<child widget="{base}/description" x="40" y="80"/>',
+                     f'<child widget="{base}/previous" x="40" y="300"/>',
+                     f'<child widget="{base}/next" x="340" y="300"/>',
+                     f'<child widget="{base}/remove" x="195" y="340"/>',
+                     f'<child widget="{base}/back" x="195" y="390"/>',
+                     f'<child widget="{base}/title" x="40" y="24"/>'])
+    lines += _widget(f"{base}/title", [("type", "text"), ("width", 560), ("height", 40),
+                     ("text", "MCC DOWNLOADS"), ("font", "ui\\large_ui"), ("color", "#FF2896FF")], [])
+    lines += _widget(f"{base}/description", [("type", "text"), ("controller", 1),
+                     ("width", 560), ("height", 210), ("font", "ui\\small_ui"),
+                     ("color", "#FFFFFFFF")], ['<data input="port mcc downloads text"/>'])
+    for name, text in [("previous", "PREVIOUS"), ("next", "NEXT"), ("remove", "REMOVE SELECTED"), ("back", "BACK")]:
+        action = 'back="true"' if name == "back" else f'run="port mcc downloads {name}"'
+        # The parent supplies the removal/confirmation label. Static text would
+        # replace and shrink its owned buffer again in the renderer.
+        label = [] if name == "remove" else [("text", text)]
+        lines += _widget(f"{base}/{name}", [("type", "text"), ("width", 250), ("height", 32),
+                         *label, ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("align", "center")],
+                         [f'<on event="a" {action}/>', f'<on event="start" {action}/>',
+                          '<on event="left_mouse" run="mouse emit accept event"/>'])
+    return lines
+
+

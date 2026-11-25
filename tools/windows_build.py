@@ -22,7 +22,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .linux_build import (GAME_DATA_FILES, LINUX_PROFILE, MINIUPNPC_DIR, OPTIMISATION, STB_VORBIS_SOURCE, WINDOWS_PROFILE, XDK_INCLUDE,
+from .linux_build import (GAME_DATA_FILES, GL_DYNAMIC_LIGHTING_DEFINE, LINUX_PROFILE, MINIUPNPC_DIR, OPTIMISATION, STB_VORBIS_SOURCE, WINDOWS_PROFILE, XDK_INCLUDE,
                           build_repository,
                           lto_mode, march_flag, miniupnpc_sources, pgo_mode, compile_launcher, configuration_defines,
                           game_defines_and_includes, game_sources, musl_math_cflags, musl_math_sources, opus_cflags,
@@ -394,6 +394,10 @@ def generate_windows_build(n: Writer, sln: Any) -> None:
         # (on macOS Homebrew's lld-link, not the PATH's: tools/macos_toolchain.py)
         *([f"--ld-path={_quote(lld_link())}"] if lld_link() else []),
         "-g",
+        # Reserve the MCC tag window before SDL's ASLR placement. Keep the
+        # shipped DLL unchanged; the first SDL call loads it after reservation.
+        "-Wl,/DELAYLOAD:SDL3.dll",
+        "-ldelayimp",
         # the Xbox memory window is at 0x80000000, in the upper half of the
         # 32-bit address space
         "-Wl,/LARGEADDRESSAWARE",
@@ -479,6 +483,8 @@ def generate_windows_build(n: Writer, sln: Any) -> None:
         # headers the Windows C runtime lacks (pthread.h, sched.h), searched
         # after its own so that none of its headers is shadowed
         port_game_cflags = f"{game_cflags} -idirafter {posix_include}"
+        # (the dynamic lighting's modules among them, as on Linux:
+        # GL_DYNAMIC_LIGHTING_DEFINE)
         for source in sorted([*Path(linux_config["game_sources"]).glob("*.c"), *Path(linux_config["game_sources"]).glob("mendicant/*.c")]):
             flags = port_game_cflags
             if has_forge and source.name == "menu_functions.c":
@@ -510,6 +516,7 @@ def generate_windows_build(n: Writer, sln: Any) -> None:
             "-Isource -Isource/cseries",
             f"-I{_quote(sdl_include)}",
             f"-I{XDK_INCLUDE}",
+            GL_DYNAMIC_LIGHTING_DEFINE,
         ])
         win32_cflags = " ".join([
             abi,
@@ -523,7 +530,9 @@ def generate_windows_build(n: Writer, sln: Any) -> None:
         for source in sorted(linux_platform.glob("*.c")):
             if source.name in replaced:
                 continue
-            if source.name == "posix_dtls.c":
+            if source.name in ("posix_mcc_preview.c", "posix_mcc_share.c"):
+                add_object(source, win32_cflags)
+            elif source.name == "posix_dtls.c":
                 # (Mbed TLS sees the Windows SDK, as the win32_*.c do)
                 add_object(source, f"{win32_cflags} {mbedtls_include}")
             elif source.name in ("updater.c", "server_mode.c"):

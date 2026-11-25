@@ -331,6 +331,10 @@ struct custom_edition_conversion_report
 	none, and 1 when the multiplayer pause menu was made the Xbox's resume
 	and quit */
 	int32_t widget_functions_cleared;
+	/* (and those given the port's number for them instead, and the game
+	data inputs: custom_edition_widget_renumber_set) */
+	int32_t widget_functions_renumbered;
+	int32_t widget_inputs_renumbered;
 	int32_t pause_menu_trimmed;
 	/* the Halo PC behaviours the map relies on (enum
 	custom_edition_behaviour, flags) */
@@ -409,6 +413,18 @@ enum cache_file_status custom_edition_cache_convert(
 	char const *map_name,
 	struct custom_edition_conversion_report *report);
 
+/* What a widget's Halo PC function (an event handler's, from 102, or a game
+data input's, from 41) is in this build, for the map named `map_name`:
+a number of the port's own (port/linux/game/menu_tags.c, for a custom
+campaign's own ui.map), or -1 for none, the handler then running none as
+before. Set by the port; without it every such handler runs none. */
+typedef long (*custom_edition_widget_renumber_proc)(
+	char const *map_name,
+	long pc_function);
+void custom_edition_widget_renumber_set(
+	custom_edition_widget_renumber_proc event_function,
+	custom_edition_widget_renumber_proc game_data_input);
+
 /* A walk of the placements of a HUD definition (custom_edition_hud_placements_walk):
 `block_elements` gives the first of the `element_bytes`-byte elements of the
 tag block at `block`, their count in *count (NULL: none to walk), and
@@ -451,6 +467,26 @@ void *custom_edition_cache_tag_next(
 	uint32_t group_tag,
 	uint32_t definition_bytes,
 	int32_t *tag_index);
+
+/* Each tag of a Custom Edition cache's file, without loading it: its group
+and name to `visit`, which returns 0 to stop. The count of tags given it, 0
+for a file that is no such cache or whose tag index cannot be read. */
+typedef int (*custom_edition_tag_name_proc)(
+	void *context,
+	uint32_t group_tag,
+	char const *name);
+int custom_edition_cache_tag_names_walk(
+	struct cache_file_source *source,
+	custom_edition_tag_name_proc visit,
+	void *context);
+
+/* A Custom Edition cache's multiplayer player (its globals' unit): its
+collision model's maximum body and shield vitality, shield stun time and
+shield recharge time, read from the file without loading it. 0 when it
+cannot be read. */
+int custom_edition_cache_player_shields(
+	struct cache_file_source *source,
+	float out[4]);
 
 /* The definition of the tag `handle` names in a tag cache
 custom_edition_cache_load filled, or NULL unless that is a tag of group

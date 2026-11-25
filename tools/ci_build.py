@@ -76,6 +76,16 @@ APKS = {
     "debug": "port/android/app/build/outputs/apk/debug/app-debug.apk",
     "release": "port/android/app/build/outputs/apk/release/app-release.apk",
 }
+# the bridge (port/android/bridge/build.gradle): the old app's, com.halo.decomp's, last update, which moves its
+# players to the game's new id, com.halo.contentevolved
+BRIDGE_APKS = {
+    "debug": "port/android/bridge/build/outputs/apk/debug/bridge-debug.apk",
+    "release": "port/android/bridge/build/outputs/apk/release/bridge-release.apk",
+}
+# the Android game's files' name (dist/, the release's assets, its updater's
+# Updater.java): halo-android- is the bridge's, the name the apps up to build
+# 141 ask for
+ANDROID_GAME_NAME = "halo-contentevolved"
 
 
 def run(command, cwd=ROOT):
@@ -121,6 +131,12 @@ def copy_notices(platform, dist):
     # the menus' XML parser (port/third_party/expat), in every build, whose
     # MIT license asks copies to carry its notice
     shutil.copy2(ROOT / "port/third_party/expat/COPYING", dist / "expat-COPYING.txt")
+    # MCC's texture decoder is distributed under bcdec's MIT option.
+    shutil.copy2(ROOT / "port/third_party/bcdec/LICENSE", dist / "bcdec-LICENSE.txt")
+    # the Steam Workshop screen's Steam client (port/linux/src/steam_*.c), in
+    # every build: Zstandard's decoder, whose BSD license asks binaries to
+    # carry its notice (the LZMA SDK's decoder is public domain)
+    shutil.copy2(ROOT / "port/third_party/zstd/LICENSE", dist / "zstd-LICENSE.txt")
     # voice chat's codec (port/third_party/opus), in every build, whose BSD
     # license asks binaries to carry its notice
     shutil.copy2(ROOT / "port/third_party/opus/COPYING", dist / "opus-COPYING.txt")
@@ -168,11 +184,11 @@ def copy_notices(platform, dist):
     # its buttons, port/assets/buttons/platforms), CC0: not required, but
     # credited (the PS5's release has it in licenses/: tools/ps5_build.py)
     shutil.copy2(ROOT / "port/assets/buttons/platforms/Kenney-LICENSE.txt", dist / "Kenney-LICENSE.txt")
+    # the QR codes (port/third_party/qrcodegen, Project Nayuki's: the Steam
+    # Workshop's sign-in in every build, the Switch's link page), whose MIT
+    # license asks copies to carry its notice
+    shutil.copy2(ROOT / "port/third_party/qrcodegen/LICENSE", dist / "qrcodegen-LICENSE.txt")
     if platform == "switch":
-        # the link page's QR code (port/third_party/qrcodegen, Project
-        # Nayuki's, in the Switch's build alone), whose MIT license asks
-        # copies to carry its notice
-        shutil.copy2(ROOT / "port/third_party/qrcodegen/LICENSE", dist / "qrcodegen-LICENSE.txt")
         # and the Switch's menus' title font (port/switch/host/host_ui.c),
         # under the same license
         shutil.copy2(ROOT / "port/assets/fonts/OpenCE-OFL.txt", dist / "OpenCE-OFL.txt")
@@ -237,12 +253,25 @@ def main() -> int:
         return 0
     if args.platform == "android":
         # the native part, then the app around it (Gradle's variant of the
-        # same name: release is signed with the debug key, not debuggable)
+        # same name: release is signed with the debug key, not debuggable),
+        # and the bridge: dist/halo-contentevolved-<config> the game,
+        # dist/halo-android-<config> the bridge
         run(["ninja", "android"])
         gradlew = "gradlew.bat" if os.name == "nt" else "./gradlew"
         variant = "release" if args.config == "release" else "debug"
-        run([gradlew, "--console=plain", "-q", f"assemble{variant.capitalize()}"], cwd=ROOT / "port/android")
-        outputs = [APKS[variant]]
+        task = f"assemble{variant.capitalize()}"
+        run([gradlew, "--console=plain", "-q", f":app:{task}", f":bridge:{task}"], cwd=ROOT / "port/android")
+        for name, apk in ((ANDROID_GAME_NAME, APKS[variant]), ("halo-android", BRIDGE_APKS[variant])):
+            dist = ROOT / "dist" / f"{name}-{args.config}"
+            if dist.exists():
+                shutil.rmtree(dist)
+            dist.mkdir(parents=True)
+            shutil.copy2(ROOT / apk, dist)
+            print(f"{apk} -> {dist.relative_to(ROOT)}", flush=True)
+            # (the bridge has none of the game's code: its APK only)
+            if name == ANDROID_GAME_NAME:
+                copy_notices(args.platform, dist)
+        return 0
     else:
         run(["ninja", args.platform])
         outputs = OUTPUTS[args.platform]

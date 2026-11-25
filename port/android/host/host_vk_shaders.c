@@ -93,7 +93,7 @@ static int glslang_load(char *message, size_t message_size)
 {
 	if (G.initialized)
 		return 1;
-#ifdef HALO_PS5
+#if defined(HALO_PS5) || defined(HALO_MACOS)
 	/* glslang is in the title's link (a title cannot load a library: port/ps5/PS5.md, phase 4): each field is the
 	function of its name */
 	G.library = (void *)1;
@@ -385,6 +385,9 @@ struct pipeline
 	uint64_t vertex_hash, pixel_hash, state_hash;
 	uint32_t vertex, pixel;
 	struct vk_pipeline_state state;
+	/* its shaders read the dynamic lighting's fields: B.plasma_layout. (Its shaders' hashes are known by this, so it is
+	no part of the pipeline's identity.) */
+	int plasma_occlusion;
 	int status;
 	VkPipeline pipeline;
 	struct pipeline *next_in_bucket;
@@ -591,7 +594,7 @@ static int shader_made(struct shader *shader, VkShaderModule module)
 
 uint32_t host_vk_shader_find(uint32_t stage, uint64_t hash, uint32_t status_out)
 {
-	uint32_t *status = (uint32_t *)(uintptr_t)status_out;
+	uint32_t *status = (uint32_t *)host_pointer(status_out);
 	struct shader *shader;
 	uint32_t handle = 0, result = VK_SHADER_STATUS_UNKNOWN;
 
@@ -675,7 +678,7 @@ static void compile_dropped(uint32_t stage, uint64_t hash, const char *why)
 
 void host_vk_shader_compile(uint32_t stage, uint64_t hash, uint32_t glsl_address, uint32_t glsl_size)
 {
-	const char *glsl = (const char *)(uintptr_t)glsl_address;
+	const char *glsl = (const char *)host_pointer(glsl_address);
 	struct shader *shader;
 	char *copy;
 
@@ -867,7 +870,8 @@ else VK_NULL_HANDLE (the draw is skipped, counted). B.lock is held. */
 static void compile_pipeline_item(struct pipeline *pipeline);
 static void pipeline_unqueue(struct pipeline *pipeline);
 
-VkPipeline host_vk_pipeline_find(uint32_t vertex_handle, uint32_t pixel_handle, const struct vk_pipeline_state *state)
+VkPipeline host_vk_pipeline_find(uint32_t vertex_handle, uint32_t pixel_handle, const struct vk_pipeline_state *state,
+	int plasma_occlusion)
 {
 	struct shader *vertex, *pixel;
 	struct pipeline *pipeline;
@@ -920,6 +924,7 @@ VkPipeline host_vk_pipeline_find(uint32_t vertex_handle, uint32_t pixel_handle, 
 			pipeline->vertex = vertex_handle;
 			pipeline->pixel = pixel_handle;
 			pipeline->state = *state;
+			pipeline->plasma_occlusion = plasma_occlusion;
 			pipeline->status = PIPELINE_QUEUED;
 			pipeline->next_in_bucket = S.pipeline_buckets[key % BUCKETS];
 			S.pipeline_buckets[key % BUCKETS] = pipeline;
@@ -964,7 +969,7 @@ VkPipeline host_vk_pipeline_find(uint32_t vertex_handle, uint32_t pixel_handle, 
 /* a pipeline asked for in the stream by itself (phase 5's command; the draw record does it now) */
 void host_vk_pipeline_command(const struct vk_command_pipeline *command)
 {
-	host_vk_pipeline_find(command->vertex_shader, command->pixel_shader, &command->state);
+	host_vk_pipeline_find(command->vertex_shader, command->pixel_shader, &command->state, 0);
 }
 
 static VkFormat format_of(uint32_t which, int depth)
@@ -1076,7 +1081,7 @@ static VkPipeline pipeline_make(const struct pipeline *wanted, VkShaderModule ve
 	info.pDepthStencilState = &depth_stencil;
 	info.pColorBlendState = &blend;
 	info.pDynamicState = &dynamic;
-	info.layout = B.draw_layout;
+	info.layout = wanted->plasma_occlusion ? B.plasma_layout : B.draw_layout;
 	info.basePipelineIndex = -1;
 	/* (a driver without dynamic rendering: a render pass of the renderings' formats and samples, host_vk_passes.c) */
 	info.renderPass = host_vk_pass_for_pipeline(&rendering, multisample.rasterizationSamples, 1);
@@ -1227,7 +1232,10 @@ static void pipeline_unqueue(struct pipeline *pipeline)
 static void *compile_thread(void *unused)
 {
 	(void)unused;
-#ifndef HALO_PS5
+#if defined(HALO_MACOS)
+	/* below the game thread's priority: a utility thread to the scheduler */
+	pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+#elif !defined(HALO_PS5)
 	/* below the game thread's priority: Android lets an app raise its own niceness */
 	setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
 #else
@@ -1567,6 +1575,9 @@ void host_vk_services_start(void)
 #ifdef HALO_PS5
 	/* (the data folder: the title's own folder is replaced by every install) */
 	const char *internal = "/data/halo";
+#elif defined(HALO_MACOS)
+	/* (the user's caches, port/macos/host/host_main_macos.c) */
+	const char *internal = host_macos_cache_folder();
 #else
 	const char *internal = SDL_GetAndroidInternalStoragePath();
 #endif
@@ -1607,6 +1618,29 @@ void host_vk_services_start(void)
 	layout_info.pSetLayouts = &B.draw_set_layout;
 	if (!HOST_VK_CHECK(vkCreatePipelineLayout(B.device, &layout_info, NULL, &B.draw_layout)))
 		return;
+	/* the dynamic lighting's fields (VK_PLASMA_SET), read by the stage that lights a model; a pipeline layout of their
+	own, so that every other pipeline keeps the one it has always had */
+	{
+		VkDescriptorSetLayout plasma_layouts[2];
+
+		bindings[0].binding = VK_PLASMA_BINDING_TEXTURE0;
+		bindings[1].binding = VK_PLASMA_BINDING_TEXTURE1;
+		for (index = 0; index < 2; index++)
+		{
+			bindings[index].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			bindings[index].descriptorCount = 1;
+			bindings[index].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+		}
+		set_info.bindingCount = 2;
+		if (!HOST_VK_CHECK(vkCreateDescriptorSetLayout(B.device, &set_info, NULL, &B.plasma_set_layout)))
+			return;
+		plasma_layouts[0] = B.draw_set_layout;
+		plasma_layouts[1] = B.plasma_set_layout;
+		layout_info.setLayoutCount = 2;
+		layout_info.pSetLayouts = plasma_layouts;
+		if (!HOST_VK_CHECK(vkCreatePipelineLayout(B.device, &layout_info, NULL, &B.plasma_layout)))
+			return;
+	}
 	snprintf(S.root, sizeof(S.root), "%s/vk_cache", internal);
 	snprintf(S.pipelines_folder, sizeof(S.pipelines_folder), "%s/pipelines", S.root);
 	snprintf(S.failed_folder, sizeof(S.failed_folder), "%s/failed", S.root);

@@ -41,6 +41,11 @@ void host_set_tp(unsigned int thread);
 __guest_thread_start(thread); returns 0 or an errno value */
 int host_thread_create(unsigned int thread, unsigned int stack_size);
 
+/* MCC tag address space (host_mcc_memory.c), independent of the guest pools.
+Reserve returns the address or negative errno; release returns zero or negative errno. */
+long long host_mcc_memory_reserve(unsigned int address, unsigned int size);
+int host_mcc_memory_release(unsigned int address, unsigned int size);
+
 /* ---------- memory write tracking (port/linux/src/memory_watch.c) */
 
 void host_memory_watch_initialize(void);
@@ -71,9 +76,10 @@ int host_sdl_gl_make_current(unsigned int window, unsigned int context);
 int host_sdl_gl_set_swap_interval(int interval);
 int host_sdl_gl_swap_window(unsigned int window);
 int host_sdl_poll_event(void *event);
-/* SDL's text input for the window (Android's keyboard while a name is typed:
-sdl_platform.c), started as the SDL_TextInputType given, one line and with no
-autocorrection, or stopped (-1); whether it runs */
+/* text input for the window (Android's keyboard while a name is typed:
+sdl_platform.c): the game's text bar above the keyboard (TextBar.java), or
+SDL's own hidden field with no autocorrection, for the SDL_TextInputType
+given, or stopped (-1); whether it runs */
 int host_sdl_text_input(unsigned int window, int type);
 int host_sdl_set_clipboard_text(const char *text);
 void host_sdl_get_clipboard_text(char *buffer, unsigned int size);
@@ -181,6 +187,10 @@ map chosen, or each in a .zip file chosen, into folder (a path: custom_maps;
 HaloActivity.importMaps); returns at once, the copy done on the app's own
 thread */
 void host_android_import_maps(const char *folder);
+/* the game's files moved to the app's storage ("app") or a folder the player
+picks ("other"): the app asks, then starts the game again to move them
+(HaloActivity.moveGameFiles) */
+void host_android_move_game_files(const char *where);
 
 /* ---------- the on-screen touch controls (host_touch.c, android_imports.list) */
 
@@ -241,5 +251,76 @@ many */
 unsigned int host_replay_store_read(unsigned int offset, unsigned int destination, unsigned int size);
 /* the kept replay let go */
 void host_replay_store_free(void);
+/* the map lists' IMPORT, done by the host (port/android/host/host_mcc_import.c, which
+says what each does; the guest's wrappers are port/linux/src/mcc_import.c's) */
+int host_mcc_import_start(unsigned int root, unsigned int custom_maps);
+/* the folder holding mcc_maps (game.mcc.path, else the data root), told once
+as the game starts (port/android/host/host_mcc_hash.c) */
+void host_mcc_root(unsigned int path);
+int host_mcc_import_state(void);
+void host_mcc_import_progress(unsigned int text, unsigned int size);
+int host_mcc_import_question(unsigned int title, unsigned int title_size, unsigned int destination,
+	unsigned int destination_size);
+void host_mcc_import_answer(int question, int replace);
+int host_mcc_import_finish(unsigned int report, unsigned int size);
+/* an MCC map's conversion on the host's threads (port/android/host/host_mcc_convert.c, which says
+what each does; the guest's side is port/linux/game/mcc_convert.c's) */
+int host_mcc_convert_workers(void);
+int host_mcc_convert_submit(unsigned int request);
+int host_mcc_convert_wait(int id, int milliseconds);
+unsigned int host_mcc_convert_output_size(int id);
+void host_mcc_convert_release(int id);
+long long host_mcc_audio_append(int id, unsigned int slot);
+int host_mcc_audio_read(unsigned int slot, unsigned int offset, unsigned int size, unsigned int destination);
+void host_mcc_convert_reset(void);
+/* an MCC package's fingerprint (SHA-256 and CRC32) on the host's threads, with the CPU's
+instructions, and kept on the card (port/android/host/host_mcc_hash.c, which says what each
+does; the guest's side is port/linux/game/mcc_resource_check.inl's) */
+int host_mcc_hash_start(unsigned int request);
+int host_mcc_hash_wait(int id, int milliseconds, unsigned int result);
+void host_mcc_hash_cancel(int id);
+/* a file's plain SHA-256 and size, on the host's threads (an MCC package a host offers) */
+int host_sha256_start(unsigned int path);
+int host_sha256_poll(int id, unsigned int digest, unsigned int size);
+void host_sha256_cancel(int id);
+/* files between two SlipstreamCE machines over a connection of their own
+(port/android/host/host_file_share.h says what each does) */
+int host_fs_host_frame(int hosting, unsigned int limit);
+void host_fs_rate_facts(int in_game, unsigned int game_bytes, unsigned int round_trip);
+unsigned int host_fs_allowance(void);
+int host_fs_serve_begin(unsigned int session, unsigned int token, int count);
+int host_fs_serve_file(unsigned int session, int index, unsigned int path, unsigned int size);
+int host_fs_serve_ready(unsigned int session);
+int host_fs_serve_progress(unsigned int session, unsigned int out);
+void host_fs_serve_end(unsigned int session);
+int host_fs_fetch_begin(unsigned int address, int port, unsigned int session, unsigned int token, int count);
+void host_fs_direct(unsigned int address, int port);
+int host_fs_fetch_file(int index, int file, unsigned int path, unsigned int size, unsigned int sha256);
+int host_fs_fetch_start(void);
+int host_fs_fetch_status(unsigned int out);
+void host_fs_fetch_stop(void);
+int host_fs_pieces_begin(unsigned int address, int port, unsigned int session, unsigned int token);
+int host_fs_pieces_ask(int file, unsigned int offset, unsigned int length, unsigned int hash);
+int host_fs_pieces_take(unsigned int buffer, unsigned int out);
+int host_fs_pieces_state(void);
+void host_fs_pieces_stop(void);
+
+/* an MCC package's fingerprint (SHA-256 and CRC32) on the host's threads, with the CPU's
+instructions, and kept on the card (port/android/host/host_mcc_hash.c, which says what each
+does; the guest's side is port/linux/game/mcc_resource_check.inl's) */
+int host_mcc_hash_start(unsigned int request);
+int host_mcc_hash_wait(int id, int milliseconds, unsigned int result);
+void host_mcc_hash_cancel(int id);
+/* a file's plain SHA-256 and size, on the host's threads (an MCC package a host offers) */
+int host_sha256_start(unsigned int path);
+int host_sha256_poll(int id, unsigned int digest, unsigned int size);
+void host_sha256_cancel(int id);
+/* the Steam sign-in's seal (port/android/host/host_steam_seal.c, which says what each does; the
+Steam client is the guest's, port/linux/src/steam_downloads.c): the app's private folder for its
+session file, and its refresh token sealed and opened with a key of the Android Keystore */
+int host_steam_private_folder(char *folder, int size);
+int host_steam_seal(const char *text, char *out, int out_size);
+int host_steam_unseal(const char *sealed, char *out, int out_size);
+void host_steam_seal_forget(void);
 
 #endif

@@ -167,6 +167,7 @@ symbols in this file:
 #include "ai/ai.h"
 #include "bink/bink_playback.h"
 #include "cache/cache_files.h"
+#include "mcc_cache.h" /* port: port/linux/game/mcc_cache.h */
 #include "cseries/errors.h"
 #include "effects/contrails.h"
 #include "effects/decals.h"
@@ -195,6 +196,7 @@ symbols in this file:
 #include "structures/structure_bsp_definitions.h"
 #include "units/units.h"
 #include "structure_culling.h" /* port: port/linux/game/structure_culling.c */
+#include "network_replay.h" /* port: port/linux/game/network_replay_playback.c */
 
 /* ---------- constants */
 
@@ -1114,6 +1116,18 @@ boolean scenario_switch_structure_bsp(
 		checked. (A map's first bsp refused refuses the map: scenario_load) */
 		if (!loaded)
 		{
+			/* port: an MCC map's first bsp that is refused goes back to
+			scenario_load, and the menus, without the error's modal loop */
+			if (mcc_cache_tags_loaded() && old_structure_bsp_index == NONE)
+			{
+				error(_error_silent, "mcc: failed to load initial structure bsp #%d", structure_bsp_index);
+				global_structure_bsp = NULL;
+				global_collision_bsp = NULL;
+				global_bsp3d = NULL;
+				collision_log_enable(TRUE);
+				main_start_time();
+				return FALSE;
+			}
 			error(_error_immediate, "failed to load structure bsp #%d", structure_bsp_index);
 			global_structure_bsp = NULL;
 			global_collision_bsp = NULL;
@@ -1255,6 +1269,11 @@ missing_tag_loop:
 			goto missing_tag_loop;
 	}
 
+	/* port: an MCC map whose first bsp was refused is never loaded: its tags
+	are let go here, for the menus or the next map */
+	if (!result && mcc_cache_tags_loaded())
+		scenario_unload();
+
 	return result;
 }
 
@@ -1265,7 +1284,6 @@ void scenario_get_sound_environment(
 {
 	struct structure_bsp *structure_bsp;
 	long local_player_index;
-	long player_index;
 	long fog_index;
 	long sound_environment_index;
 	long selected_sound_environment_index;
@@ -1292,10 +1310,11 @@ void scenario_get_sound_environment(
 	for (local_player_index = 0; (short)local_player_index < 4; local_player_index++)
 	{
 		fog_index = NONE;
-		player_index = local_player_get_player_index((short)local_player_index);
-		if (player_index != NONE)
+		/* port: and a replay's playback's view, which has no player: its
+		level's ambience and reverb were never heard (network_replay_local_camera) */
+		camera = network_replay_local_camera((short)local_player_index);
+		if (camera)
 		{
-			camera = observer_get_camera((short)local_player_index);
 			if (camera->location.cluster_index != NONE)
 			{
 				match_assert(

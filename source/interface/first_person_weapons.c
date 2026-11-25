@@ -100,6 +100,7 @@ symbols in this file:
 #define REAL_MATH_EXTERNAL_REAL_LOCAL_RANDOM
 #define REAL_MATH_EXTERNAL_REAL_LOCAL_RANDOM_RANGE
 #include "interface/first_person_weapons.h"
+#include "opence_features.h" /* port: OPENCE_ENABLE_FORGE */
 
 #include "cache/predicted_resources.h"
 #include "camera/director.h"
@@ -128,12 +129,7 @@ symbols in this file:
 #include "units/units.h"
 #include "view_fov.h" /* port: port/linux/game/view_fov.c */
 #include "tag_editor.h" /* port: port/linux/game/tag_editor.c (a weapon's viewmodel edits) */
-#include "shaders/shader_definitions.h" /* port: (the shield's flare on the arms) */
-#include "shaders/shaders.h"
-/* port: port/linux/game/shield_color.c */
-real_rgb_color const *shield_color_colors(long unit_index, real_rgb_color const *colors);
-/* port: port/linux/game/overshield_effect.c */
-real const *overshield_effect_values(long unit_index, real const *values, boolean arms);
+#include "viewmodel_shield.h" /* port: port/linux/game/viewmodel_shield.c */
 
 /* ---------- constants */
 
@@ -480,6 +476,32 @@ long first_person_weapon_get_local_index(
 	return (local_player_index==MAXIMUM_NUMBER_OF_LOCAL_PLAYERS) ? NONE : local_player_index;
 }
 
+/* port: the hands a unit's arms are drawn with, the globals' or a Forge
+map's for the player's team (port/forge/src/forge_map_settings.c); and those
+each local player's arms were last set up for (their node remapping table
+is of those: first_person_weapon_switch_weapons), set up again when they
+are not the ones wanted (first_person_weapons_update) */
+static long first_person_hands_built[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS] = { NONE, NONE, NONE, NONE };
+
+static long first_person_hands_wanted(
+	long unit_index)
+{
+	struct game_globals_first_person_interface *first_person_interface= TAG_BLOCK_GET_ELEMENT(
+		&scenario_get_game_globals()->first_person_interface,
+		0,
+		struct game_globals_first_person_interface);
+	long hands_index= first_person_interface->hands.index;
+
+#if OPENCE_ENABLE_FORGE
+	{
+		extern long forge_map_settings_hands(long unit_index, long hands_index);
+
+		hands_index= forge_map_settings_hands(unit_index, hands_index);
+	}
+#endif
+	return hands_index;
+}
+
 void first_person_weapon_draw(
 	void)
 {
@@ -523,6 +545,7 @@ void first_person_weapon_draw(
 					real const *weapon_functions = weapon->object.outgoing_function_values;
 					real const *unit_functions = unit->object.outgoing_function_values;
 					real *kept;
+					long hands_index;
 
 					/* port: the tick's functions, moved into this frame, so the
 					charge clicks with the picture instead of once a tick; kept
@@ -574,41 +597,25 @@ void first_person_weapon_draw(
 							FLAG(_render_model_first_person_bit));
 					}
 
-					/* port: the shield's flare on the arms as on the body, the
-					unit's own modifier shader (display.viewmodel_shield,
-					view_fov.c), in the color chosen for it as on the body
-					(display.shield_color, shield_color.c); the weapon above is
-					drawn without it */
-					if (viewmodel_shield_is_visible())
-					{
-						struct object_definition *unit_definition= object_definition_get(object_get(unit_index)->definition_index);
+					hands_index= first_person_hands_built[render.local_player_index];
 
-						if (unit_definition->object.modifier_shader.index!=NONE)
-						{
-							struct shader *modifier_shader= shader_definition_get(unit_definition->object.modifier_shader.index);
-
-							if (shader_type_is_valid_for_modifier(modifier_shader->base.type))
-							{
-								model_effect.modifier_shader= modifier_shader;
-								model_effect.modifier_animation.colors= shield_color_colors(unit_index,
-									unit->object.outgoing_change_colors);
-								model_effect.modifier_animation.values= overshield_effect_values(unit_index,
-									unit_functions, TRUE);
-							}
-						}
-					}
-
+					/* (port: a game state of before, its arms set up for the globals') */
+					if (hands_index==NONE)
+						hands_index= first_person_interface->hands.index;
 					if (first_person_weapon->hands_node_remapping_table_valid &&
-						first_person_interface->hands.index!=NONE)
+						hands_index!=NONE)
 					{
 						model_remap_node_matrices_to_match_animation_graph(
-							first_person_interface->hands.index,
+							hands_index,
 							model_node_matrices,
 							weapon_definition->weapon.interface_definition.first_person_animations.index,
 							first_person_weapon->node_matrices,
 							first_person_weapon->hands_node_remapping_table);
+						/* port: only the posed hands receive the shield modifier (viewmodel_shield.c). */
+						viewmodel_shield_apply(render.local_player_index, unit_index,
+							hands_index, model_node_matrices, unit_functions, &model_effect);
 						render_model(
-							first_person_interface->hands.index,
+							hands_index,
 							0.0f,
 							model_node_matrices,
 							NULL,
@@ -686,7 +693,7 @@ void first_person_weapon_render_update(
 
 			/* port: hidden, too, while a replay's watched player looks
 			through a scope, as their own was */
-			if (visible && network_replay_playing() &&
+			if (visible && network_replay_viewing() &&
 				unit_get_zoom_level(first_person_weapon->unit_index)!=NONE)
 			{
 				visible= FALSE;
@@ -765,26 +772,23 @@ boolean first_person_weapon_adjust_light(
 	real_vector3d *up)
 {
 	struct weapon_datum *weapon= weapon_get(weapon_index);
-	struct unit_datum *unit= unit_get(weapon->object.parent_object_index);
-	long player_index= unit->unit.player_index;
+	/* port: the view that shows the holder's arms, as the flashlight's: in a
+	replay's playback, which has no local player, the watched player's eyes
+	(first_person_weapon_player_index), so that their weapon's lights are the
+	first-person weapon's there too */
+	short local_player_index= first_person_weapon_index_from_unit_index(weapon->object.parent_object_index);
+	struct object_marker marker;
 	boolean adjusted= FALSE;
 
-	if (player_index!=NONE)
+	if (local_player_index!=NONE &&
+		local_player_index==render.local_player_index &&
+		first_person_weapon_get(local_player_index)->visible &&
+		first_person_weapon_get_marker_by_name(weapon_index, marker_name, &marker, 1)>0)
 	{
-		struct player_datum *player= player_get(player_index);
-		short local_player_index= player->local_player_index;
-		struct object_marker marker;
-
-		if (local_player_index!=NONE &&
-			local_player_index==render.local_player_index &&
-			first_person_weapon_get(local_player_index)->visible &&
-			first_person_weapon_get_marker_by_name(weapon_index, marker_name, &marker, 1)>0)
-		{
-			*position= marker.matrix.position;
-			*forward= marker.matrix.forward;
-			*up= marker.matrix.up;
-			adjusted= TRUE;
-		}
+		*position= marker.matrix.position;
+		*forward= marker.matrix.forward;
+		*up= marker.matrix.up;
+		adjusted= TRUE;
 	}
 
 	return adjusted;
@@ -876,7 +880,7 @@ void first_person_weapons_update(
 		/* port: a replay's playback lets go of the arms of a player no longer
 		watched through their eyes (window 0's: main.c), as of a dead
 		player's */
-		if (player_index!=NONE || (local_player_index==0 && network_replay_playing()))
+		if (player_index!=NONE || (local_player_index==0 && network_replay_viewing()))
 		{
 			struct first_person_weapon *first_person_weapon= first_person_weapon_get(local_player_index);
 			long unit_index= player_index!=NONE ? player_get(player_index)->unit_index : NONE;
@@ -884,6 +888,13 @@ void first_person_weapons_update(
 			if (first_person_weapon->unit_index!=unit_index)
 			{
 				first_person_weapon_new_unit(local_player_index, unit_index);
+			}
+			/* port: arms set up for other hands than those wanted (a Forge
+			map's changed: first_person_hands_wanted), set up again */
+			if (first_person_weapon->weapon_index!=NONE && unit_index!=NONE &&
+				first_person_hands_built[local_player_index]!=first_person_hands_wanted(unit_index))
+			{
+				first_person_weapon_switch_weapons(local_player_index);
 			}
 			if (first_person_weapon->weapon_index==NONE)
 			{
@@ -937,6 +948,9 @@ static void first_person_weapon_forget_weapon(
 
 	return;
 }
+
+/* port: MCC equipment replacement invalidates the cached weapon before deletion. */
+#include "mcc_first_person.inl" /* port: port/linux/game/mcc_first_person.inl */
 
 static void first_person_weapon_predict(
 	short local_player_index)
@@ -1783,11 +1797,14 @@ static void first_person_weapon_switch_weapons(
 							&scenario_get_game_globals()->first_person_interface,
 							0,
 							struct game_globals_first_person_interface);
-						if (first_person_interface->hands.index!=NONE)
+						/* port: the hands wanted (first_person_hands_wanted) */
+						first_person_hands_built[local_player_index]= first_person_hands_wanted(first_person_weapon->unit_index);
+						(void)first_person_interface;
+						if (first_person_hands_built[local_player_index]!=NONE)
 						{
 							first_person_weapon->hands_node_remapping_table_valid=
 								model_build_remapping_table_for_animation_graph(
-									first_person_interface->hands.index,
+									first_person_hands_built[local_player_index],
 									weapon_definition->weapon.interface_definition.first_person_animations.index,
 									first_person_weapon->hands_node_remapping_table);
 						}
@@ -2554,7 +2571,7 @@ though they were local player 0; else the local player's own */
 static long first_person_weapon_player_index(
 	short local_player_index)
 {
-	if (network_replay_playing())
+	if (network_replay_viewing())
 	{
 		return local_player_index==0 && network_replay_viewing_eyes() ?
 			network_replay_watched_player() :
@@ -2570,7 +2587,7 @@ director's */
 static boolean first_person_weapon_first_person(
 	short local_player_index)
 {
-	if (network_replay_playing())
+	if (network_replay_viewing())
 	{
 		return local_player_index==0 && network_replay_viewing_eyes();
 	}

@@ -814,6 +814,68 @@ boolean custom_edition_loaded_reordered_bitmaps_find(
 	return reordered_bitmaps_find(&view);
 }
 
+/* (port) bitmap `bitmap_index` of the tag `handle` drawn in `channel_order`,
+whatever the finder said: listed, or no longer listed for this build's own */
+static boolean reordered_bitmap_override(
+	long handle,
+	long bitmap_index,
+	short channel_order)
+{
+	struct custom_edition_bitmaps_globals *globals = &custom_edition_bitmaps_globals;
+	long index = reordered_bitmap_index(handle, bitmap_index);
+
+	if (index == NONE)
+		return channel_order == _custom_edition_channels_xbox || reordered_bitmap_mark(handle, bitmap_index, channel_order);
+	if (channel_order == _custom_edition_channels_xbox)
+	{
+		globals->reordered_bitmaps[index] = globals->reordered_bitmaps[--globals->reordered_bitmap_count];
+		return TRUE;
+	}
+	globals->reordered_bitmaps[index].channel_order = (byte)channel_order;
+	globals->reordered_bitmaps[index].drawn_otherwise = FALSE;
+	return TRUE;
+}
+
+void custom_edition_reordered_bitmaps_override(
+	long handle,
+	short sequence_index,
+	short channel_order)
+{
+	struct tag_view view;
+	struct bitmap_group *group;
+	struct bitmap_group_sequence *sequence;
+	long index;
+
+	view.tag_cache = NULL;
+	view.loaded_bytes = 0;
+	group = view_tag_get(&view, handle, BITMAP_GROUP_TAG, sizeof(struct bitmap_group));
+	if (!group)
+		return;
+	sequence = sequence_index != NONE ? view_block_element(&view, &group->sequences, sequence_index, sizeof(*sequence)) :
+		NULL;
+	if (sequence && sequence->bitmap_count > 0)
+	{
+		for (index = 0; index < sequence->bitmap_count; index++)
+			reordered_bitmap_override(handle, sequence->first_bitmap_index + index, channel_order);
+	}
+	else if (sequence && sequence->sprites.count > 0)
+	{
+		for (index = 0; index < sequence->sprites.count; index++)
+		{
+			struct bitmap_group_sprite *sprite = view_block_element(&view, &sequence->sprites, index, sizeof(*sprite));
+
+			if (!sprite)
+				break;
+			reordered_bitmap_override(handle, sprite->bitmap_index, channel_order);
+		}
+	}
+	else
+	{
+		for (index = 0; index < group->bitmaps.count; index++)
+			reordered_bitmap_override(handle, index, channel_order);
+	}
+}
+
 short custom_edition_bitmap_channel_order(
 	long handle,
 	long bitmap_index)

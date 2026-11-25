@@ -48,7 +48,8 @@ def test_store_keys():
     options = _array(store, "campaign_option_keys[] =")
     sections = _array(store, "campaign_sections[] =")
     used = FUNCTIONS.read_text() + TAG_CAMPAIGN.read_text()
-    assert options == ["profile", "weapon_rotation", "weapon_replace", "enemy_rotation", "enemy_replace"]
+    assert options == ["profile", "weapon_rotation", "weapon_replace", "enemy_rotation", "enemy_replace",
+                       "player_biped", "player_hands", "player_movement"]
     assert sections == ["weapons", "enemies", "loadout"]
     for key in options + sections:
         assert f'"{key}"' in used, key

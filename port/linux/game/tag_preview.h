@@ -47,6 +47,10 @@ void tag_preview_map_tag(
 void tag_preview_profile_tag(
 	long profile,
 	long tag);
+/* ... or an MCC map's tag, of the map mcc_tag_preview_open opened */
+void tag_preview_mcc_tag(
+	unsigned long group,
+	char const *tag_name);
 void tag_preview_none(
 	void);
 

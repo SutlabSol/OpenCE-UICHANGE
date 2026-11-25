@@ -77,6 +77,11 @@ symbols in this file:
 #include "sound/game_sound.h"
 #include "units/units.h"
 
+/* port: Forge's GRAVITY volumes (port/forge/src/forge_volumes.c): FALSE
+outside them, else the pull there in units of global_gravity, the way
+things fall */
+extern int forge_volumes_gravity_at(float x, float y, float z, float out_pull[3]);
+
 /* ---------- constants */
 
 enum
@@ -623,7 +628,20 @@ boolean item_update(
 					definition->item.flags,
 					_item_definition_antigravity_bit))
 			{
-				new_velocity.k -= global_gravity;
+				/* port: or a GRAVITY volume's pull where it is */
+				float pull[3];
+
+				if (forge_volumes_gravity_at(item->object.position.x, item->object.position.y,
+					item->object.position.z, pull))
+				{
+					new_velocity.i += pull[0] * global_gravity;
+					new_velocity.j += pull[1] * global_gravity;
+					new_velocity.k += pull[2] * global_gravity;
+				}
+				else
+				{
+					new_velocity.k -= global_gravity;
+				}
 			}
 
 			new_position.x = item->object.position.x + new_velocity.i;

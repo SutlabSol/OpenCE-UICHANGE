@@ -117,7 +117,7 @@ CHILD_OFFSETS = {
         f"ui\\shell\\main_menu\\multiplayer_type_select\\{row}"): port_settings.multiplayer_row_place(row)
        for row in port_settings.MULTIPLAYER_ROWS[:7]},
     ("ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_select_screen",
-     "ui\\shell\\main_menu\\blueline"): (64, 349),
+     "ui\\shell\\main_menu\\blueline"): (64, 376),
     # the profile settings' rows, eleven in the nine's room
     # (port_settings.PROFILE_ROWS)
     **{("ui\\shell\\main_menu\\settings_select\\player_setup\\player_profile_edit\\profile_edit_select_list",
@@ -134,12 +134,14 @@ CHILD_OFFSETS = {
     ("ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\screen_stats_container",
      "ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\server_count_label"): (410, 60),
     # the server browser's Filters' rows, closed up where PING and TEAMPLAY
-    # OPTIONS were (LEFT_OUT)
+    # OPTIONS were (LEFT_OUT), and closer, for the port's after them
+    # (port_settings.BROWSER_FILTER_ROWS)
     # (and in by ten, the button bar where the port's screens have theirs:
     # Content Extended's)
     **{("ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\filters_options_menu",
-        f"ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\op_{row}"): (64, 73 + 30 * index)
-       for index, row in enumerate(("empty_servers", "full_servers", "game_type", "installed_maps"))},
+        f"ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\op_{row}"):
+       (64, port_settings.BROWSER_FILTER_TOP + port_settings.BROWSER_FILTER_STEP * index)
+       for index, row in enumerate(port_settings.BROWSER_FILTER_PC_ROWS)},
     ("ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\filters_options_menu",
      "ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\filters_button_bar"): (0, 414),
     # (OK left by ten, as the port's screens have it: Content Extended's)
@@ -711,6 +713,13 @@ def pause_art(art):
         heights += list(port_settings.PAUSE_BOX_EXTRA_HEIGHTS)
         lines.append(art.port_picture(f"pause/pausebox_{piece}", [
             (port_settings.pause_box_svg(piece, height), 4 if piece == "center" else 16, 256) for height in heights]))
+    # (the in-game join box's: the 3-button box's frames alone, which the
+    # pause menu's own does not change: port_settings.py's _ingame_join)
+    for piece in ("left", "center", "right"):
+        width = 4 if piece == "center" else 16
+        lines.append(f'\t<bitmap name="pause/joinbox_{piece}">\n'
+                     f'\t\t<frame png="ce/port/pause/pausebox_{piece}__0.png" width="{width}" height="256"/>\n'
+                     '\t</bitmap>')
     for piece in ("left", "center", "right"):
         lines.append(art.port_picture(f"pause/objectives_{piece}", [
             (port_settings.pause_box_svg(piece, height, header=True), 4 if piece == "center" else 16, 256)
@@ -720,9 +729,11 @@ def pause_art(art):
 
 def regenerate_settings():
     """Write port-owned settings and register any new screens for embedding."""
-    screens = port_settings.settings_files()
+    screens = {**port_settings.settings_files(), **port_settings.multiplayer_files()}
     for name, lines in screens.items():
         (CE / name).write_text("\n".join(lines))
+    from mcc_menu_patches import regenerate
+    regenerate(CE)
     manifest = MENUS / "menus.json"
     data = json.loads(manifest.read_text())
     files = set(data["files"]) | {"ce/" + name for name in screens}
@@ -816,7 +827,7 @@ def main() -> None:
     # status icons: Lucide's, port/assets/icons/lucide)
     lines.append(art.port_picture("main_menu/menu_daily", port_settings.menu_item_frames(
         "DAILY CHALLENGE", art.redraws, port_settings.DAILY_ITEM_WIDTH)))
-    lines.append(art.port_picture("main_menu/menu_mods", port_settings.menu_item_frames("MODS", art.redraws)))
+    lines.append(art.port_picture("main_menu/menu_mods", port_settings.menu_item_frames("MAPS & MODS", art.redraws)))
     # (and its THEATER: port_settings._theater)
     lines.append(art.port_picture("main_menu/menu_theater", port_settings.menu_item_frames("THEATER", art.redraws)))
     # (and its PLAY, Campaign's and Multiplayer's: port_settings._play)
@@ -833,6 +844,13 @@ def main() -> None:
     lines.append(art.port_picture("mods/status", port_settings.mod_status_frames(ROOT / "port/assets/icons/lucide")))
     lines.append(art.port_picture("mods/status_small",
                                   port_settings.mod_status_frames(ROOT / "port/assets/icons/lucide", 16)))
+    # (the main menu's Halo logo, Content Evolved's: ContentEvolvedLogo.png
+    # 170 units tall, centred, its top 45 units down, at 4x in 640x256 - the
+    # widget's bitmap is set to it by port_settings.WIDGET_PATCHES)
+    art.pngs.append("ce/port/main_menu/halo_logo.png")
+    lines += [f"\t<bitmap{attributes([('name', 'main_menu/halo_logo')])}>",
+              f"\t\t<frame{attributes([('png', 'ce/port/main_menu/halo_logo.png'), ('width', 640), ('height', 256)])}/>",
+              "\t</bitmap>"]
     # (Credits' logo, already drawn from ContentEvolved.png)
     logo = f"{port_settings.CREDITS}/credits_logo"
     art.pngs.append(f"ce/port/{logo}.png")
@@ -846,6 +864,8 @@ def main() -> None:
         shutil.copy2(MENUS / "controllers" / f"{controller}.svg", MENUS / "port_svg/controllers" / f"{controller}.svg")
     lines += [art.port_picture(name, frames) for name, frames in port_settings.layout_overlay_pictures()]
     lines += [art.port_picture(name, frames) for name, frames in port_settings.browser_hint_pictures()]
+    # (Host Server's screens' tabs, panels, rows and pills: port_settings._host)
+    lines += [art.port_picture(name, frames) for name, frames in port_settings.host_pictures()]
     # (nothing: what a game map draws for a frame of ui.map's it has not,
     # menu_tags.c)
     lines.append(art.port_picture("blank", [

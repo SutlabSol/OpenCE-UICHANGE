@@ -1477,6 +1477,21 @@ void draw_unicode_string_compute_bounds(
 	return;
 }
 
+/* port: scoped adornments restore the caller's text formatting and indentation. */
+void draw_string_get_format(short *style, short *justification, unsigned long *flags)
+{
+    *style = font_drawing_globals.current_style;
+    *justification = font_drawing_globals.current_justification;
+    *flags = font_drawing_globals.current_flags;
+}
+
+/* port: see draw_string_get_format. */
+void draw_string_get_indents(short *initial, short *paragraph)
+{
+    *initial = font_drawing_globals.initial_indent;
+    *paragraph = font_drawing_globals.paragraph_indent;
+}
+
 /* port: the middle of a string's capitals as it is drawn in the bounds
 (the draw mode's font: the rows of its H with ink, on the line's baseline),
 for what is drawn beside it, centred on it (voice chat's speakers:

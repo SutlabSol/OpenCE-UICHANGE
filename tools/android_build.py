@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .guest_arch import ARM64_32, GuestArch
-from .linux_build import (GAME_DATA_FILES, LINUX_PROFILE, MINIUPNPC_DEFINES, MINIUPNPC_DIR, MUSL_MATH_DIR, STB_VORBIS_SOURCE, XDK_INCLUDE,
+from .linux_build import (DYNAMIC_LIGHTING_GAME_SOURCES, DYNAMIC_LIGHTING_PLATFORM_SOURCES, GAME_DATA_FILES, LINUX_PROFILE, MINIUPNPC_DEFINES, MINIUPNPC_DIR, MUSL_MATH_DIR, STB_VORBIS_SOURCE, XDK_INCLUDE,
                           compile_launcher, configuration_defines, game_defines_and_includes, game_sources,
                           miniupnpc_sources, musl_math_sources, opus_cflags, opus_sources, pgo_mode, pgo_profile,
                           profile_use_flags, updater_defines, xdk_headers)
@@ -340,7 +340,8 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
                          objdump: str, builtins_cc: str, environment: str, platform_defines: List[str],
                          extra_runtime: Optional[List[Path]] = None, extra_imports: Optional[List[Path]] = None,
                          updater_cflags: str = "", desktop_gl: bool = False, relocatable: bool = False,
-                         vulkan: bool = False, extra_sources: Optional[List[Path]] = None) -> Dict[str, Path]:
+                         vulkan: bool = False, extra_sources: Optional[List[Path]] = None,
+                         base_register: bool = False) -> Dict[str, Path]:
     """The guest image (build/halo_guest.elf) and the host's import table, for
     the builds that run the game as ILP32 code of the architecture arch
     (tools/guest_arch.py): Android, and the desktop guest builds
@@ -364,7 +365,12 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
     with which the Android host loads the image elsewhere when its address is
     taken; vulkan also links the image with the Vulkan renderer
     (halo_guest_vk.elf, port/android/VULKAN.md), from the same objects but
-    the OpenGL renderer's."""
+    the OpenGL renderer's. base_register builds a guest whose memory lies at
+    any base the host chooses (tools/guest_base_register.py: the macOS build,
+    whose processes have no low 4 GB) rather than in the low 4 GB."""
+    if base_register and arch.base_register_flags is None:
+        raise RuntimeError(f"the {arch.name} guest has no base register (tools/guest_base_register.py)")
+    base_flag = " --base-register" if base_register else ""
     extra_runtime = extra_runtime or []
     extra_imports = extra_imports or []
     extra_sources = extra_sources or []
@@ -444,7 +450,7 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
     posix_imports = gen_dir / "posix_imports.list"
     n.rule(
         name=f"{prefix}_posix_stubs",
-        command=f"{python} tools/android_posix_stubs.py {LINUX_DIR}/src/posix.h {guest_posix_c} {posix_imports}",
+        command=f"{python} tools/android_posix_stubs.py{base_flag} {LINUX_DIR}/src/posix.h {guest_posix_c} {posix_imports}",
         description=f"{label} POSIX STUBS",
     )
     n.build(outputs=[guest_posix_c, posix_imports], rule=f"{prefix}_posix_stubs",
@@ -455,7 +461,7 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
     host_imports_list = PORT_DIR / "host_imports.list"
     n.rule(
         name=f"{prefix}_imports",
-        command=f"{python} tools/android_imports.py --arch {arch.name} --host-table {host_table_c} {imports_s} $in",
+        command=f"{python} tools/android_imports.py --arch {arch.name}{base_flag} --host-table {host_table_c} {imports_s} $in",
         description=f"{label} IMPORTS",
     )
     # every import's arguments must cross to the host as the guest left them
@@ -480,7 +486,7 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
 
     if arch.darwin_assembly:
         guest_cc_command = (f"{compile_launcher(sln)}${prefix}_guest_cc -MMD -MF $out.d $cflags -S $in "
-                            f"-o $out.darwin.s && {python} tools/android_asm_convert.py $out.darwin.s $out.s && "
+                            f"-o $out.darwin.s && {python} tools/android_asm_convert.py{base_flag} $out.darwin.s $out.s && "
                             f"${prefix}_guest_cc --target={asm_target} -c $out.s -o $out")
     else:
         guest_cc_command = f"{compile_launcher(sln)}${prefix}_guest_cc -MMD -MF $out.d $cflags -c $in -o $out"
@@ -503,9 +509,13 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
         f"-isystem {musl_dir}/include",
         *([f"-idirafter {compiler_include(guest_cc)}"] if arch.compiler_headers else []),
     ]
-    guest_abi = " ".join(guest_abi_flags(arch, platform_defines) + configuration_defines(sln))
+    # (a base register's code generation, GuestArch.base_register_flags)
+    base_register_flags = [*(arch.base_register_flags or ()), "-DHALO_GUEST_BASE=1"] if base_register else []
+    guest_abi = " ".join(guest_abi_flags(arch, platform_defines) + base_register_flags + configuration_defines(sln))
     guest_code = " ".join(GUEST_CODE_FLAGS)
     tool_implicit = [*([Path("tools/android_asm_convert.py")] if arch.darwin_assembly else []), *generated_headers]
+    if base_register:
+        tool_implicit += [Path("tools/guest_base_register.py"), Path("tools/guest_branch_relax.py")]
     # profile-guided optimisation with the Linux build's profile (committed,
     # or trained by the Linux build with --pgo=train): the game and platform
     # code are the same, and functions that differ simply go without
@@ -567,8 +577,12 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
         if source.as_posix() in VARIADIC_PROTOTYPE_FILES:
             cflags += f" -include {PORT_DIR}/include/halo_android_variadic_prototypes.h"
         objects.append(guest_object(source, f"{cflags} {forge_source_flags(source)}"))
+    dynamic_lighting_objects = []
     for source in sorted([*Path(config["game_sources"]).glob("*.c"), *Path(config["game_sources"]).glob("mendicant/*.c")]):
-        objects.append(guest_object(source, f"{game_cflags} {forge_source_flags(source)}"))
+        if source.name in DYNAMIC_LIGHTING_GAME_SOURCES:
+            dynamic_lighting_objects.append(guest_object(source, f"{game_cflags} {forge_source_flags(source)}"))
+        else:
+            objects.append(guest_object(source, f"{game_cflags} {forge_source_flags(source)}"))
     # (Content Extended's Forge: tools/forge_build.py)
     for source in forge_sources():
         objects.append(guest_object(source, forge_cflags(game_cflags, ZLIB_DIR)))
@@ -588,9 +602,13 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
     gl_textures_object = None
     gl_post_object = None
     for source in sorted((LINUX_DIR / "src").glob("*.c")):
-        if source.name.startswith("posix_") or source.name in guest_host_only:
+        # (posix_server.c is the guest's: the clock and files of hosting from the
+        # menus, over the guest's own C library; the other posix_ files are the host's)
+        if (source.name.startswith("posix_") and source.name != "posix_server.c") or source.name in guest_host_only:
             continue
-        if source.name == "updater.c" and updater_cflags:
+        if source.name in DYNAMIC_LIGHTING_PLATFORM_SOURCES:
+            dynamic_lighting_objects.append(guest_object(source, platform_cflags))
+        elif source.name == "updater.c" and updater_cflags:
             objects.append(guest_object(source, f"{platform_cflags} {updater_cflags}"))
         else:
             objects.append(guest_object(source, f"{platform_cflags} {forge_source_flags(source)}"))
@@ -693,7 +711,9 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
     if relocatable:
         link_implicit.append(Path("tools/guest_relocations.py"))
     relocations = build / "halo_guest.relocs"
-    n.build(outputs=image, rule=f"{prefix}_guest_link", inputs=objects,
+    # (the OpenGL renderer's image: the dynamic lighting's hooks do nothing)
+    gl_objects = objects + [guest_object(PORT_DIR / "guest" / "dynamic_lighting_disabled.c", game_cflags)]
+    n.build(outputs=image, rule=f"{prefix}_guest_link", inputs=gl_objects,
             implicit_outputs=[relocations] if relocatable else None, implicit=link_implicit,
             variables={"relocations": str(relocations)} if relocatable else None)
     # what the host cannot give the image: thread-local storage, the thread
@@ -719,6 +739,7 @@ def generate_guest_image(n: Writer, sln: Any, config: Dict[str, Any], *, arch: G
         # (its texture cache, xbox_textures_vk.c, takes the place of xbox_textures.c the same way)
         vk_image = build / "halo_guest_vk.elf"
         vk_objects = [obj for obj in objects if obj not in (gl_renderer_object, gl_textures_object, gl_post_object)]
+        vk_objects.extend(dynamic_lighting_objects)
         vk_objects.append(guest_object(PORT_DIR / "guest" / "xbox_textures_vk.c", platform_cflags))
         vk_objects.append(guest_object(PORT_DIR / "guest" / "d3d8_vk.c", platform_cflags))
         # the generators for glslang (port/android/VULKAN.md, phase 4): the originals stay in both images
@@ -891,12 +912,26 @@ def generate_android_build(n: Writer, sln: Any) -> None:
     n.build(outputs=build_stamp, rule="android_build_stamp", implicit=["android_always"])
     host_sources = sorted((PORT_DIR / "host").glob("*.c")) + [
         LINUX_DIR / "src" / "posix_files.c", LINUX_DIR / "src" / "posix_net.c",
+        LINUX_DIR / "src" / "posix_mcc_preview.c",
+        LINUX_DIR / "src" / "posix_mcc_share.c",
+        # the map lists' IMPORT's JSON reader (host_mcc_import.c)
+        LINUX_DIR / "src" / "server_json.c",
         # the app reads debug.sample_seconds from config.toml (host_main.c)
         TOML_DIR / "tomlc17.c",
+        # the file connection's X25519 and ChaCha20-Poly1305 (host_file_share_crypto.c)
+        MONOCYPHER_DIR / "monocypher.c",
     ]
     for source in host_sources:
         obj = host_obj_dir / (source.name + ".o")
-        n.build(outputs=obj, rule="android_host_cc", inputs=source, variables={"cflags": host_cflags},
+        # (the Steam client's chunk unpacker: the LZMA SDK's and Zstandard's
+        # decoders, whose warnings are not ours)
+        # (an MCC map's conversion: the guest's codecs, whose bcdec shifts
+        # signed values as the guest's -fwrapv defines, host_mcc_convert.c)
+        n.build(outputs=obj, rule="android_host_cc", inputs=source,
+                variables={"cflags": host_cflags + (" -w" if source.name == "steam_unpack.c" else "") +
+                           (" -fwrapv" if source.name == "host_mcc_convert.c" else "") +
+                           (f" -I{MONOCYPHER_DIR}" if source.name in ("host_file_share_crypto.c", "monocypher.c")
+                            else "")},
                 implicit=[build_stamp] if source.name == "host_vk_probe.c" else None)
         host_objects.append(obj)
     # internet play's UPnP (posix_upnp.c, with port/third_party/miniupnpc),
@@ -999,8 +1034,11 @@ def generate_android_build(n: Writer, sln: Any) -> None:
     wanted = "validation\n" if validation else "no validation\n"
     if not stamp.exists() or stamp.read_text() != wanted:
         stamp.write_text(wanted)
+    # Include MCC's decoder notice in the APK as well as the release archive.
+    staged_bcdec_license = assets_dir / "bcdec-LICENSE.txt"
+    n.build(outputs=staged_bcdec_license, rule="android_copy", inputs=Path("port/third_party/bcdec/LICENSE"))
     staged_all = [libmain, staged_sdl, staged_image, staged_relocations, staged_vk_image, staged_vk_relocations,
-                  staged_brokers, *staged_data, *probe_staged]
+                  staged_brokers, staged_bcdec_license, *staged_data, *probe_staged]
     n.build(outputs="android", rule="phony", inputs=staged_all)
 
     apk = PORT_DIR / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
@@ -1017,11 +1055,30 @@ def generate_android_build(n: Writer, sln: Any) -> None:
     n.rule(
         name="android_gradle",
         # Gradle leaves the APK alone when its contents would not change
-        command=(f"cd {PORT_DIR} && {gradle_environment}./gradlew --console=plain -q assembleDebug && "
+        command=(f"cd {PORT_DIR} && {gradle_environment}./gradlew --console=plain -q :app:assembleDebug && "
                  "touch app/build/outputs/apk/debug/app-debug.apk"),
         description="ANDROID GRADLE $out",
         pool="console",
     )
     n.build(outputs=apk, rule="android_gradle", inputs=staged_all, implicit=[stamp, sdl_android_mouse_listener])
     n.build(outputs="android_apk", rule="phony", inputs=apk)
+    n.newline()
+
+    # the bridge (port/android/bridge/build.gradle): the old app's (com.halo.decomp's) last update, which moves its
+    # players to the game's new id; a release carries it under the old app's zip names (tools/release.py). Java
+    # only: none of the native build is in it
+    bridge_dir = PORT_DIR / "bridge"
+    bridge_apk = bridge_dir / "build" / "outputs" / "apk" / "debug" / "bridge-debug.apk"
+    bridge_sources = sorted(path for path in bridge_dir.rglob("*")
+                            if path.is_file() and "build" not in path.relative_to(bridge_dir).parts)
+    n.rule(
+        name="android_gradle_bridge",
+        command=(f"cd {PORT_DIR} && {gradle_environment}./gradlew --console=plain -q :bridge:assembleDebug && "
+                 "touch bridge/build/outputs/apk/debug/bridge-debug.apk"),
+        description="ANDROID GRADLE $out",
+        pool="console",
+    )
+    n.build(outputs=bridge_apk, rule="android_gradle_bridge", inputs=bridge_sources,
+            implicit=[PORT_DIR / "settings.gradle"])
+    n.build(outputs="android_bridge_apk", rule="phony", inputs=bridge_apk)
     n.newline()

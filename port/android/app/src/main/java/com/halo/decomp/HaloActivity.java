@@ -62,6 +62,18 @@ public class HaloActivity extends SDLActivity {
     private volatile int[] gestureInsets = new int[] { 0, 0, 0, 0 };
     /** the on-screen touch controls, over SDL's surface */
     private TouchControls touchControls;
+    /** the text bar over the game while it takes typed text (showTextBar), above Android's keyboard */
+    private TextBar textBar;
+    /** a hide asked for, a moment from now: the game stops and starts its text input at once to open the keyboard
+     * again, and the bar and keyboard stay up across that */
+    private final Runnable textBarHide = () -> {
+        if (textBar != null) {
+            textBar.hide();
+            if (mSurface != null)
+                mSurface.requestFocus();
+        }
+    };
+    private static final long TEXT_BAR_HIDE_DELAY_MS = 120;
     private static final int EXPORT_LAYOUT = 401, IMPORT_LAYOUT = 402, EXPORT_REPLAYS = 403, IMPORT_REPLAYS = 404,
         IMPORT_MODS = 405, IMPORT_VK_DRIVERS = 406, IMPORT_MAPS = 407;
     private String pendingLayoutExport;
@@ -126,6 +138,81 @@ public class HaloActivity extends SDLActivity {
         runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show());
     }
 
+    // ---------- the Steam sign-in's seal (port/android/host/host_steam_seal.c, for the Steam client's
+    // threads, port/linux/src/steam_downloads.c): an AES-GCM key of the Android Keystore, which never leaves
+    // it, seals the refresh token kept in the app's private storage. A copy of the file opens on no other phone, nor here once the key is gone
+    // (steamForget, at a log out; an uninstall)
+
+    private static final String STEAM_KEY_ALIAS = "steam_session";
+    private static final int STEAM_TAG_BITS = 128;
+
+    private static javax.crypto.SecretKey steamKey(boolean create) throws Exception {
+        java.security.KeyStore store = java.security.KeyStore.getInstance("AndroidKeyStore");
+        store.load(null);
+        java.security.Key key = store.getKey(STEAM_KEY_ALIAS, null);
+        if (key instanceof javax.crypto.SecretKey)
+            return (javax.crypto.SecretKey) key;
+        if (!create)
+            return null;
+        javax.crypto.KeyGenerator generator = javax.crypto.KeyGenerator.getInstance(
+                android.security.keystore.KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+        generator.init(new android.security.keystore.KeyGenParameterSpec.Builder(STEAM_KEY_ALIAS,
+                android.security.keystore.KeyProperties.PURPOSE_ENCRYPT
+                        | android.security.keystore.KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build());
+        return generator.generateKey();
+    }
+
+    /** plain sealed: its vector's length (a byte), the vector, then the cipher text and its tag; null on a failure */
+    public static byte[] steamSeal(byte[] plain) {
+        try {
+            javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, steamKey(true));
+            byte[] vector = cipher.getIV();
+            byte[] sealed = cipher.doFinal(plain);
+            byte[] out = new byte[1 + vector.length + sealed.length];
+            out[0] = (byte) vector.length;
+            System.arraycopy(vector, 0, out, 1, vector.length);
+            System.arraycopy(sealed, 0, out, 1 + vector.length, sealed.length);
+            return out;
+        } catch (Exception e) {
+            android.util.Log.w("Halo", "steam: the Keystore could not seal the sign-in: " + e);
+            return null;
+        }
+    }
+
+    /** steamSeal's undone: the plain bytes, or null (another key's, damaged, or the key gone) */
+    public static byte[] steamUnseal(byte[] sealed) {
+        try {
+            javax.crypto.SecretKey key = steamKey(false);
+            int vector = sealed.length > 0 ? sealed[0] & 255 : 0;
+            if (key == null || vector < 12 || sealed.length < 1 + vector + STEAM_TAG_BITS / 8)
+                return null;
+            javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(javax.crypto.Cipher.DECRYPT_MODE, key,
+                    new javax.crypto.spec.GCMParameterSpec(STEAM_TAG_BITS, sealed, 1, vector));
+            return cipher.doFinal(sealed, 1 + vector, sealed.length - 1 - vector);
+        } catch (Exception e) {
+            android.util.Log.w("Halo", "steam: the Keystore could not open the sign-in: " + e);
+            return null;
+        }
+    }
+
+    /** the key deleted (after a log out): what it sealed opens no more */
+    public static byte[] steamForget(byte[] unused) {
+        try {
+            java.security.KeyStore store = java.security.KeyStore.getInstance("AndroidKeyStore");
+            store.load(null);
+            store.deleteEntry(STEAM_KEY_ALIAS);
+        } catch (Exception e) {
+            android.util.Log.w("Halo", "steam: the Keystore's key could not be deleted: " + e);
+        }
+        return null;
+    }
+
     @Override
     protected String[] getLibraries() {
         return new String[] { "SDL3", "main" };
@@ -147,6 +234,11 @@ public class HaloActivity extends SDLActivity {
             touchControls = new TouchControls(this);
             mLayout.addView(touchControls, new ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            textBar = new TextBar(this, () -> {
+                if (mSurface != null)
+                    mSurface.requestFocus();
+            });
+            mLayout.addView(textBar);
         }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         hideSystemBars();
@@ -1322,6 +1414,31 @@ public class HaloActivity extends SDLActivity {
     }
 
     /**
+     * the text bar shown, for the SDL_TextInputType given, while the game
+     * takes typed text (host_sdl_text_input, port/android/host/host_sdl.c, on
+     * the game's thread); whether there is one to show
+     */
+    public boolean showTextBar(int type) {
+        if (textBar == null)
+            return false;
+        runOnUiThread(() -> {
+            textBar.removeCallbacks(textBarHide);
+            textBar.show(type);
+        });
+        return true;
+    }
+
+    /** the text bar gone, as the game's typing ends (a moment later: textBarHide) */
+    public void hideTextBar() {
+        if (textBar == null)
+            return;
+        runOnUiThread(() -> {
+            textBar.removeCallbacks(textBarHide);
+            textBar.postDelayed(textBarHide, TEXT_BAR_HIDE_DELAY_MS);
+        });
+    }
+
+    /**
      * keeps gestureInsets current; Android sends the insets again when the
      * activity rotates (after the game's native code has started on a phone
      * launched from portrait), so a single read at startup would keep the
@@ -1333,6 +1450,8 @@ public class HaloActivity extends SDLActivity {
             @Override
             public WindowInsets onApplyWindowInsets(View view, WindowInsets insets) {
                 gestureInsets = readGestureInsets(insets);
+                if (textBar != null)
+                    textBar.onInsets(insets);
                 return view.onApplyWindowInsets(insets);
             }
         });

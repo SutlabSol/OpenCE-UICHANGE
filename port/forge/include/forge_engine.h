@@ -16,7 +16,7 @@ extern "C" {
 
 /* ---------- Forge Release Version & Network Protocol Isolation (v2.4.1) */
 
-#define FORGE_VERSION_STRING "2.11.0"
+#define FORGE_VERSION_STRING "2.12.0"
 /* (this fork's own: Content Extended's Forge is 0x4628, and the two do not
 play together. The browser lists one number alone: forge_get_network_version) */
 #define FORGE_NETWORK_VERSION 0x4777
@@ -24,6 +24,16 @@ play together. The browser lists one number alone: forge_get_network_version) */
  * (port/linux/include/halo_port_limits.h), read in forge_get_network_version(),
  * so an upstream protocol bump never leaves Forge unable to join stock games. */
 #define _forge_ai_team_friendly_human _forge_ai_team_friendly
+
+/* an AI spawn's TEAM past the engine's own (_game_team_default..sentinel, kept
+as they are): the players' teams, which forge_ai.c makes the match's as its
+AI starts. In a team game RED and BLUE are the teams 0 and 1 the players are
+on, and ALL PLAYERS the engine's unused team 6, which forge_ai_team_enmity
+makes no player's enemy; in a free for all all three are ALL PLAYERS; in
+Firefight (every player on _game_team_player) all three are that */
+#define FORGE_AI_TEAM_ALL_PLAYERS 6
+#define FORGE_AI_TEAM_RED 7
+#define FORGE_AI_TEAM_BLUE 8
 
 extern int g_forge_session_enabled;
 long forge_get_network_version(void);
@@ -133,7 +143,10 @@ enum forge_ui_modal
 	_forge_modal_spawn_palette,
 	_forge_modal_object_properties,
 
-	_forge_modal_save_copy_as
+	_forge_modal_save_copy_as,
+	/* the map's general settings (the palette's button held:
+	forge_map_settings_menu.inl) */
+	_forge_modal_map_settings
 };
 
 enum forge_palette_category
@@ -145,10 +158,36 @@ enum forge_palette_category
 	_forge_cat_scenery,
 	_forge_cat_barriers_devices,
 	_forge_cat_lights,
-	_forge_cat_spawns_teleporters,
+	_forge_cat_spawns,
 	_forge_cat_objectives,
 	_forge_cat_ai_squads,
+	/* Firefight's: its spawns, generators, drop areas and resupply racks
+	(after the rest: the pack's palette file names categories by number) */
+	_forge_cat_firefight,
+	/* the teleporter nodes and every teleporter scenery (after Firefight for
+	the same reason; the palette shows it after SPAWNS: forge_3d_mode.c) */
+	_forge_cat_teleporters,
+	/* particle emitters (scenery\emitters\ and the like: fire, sparks, steam),
+	once left out; after the rest for the same reason */
+	_forge_cat_effects,
+	/* decals placed on the map's surfaces: blood, burns, bullet holes, signs */
+	_forge_cat_decals,
+	/* damage and kill volumes (forge_volumes.c): boxes, cylinders, spheres,
+	and the map's own deadly trigger volumes */
+	_forge_cat_volumes,
 	NUMBER_OF_FORGE_PALETTE_CATEGORIES
+};
+
+/* where a palette tag comes from: the tabs that are split by it show a folder
+of each (forge_catalog_category_split) */
+enum forge_catalog_origin
+{
+	_forge_origin_builtin = 0,  /* Forge's own markers: spawns, objectives */
+	_forge_origin_custom,       /* the game's props (tag_props.bin): the drop capsule, the ammo crate */
+	_forge_origin_campaign,     /* the Forge pack's: every campaign map's and the stock multiplayer maps' */
+	_forge_origin_map,          /* the map's own tags, baked in it */
+	_forge_origin_profile,      /* the chosen Tag Injector profile's, and a saved map's bake */
+	NUMBER_OF_FORGE_CATALOG_ORIGINS
 };
 
 #define _forge_cat_count NUMBER_OF_FORGE_PALETTE_CATEGORIES
@@ -187,9 +226,12 @@ enum forge_ff_spawn_type
 	_forge_ff_spawn_enemy_vehicle_only = 2, /* Approved enemy vehicle spawn (Ghost/Wraith/Banshee/Scorpion) */
 	_forge_ff_spawn_enemy_ghost_only = 3,   /* Approved Enemy Ghost spawn */
 	_forge_ff_spawn_enemy_heavy_veh = 4,    /* Approved Enemy Wraith / Scorpion / Banshee spawn */
-	_forge_ff_spawn_dropship_zone = 5,      /* Approved Covenant Spirit / Pelican dropship zone */
+	_forge_ff_spawn_dropship_zone = 5,      /* Enemy drop point taking any drop; 8-10 one kind alone (halo_firefight_route.h) */
 	_forge_ff_spawn_player_vehicle = 6,     /* Approved Player Vehicle Pad (Round 4 Warthog / Round 5 Scorpion) */
-	NUMBER_OF_FORGE_FF_SPAWN_TYPES = 7
+	NUMBER_OF_FORGE_FF_SPAWN_TYPES = 7,
+	/* where the players spawn in Firefight, over the map's starting
+	locations (halo_firefight_route.h's FF_PLAYER_SPAWN_TYPE) */
+	_forge_ff_spawn_player_spawn = 14
 };
 
 enum forge_ff_round_filter
@@ -231,11 +273,36 @@ struct forge_catalog_entry
 	uint8_t category;
 	uint8_t source_cache_id; /* 0 = forgeasset.map (universal), 1 = customforgeasset.map (SP only) */
 	uint16_t pad;
+	/* (enum forge_catalog_origin) where it comes from; and its keyword folder
+	(forge_catalog_keyword_name, 0: none). A folder row (FORGE_GROUP_FOLDER)
+	has the origin and keyword it opens */
+	uint8_t origin;
+	uint8_t keyword;
+	/* a FIREFIGHT SPAWNS row's: the marker usage it places
+	(FORGE_FF_PRESET_PATH); 0 for any other row */
+	uint16_t preset;
 	char tag_path[FORGE_TAG_PATH_MAX];
 	char display_name[64];
 };
 
-#define FORGE_MAX_CATALOG_ENTRIES 2048
+/* FIREFIGHT's FIREFIGHT SPAWNS row, which opens its kinds of marker: each
+a row of its own, 'ffsp' with a path under FORGE_FF_PRESET_PATH and its
+usage in `preset`; what it places is "spawn\\firefight_spawn" */
+#define FORGE_GROUP_FF_MENU 'ffmn'
+#define FORGE_FF_MENU_PATH "spawn\\firefight_spawns"
+#define FORGE_FF_PRESET_PATH "spawn\\firefight_spawn\\"
+#define FORGE_FF_SPAWN_PATH "spawn\\firefight_spawn"
+
+/* a palette folder's row: an origin's (keyword 0) or a keyword's within it */
+#define FORGE_GROUP_FOLDER 'fold'
+#define FORGE_FOLDER_PATH "forge_folder\\"
+
+/* whether a tab is split into origins and keyword folders */
+int forge_catalog_category_split(int category);
+char const *forge_catalog_origin_name(int origin);
+char const *forge_catalog_keyword_name(int keyword);
+
+#define FORGE_MAX_CATALOG_ENTRIES 3072
 
 /* ---------- Live Placed Instance Tracking */
 
@@ -250,17 +317,40 @@ struct forge_live_instance
 	uint8_t is_ai_unit;
 	uint8_t is_default_scenario_object; /* 1 if adopted from the base map's default scenario objects */
 	uint8_t pad_inst;
+	/* a placed vehicle made in every game, whatever the gametype's vehicles
+	(Object Settings' ALWAYS SPAWN: game_engine_vehicle_always_spawn) */
+	uint8_t always_spawn;
+	/* a placed emitter's Object Settings DEAL DAMAGE off: its effects' damage
+	parts do nothing (forge_volumes.c, effects.c); saved as OBJECT_NO_DAMAGE,
+	sent as !FN: */
+	uint8_t no_damage;
+	/* a placed scenery's Object Settings COLLISION off: seen, but nothing
+	collides with it (forge_3d_no_collision_*); saved as OBJECT_NO_COLLISION,
+	sent as !FK: */
+	uint8_t no_collision;
 	uint16_t gametype_flags;   /* 0 = All Modes, bit0=CTF, bit1=Slayer, bit2=Oddball, bit3=KOTH, bit4=Race */
 	int16_t netgame_flag_type; /* Scenario netgame_flag type (6=tele_from, 7=tele_to, 8=hill, 2=oddball, 0=ctf) or -1 */
 	int16_t team_designator;   /* Reference/Channel ID or Team Index */
+	/* a teleporter scenery's netgame flag (netgame_flag_type 6 or 7): where it
+	stands from the object, up and turned (forge_tele_*) */
+	float tele_dz, tele_dyaw;
 	float orig_x, orig_y, orig_z; /* Original scenario position if is_default_scenario_object == 1 */
 	float x, y, z;
 	float yaw, pitch, roll;
+	/* its size (0: as made, 1): a scenery's or an effect's, Object Settings'
+	SCALE (forge_3d_scale_apply), saved as the OBJECT_SCALE line before its
+	OBJECT line and sent as !FZ: */
+	float scale;
 	char tag_path[FORGE_TAG_PATH_MAX];
 	char label[64];
 };
 
-#define FORGE_MAX_LIVE_INSTANCES 1024
+/* (what Forge tracks on a map: the map's own objects it takes over, spawns,
+flags and AI spawns too, and what is placed. Big maps (The Silent
+Cartographer: Evolved) have more than 1024 of their own; the engine holds
+HALO_PORT_MAXIMUM_OBJECTS_PER_MAP, 8192. About 380 bytes each, on the heap
+with the rest of g_forge) */
+#define FORGE_MAX_LIVE_INSTANCES 4096
 
 /* ---------- 3D Snap Point Configuration Per Tag */
 
@@ -507,7 +597,16 @@ char const *forge_ai_group_name(int group);
 int forge_ai_row_is_random(struct forge_catalog_entry const *entry);
 int forge_ai_row_group(struct forge_catalog_entry const *entry);
 int forge_ai_tag_is_poor(char const *path);
-/* the rows of an AI spawn's properties: its own, then the panel's */
+/* the rows of an AI spawn's properties. Its panel's first page has UNIT
+SETTINGS >, SPAWN SETTINGS > and GOAL SETTINGS >, then ROT SNAP, DROP TO FLOOR
+and DELETE; each page opens on its rows and closes on < BACK:
+	UNIT    AI, TEAM, LOADOUT, CLOAKED, GAME MODE, FLYING HEIGHT (a flying
+	        unit's alone)
+	SPAWN   AT START, RESPAWN (keep alive), RESPAWN DELAY, RESPAWN LIMIT,
+	        SPAWN EFFECT
+	GOAL    GOAL, then what it has of PATROL VOLUME or ROUTE (the target row),
+	        PLAYER, RANGE and STOP DISTANCE (a team friendly to players), SPEED
+	        and ALERT TIME */
 enum forge_ai_spawn_row
 {
 	_forge_ai_row_variant = 0,
@@ -519,12 +618,85 @@ enum forge_ai_spawn_row
 	_forge_ai_row_respawn_total,
 	_forge_ai_row_game_mode,
 	_forge_ai_row_spawn_effect,
+	_forge_ai_row_cloaked,
+	_forge_ai_row_hover_height,
+	/* (the pages, opened on a press) */
+	_forge_ai_row_unit_page,
+	_forge_ai_row_spawn_page,
+	_forge_ai_row_goal_page,
 	NUMBER_OF_FORGE_AI_SETTING_ROWS,
 	_forge_ai_row_rot_snap = NUMBER_OF_FORGE_AI_SETTING_ROWS,
 	_forge_ai_row_floor,
 	_forge_ai_row_delete,
+	_forge_ai_row_goal,
+	_forge_ai_row_goal_target,
+	_forge_ai_row_goal_who,
+	_forge_ai_row_goal_start,
+	_forge_ai_row_goal_follow,
+	/* (SPEED: WALK or RUN, any goal but none) */
+	_forge_ai_row_goal_speed,
+	/* (ALERT TIME: how long the squad stays alert, any goal but none) */
+	_forge_ai_row_goal_alert,
+	/* (< BACK: any page's, to the first) */
+	_forge_ai_row_goal_back,
 	NUMBER_OF_FORGE_AI_ROWS
 };
+
+/* whether an AI spawn's row opens or closes a page (on a press, not a step) */
+#define FORGE_AI_ROW_IS_PAGE_BUTTON(row) ((row) == _forge_ai_row_unit_page || (row) == _forge_ai_row_spawn_page || \
+	(row) == _forge_ai_row_goal_page || (row) == _forge_ai_row_goal_back)
+
+/* an AI spawn's GOAL (forge_ai_spawn_entry.goal): what its units do when they
+are not fighting */
+enum forge_ai_goal
+{
+	/* (as ever: they stand, and fight from around the spawn) */
+	_forge_ai_goal_none = 0,
+	/* roam the ground in an AI PATROL volume (goal_link its number), each unit
+	from point to point of its own; they chase out to its PURSUIT RANGE */
+	_forge_ai_goal_patrol,
+	/* walk an AI route (goal_link its number): a leader walks it, the others
+	follow the leader */
+	_forge_ai_goal_route,
+	/* GO TO PLAYER: go to the nearest player of goal_who within goal_start (0:
+	anywhere), stopping goal_follow from it when their team is a players'
+	(red, blue, all players); others go all the way, at a run */
+	_forge_ai_goal_hunt,
+	NUMBER_OF_FORGE_AI_GOALS
+};
+/* (FOLLOW PLAYER, a map's of before: read as GO TO PLAYER) */
+#define FORGE_AI_GOAL_LEGACY_FOLLOW 4
+/* (ALERT TIME, goal_alert's seconds: 0 is this) */
+#define FORGE_AI_GOAL_ALERT_DEFAULT 12
+
+/* whom GO TO PLAYER goes for (goal_who) */
+enum
+{
+	_forge_ai_goal_who_any = 0,
+	_forge_ai_goal_who_red,
+	_forge_ai_goal_who_blue,
+	NUMBER_OF_FORGE_AI_GOAL_WHO
+};
+
+/* goal_who's byte also holds the GOAL's SPEED: its low bits whom (above), its
+top bit RUN (they go at a fight's pace out of one too; 0: WALK, the engine's
+alert pace). Packed there, the saved |gw= and the !FJ: packet carry it as they
+are */
+#define FORGE_AI_GOAL_WHO_MASK 0x0F
+#define FORGE_AI_GOAL_RUN_BIT 0x80
+#define FORGE_AI_GOAL_WHO(value) ((int)((value) & FORGE_AI_GOAL_WHO_MASK) < NUMBER_OF_FORGE_AI_GOAL_WHO ? \
+	(int)((value) & FORGE_AI_GOAL_WHO_MASK) : 0)
+#define FORGE_AI_GOAL_RUNS(value) (((value) & FORGE_AI_GOAL_RUN_BIT) != 0)
+
+/* the rows an AI spawn's panel shows (the goal's page's while it is open),
+how many */
+int forge_ai_spawn_rows(int32_t live_idx, int *rows);
+/* a spawn's goal, as the network has it (!FJ:) */
+void forge_ai_spawn_goal_apply(int32_t live_idx, int goal, int link, int who, int start, int follow, int alert);
+/* the spawns' lines to their goals, in Forge mode: those of a spawn held or
+pointed at, and those of all the spawns linked to a route or AI PATROL volume
+held or pointed at */
+void forge_ai_goal_links_render(void (*draw_line)(float const *from, float const *to));
 
 int32_t forge_ai_spawn_unit_live(
 	char const *actor_variant_path,
@@ -556,7 +728,15 @@ int forge_ai_spawn_settings_get(int32_t live_idx, struct forge_ai_spawn_entry *s
 void forge_ai_spawn_settings_set(int32_t live_idx, struct forge_ai_spawn_entry const *settings);
 void forge_ai_spawn_copy_settings(int source_entry, int32_t live_idx);
 void forge_ai_spawn_row_text(int32_t live_idx, int row, char *label, size_t label_size, char *value, size_t value_size);
-void forge_ai_spawn_row_step(int32_t live_idx, int row, int dir);
+/* a row stepped: 0, or FORGE_AI_ROUTE_PRESS_PAGE_OPENED/CLOSED (forge_ai_routes.h)
+for a page opened or closed */
+int forge_ai_spawn_row_step(int32_t live_idx, int row, int dir);
+/* the page row (UNIT/SPAWN/GOAL SETTINGS >) the last BACK came back to */
+int forge_ai_spawn_page_return_row(void);
+/* a page closed (back/Esc): 1 when one was open, the page row then forge_ai_spawn_page_return_row */
+int forge_ai_spawn_page_back(int32_t live_idx);
+/* the title of the panel's page */
+char const *forge_ai_spawn_panel_title(int32_t live_idx);
 void forge_ai_spawn_label(struct forge_live_instance const *inst, char *text, size_t text_size);
 void forge_ai_spawn_net_apply(
 	int32_t live_idx,
@@ -570,10 +750,20 @@ void forge_ai_spawn_net_apply(
 	unsigned int gametype_flags,
 	int detached,
 	int spawn_effect);
+/* !FA:'s effect field: the spawn effect, CLOAKED and HEIGHT in one number (a
+peer from before them reads the effect alone) */
+#define FORGE_AI_PACKED_EFFECT_MASK 0x0F
+#define FORGE_AI_PACKED_CLOAKED 0x10
+#define FORGE_AI_PACKED_HEIGHT_SHIFT 5
+int forge_ai_spawn_effect_packed(struct forge_ai_spawn_entry const *entry);
 /* a spawn's units past its first as they start: how many it has laid out (0: one
 at its point), and where unit `index` stands. Forge's preview draws them */
 int forge_ai_spawn_grid_count(int32_t live_idx);
 int forge_ai_spawn_grid_point(int32_t live_idx, int index, union real_point3d *point);
+/* where a flying unit of a spawn with a HEIGHT takes to (unit `index`, 0 the
+first, at the marker): 0 for a spawn with none, or not of flyers. Forge mode
+draws them there, a line down to where they stand; they start there */
+int forge_ai_spawn_hover_point(int32_t live_idx, int index, union real_point3d *point);
 /* a spawn effect shown here, and told to the clients */
 void forge_ai_spawn_effect_play(int effect, union real_point3d const *point);
 /* a spawn's model out of reach of all but Forge's user */
@@ -593,6 +783,10 @@ long forge_ai_actor_unit_definition(char const *path);
 /* how a tag's object looks with no object made of it */
 void forge_model_look_get(long object_definition, char const *actor_path, float colors[4][3], int colored[4],
 	short *forced_shader);
+
+/* the spawns' units as they play (the host's, each tick, in Forge and in a match
+of the map): CLOAKED kept on, HEIGHT kept over the ground */
+void forge_ai_units_update(void);
 
 /* ---------- Prototypes: forge_3d_mode.c */
 
@@ -622,6 +816,16 @@ void forge_3d_move_instance(int32_t live_idx, float x, float y, float z, float y
 void forge_3d_move_instance_ext(int32_t live_idx, float x, float y, float z, float yaw, float pitch, float roll, int is_held, int broadcast_net);
 void forge_3d_delete_instance(int32_t live_idx, int broadcast_net);
 void forge_3d_marker_usage_apply(int32_t live_idx, int16_t usage);
+/* ---------- Teleporters: the 'tele' nodes and teleporter scenery. Each is a
+SENDER (netgame flag 6), a RECEIVER (7) or, scenery only, OFF, on a channel
+0..15. On the network, as !FU's usage and a scenery's !FH/!FS team: the
+channel, with the role (0 off, 1 sender, 2 receiver) at bit 8 and
+FORGE_TELE_USAGE_SET, which a palette's team (0) or a node's channel has not */
+#define FORGE_TELE_CHANNELS 16
+#define FORGE_TELE_USAGE_SET 0x400
+#define FORGE_TELE_USAGE(role, channel) ((int16_t)(FORGE_TELE_USAGE_SET | ((role) << 8) | ((channel) & 0xFF)))
+int forge_teleporter_scenery_tag(uint32_t group_tag, char const *tag_path);
+int forge_3d_teleporter_net_usage(int32_t live_idx);
 void forge_3d_dropship_routes_render(void (*draw_piece)(float const *from, float const *to, int kind));
 int forge_is_unit_in_monitor_mode(long unit_index);
 int forge_get_local_player_abs_index(void);
@@ -633,6 +837,14 @@ void forge_init_map_scenario_entities(void);
 void forge_3d_reset_session_tracking(void);
 void forge_cancel_or_release_held_item(void);
 int forge_has_held_item_to_cancel(void);
+/* the undo history (moves, turns, properties, placings; UNDO/REDO in MAP
+SETTINGS, ctrl+z/ctrl+y on a desktop): a step undone (`redo` FALSE) or
+redone, TRUE when one was; how many each way; emptied with a level; an
+instance moved to another slot */
+int forge_3d_history_step(int redo);
+int forge_3d_history_steps(int redo);
+void forge_3d_history_clear(void);
+void forge_3d_history_remap(int32_t from_idx, int32_t to_idx);
 
 /* ---------- Prototypes: forge_network.c */
 
@@ -660,6 +872,22 @@ void forge_network_send_transform_ext(
 	int immediate);
 void forge_network_send_delete_ext(int32_t live_idx, long obj_idx);
 void forge_network_send_marker_usage(int32_t live_idx, int16_t usage);
+/* a placed vehicle's ALWAYS SPAWN (!FV:), and its setting here
+(forge_3d_mode.c's Object Settings row) */
+void forge_network_send_always_spawn(int32_t live_idx, int on);
+void forge_3d_always_spawn_apply(int32_t live_idx, int on);
+/* a placed scenery's or effect's size (SCALE): its object, its record, and
+the other machines' (!FZ:) */
+#define FORGE_SCALE_MIN 0.1f
+#define FORGE_SCALE_MAX 10.0f
+void forge_network_send_scale(int32_t live_idx, float scale);
+void forge_3d_scale_apply(int32_t live_idx, float scale);
+/* the size the next object spawned is made at (0: as made): a saved map's
+OBJECT_SCALE line, a copy's */
+extern float g_forge_next_spawn_scale;
+/* the next object spawned is a vehicle set to ALWAYS SPAWN (read and cleared
+by forge_3d_spawn_object_at_slot) */
+extern int g_forge_next_spawn_always;
 void forge_network_send_ai_spawn(int32_t live_idx);
 int forge_network_intercept_chat_packet(long machine_index, char const *text, int is_from_client_to_host);
 void forge_network_pre_handle_object_changes(void const *entries, short count);

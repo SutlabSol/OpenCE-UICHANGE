@@ -370,7 +370,15 @@ static int is_custom_map_leaf_forge_made(char const *leaf_no_ext)
 		}
 	}
 
-	/* Also check if custom_maps/<name>.map has the 'FLG1' Forge header marker or levels\forge\ scenario */
+	/* Also check if custom_maps/<name>.map has the 'FLG1' Forge header marker or levels\forge\ scenario
+	(the file the game finds for it: in a Map Manager folder too) */
+	{
+		extern boolean custom_edition_map_file_path(char const *map_name, char *path);
+		char found[256];
+
+		if (custom_edition_map_file_path(leaf_no_ext, found))
+			return is_forge_created_map_file(found, leaf_no_ext, NULL, NULL, 0);
+	}
 	snprintf(check_path, sizeof(check_path), "custom_maps/%s.map", leaf_no_ext);
 	return is_forge_created_map_file(check_path, leaf_no_ext, NULL, NULL, 0);
 }
@@ -1366,14 +1374,71 @@ boolean forge_player_profile_get(long player_profile_index, struct player_profil
 
 /* the game variant is a Forge game's; never in the firing range, played
 alone with whatever variant the last game left */
+static int forge_variant_named_forge(struct game_variant const *v)
+{
+	return v &&
+		(_wcsicmp(v->human_readable_game_description, L"Forge") == 0 ||
+		 v->universal_variant.score_to_win == 0x3FFFFFFF);
+}
+
 static int forge_variant_is_forge(void)
 {
 	extern boolean firing_range_requested(void);
-	struct game_variant const *v = game_engine_get_variant();
 
-	return !firing_range_requested() && v &&
-		(_wcsicmp(v->human_readable_game_description, L"Forge") == 0 ||
-		 v->universal_variant.score_to_win == 0x3FFFFFFF);
+	return !firing_range_requested() && forge_variant_named_forge(game_engine_get_variant());
+}
+
+/* the gametype the menus had before a Forge game put its own in their place
+(mp level select), given back as the player leaves Forge's menus: else the
+next game hosted without choosing a gametype (a LOCAL game, a lobby's) was
+the Forge one, and menu_tags_loaded turned Forge on in it */
+extern boolean player_ui_game_variant_specified(struct game_variant *variant);
+extern void player_ui_set_game_variant(struct game_variant *variant);
+extern void player_ui_set_game_variant_options(struct game_variant_options const *options);
+extern struct game_variant_options const *player_ui_get_game_variant_options(void);
+extern void game_engine_override_game_variant(struct game_variant const *variant);
+
+static struct
+{
+	int kept;
+	struct game_variant variant;
+	struct game_variant_options options;
+} s_pre_forge_variant;
+
+static void forge_variant_keep_previous(void)
+{
+	struct game_variant current;
+
+	if (player_ui_game_variant_specified(&current) && !forge_variant_named_forge(&current))
+	{
+		struct game_variant_options const *options = player_ui_get_game_variant_options();
+
+		s_pre_forge_variant.variant = current;
+		if (options)
+			s_pre_forge_variant.options = *options;
+		else
+			game_variant_options_default(&current, &s_pre_forge_variant.options);
+		s_pre_forge_variant.kept = 1;
+	}
+}
+
+/* (the menus' and the next round's only: a server still up keeps its own
+until the game it hosts is set up again) */
+static void forge_variant_give_back(void)
+{
+	struct game_variant current;
+
+	if (!player_ui_game_variant_specified(&current) || !forge_variant_named_forge(&current))
+		return;
+	if (!s_pre_forge_variant.kept)
+	{
+		build_game_variant_slayer(&s_pre_forge_variant.variant);
+		game_variant_options_default(&s_pre_forge_variant.variant, &s_pre_forge_variant.options);
+	}
+	player_ui_set_game_variant(&s_pre_forge_variant.variant);
+	player_ui_set_game_variant_options(&s_pre_forge_variant.options);
+	game_engine_override_game_variant(&s_pre_forge_variant.variant);
+	s_pre_forge_variant.kept = 0;
 }
 
 boolean pc_menu_event_function_invoke(
@@ -1423,6 +1488,7 @@ boolean pc_menu_event_function_invoke(
 			 strcmp(fn_name, "main menu initialize") == 0))
 		{
 			g_forge_session_enabled = 0;
+			forge_variant_give_back();
 		}
 	}
 
@@ -1527,6 +1593,7 @@ boolean pc_menu_event_function_invoke(
 			struct game_variant forge_var;
 			struct game_variant_options forge_opts;
 
+			forge_variant_keep_previous();
 			if (ui_widget_port_gametypes(gtypes, 64, &last_gt) > 0)
 				ui_widget_port_gametype_choose(gtypes[0]);
 
@@ -2161,8 +2228,11 @@ void network_chat_update(void)
 		return;
 	}
 
-	/* Auto-enable g_forge_session_enabled if we joined a Forge game via standard Join Game */
-	if (!g_forge_session_enabled && forge_variant_is_forge())
+	/* Auto-enable g_forge_session_enabled if we joined a Forge game via standard Join Game
+	(a client's alone: the host's session is its menus', and a variant left
+	from a Forge game must never turn a match it hosts into one) */
+	if (!g_forge_session_enabled && game_connection() == _game_connection_network_client &&
+		forge_variant_is_forge())
 	{
 		g_forge_session_enabled = 1;
 	}
@@ -2635,6 +2705,7 @@ void menu_tags_unloaded(void)
 	g_last_forge_map_name[0] = 0;
 	g_forge.monitor_cam_initialized = 0;
 	g_forge.live_instance_count = 0;
+	forge_3d_history_clear();
 	g_forge.grabbed_live_index = -1;
 	g_forge.grabbed_object_index = NONE;
 	g_forge.hovered_live_index = -1;
@@ -2667,11 +2738,18 @@ void menu_tags_loaded(char const *map_name)
 	s_save_forge_btn_tag = NONE;
 	g_last_forge_map_name[0] = 0;
 	g_forge.live_instance_count = 0;
+	forge_3d_history_clear();
 
 	if (map_name && (_stricmp(map_name, "ui") == 0 || _stricmp(map_name, "levels\\ui\\ui") == 0))
 	{
 		forge_reset_transient_session_state(0);
 		g_forge_session_enabled = 0;
+		/* (back at the menus from a Forge game: the gametype from before it,
+		else the next game started without one chosen through the menus that
+		give it back - a LOCAL game, the PLAY menu's - loaded as Forge again.
+		A Forge lobby still hosted between its rounds keeps its own) */
+		if (!network_game_is_active())
+			forge_variant_give_back();
 		g_forge.mode = _forge_mode_play;
 		g_forge.active_modal = _forge_modal_none;
 		forge_menu_custom_edition_maps_look_again();
@@ -2689,6 +2767,13 @@ void menu_tags_loaded(char const *map_name)
 			dispose_global_network_game_server();
 			network_game_accept_remote_connections(FALSE);
 		}
+	}
+
+	/* (an MCC level's pause menus are MCC's own, port/linux/game/mcc_pause.c,
+	   which have their SAVE MAP.. in a Forge session) */
+	{
+		extern void mcc_pause_forge(boolean session);
+		mcc_pause_forge(g_forge_session_enabled && map_name && strcmp(map_name, "ui") != 0);
 	}
 
 	/* Patch "SAVE FORGE MAP" button into the in-game Escape Pause Menu when in a Forge session */
@@ -3665,6 +3750,9 @@ BOOL platform_next_keystroke(struct forge_sdl_keystroke *keystroke)
 below): the port's, its buttons remapped and the touch controls' in it, for
 Forge's controls (forge_pad_read) */
 extern int xinput_device_port(HANDLE device);
+/* (a custom controller layout's buttons put back where they were pressed:
+Forge's binds name them by where they sit) */
+extern void xinput_forge_unmapped(XINPUT_GAMEPAD *pad);
 static XINPUT_GAMEPAD s_forge_pad;
 static BOOL s_forge_pad_valid;
 
@@ -3679,6 +3767,8 @@ DWORD WINAPI XInputGetState(HANDLE hDevice, PXINPUT_STATE pState)
 	{
 		s_forge_pad_valid = rc == ERROR_SUCCESS;
 		s_forge_pad = pState->Gamepad;
+		if (s_forge_pad_valid && forge_window_is_focused())
+			xinput_forge_unmapped(&s_forge_pad);
 	}
 	return rc;
 }

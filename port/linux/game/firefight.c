@@ -37,6 +37,8 @@ Implements:
 #include "memory/data.h"
 #include "networking/network_game_globals.h"
 #include "objects/damage.h"
+#include "objects/object_definitions.h"
+#include "physics/collision_model_definitions.h"
 #include "objects/objects.h"
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
@@ -47,6 +49,7 @@ Implements:
 #include "units/units.h"
 
 #include "halo_firefight.h"
+#include "halo_port_limits.h"
 #include "bots.h"
 #include "halo_skulls.h"
 #include "campaign_score.h"
@@ -240,6 +243,48 @@ int firefight_map_reach_skull_to_40_skull(
 	case _firefight_skull_grunt_birthday_party_bit: return _skull_grunt_birthday_party;
 	default:                                        return NONE;
 	}
+}
+
+/* PLASMA FLINCH's share of a plasma hit's stun a player takes in Firefight
+(units.c's unit_damage_aftermath; 1 out of Firefight: the game's own) */
+real firefight_player_stun_scale(
+	void)
+{
+	struct game_variant_options const *opts;
+	byte flinch;
+
+	if (!firefight_active())
+		return 1.0f;
+	opts = game_variant_options_get();
+	flinch = opts ? opts->firefight_plasma_flinch : 0;
+	if (!(flinch & FIREFIGHT_PLASMA_FLINCH_SET))
+		return 0.0f;
+	return 0.25f * (real)PIN(flinch & ~FIREFIGHT_PLASMA_FLINCH_SET, 0, 4);
+}
+
+/* (actor_combat.c) how often Firefight's enemies fire, of what their tags
+have: their rate and their bursts this much, the pauses between bursts by
+its inverse. Firefight's waves see the players across the map and charge
+them (firefight_spawner.c's pursuit), so as the campaign's they fired too
+often; 1 for anyone else's, and outside Firefight */
+/* (the host's setting game.firefight_enemy_fire_rate, percent) */
+long config_integer(const char *name);
+real firefight_enemy_fire_pacing(
+	short team_index)
+{
+	if (!firefight_active() || team_index == NONE || !firefight_team_is_hostile(team_index))
+		return 1.0f;
+	return (real)PIN(config_integer("game.firefight_enemy_fire_rate"), 10, 100) / 100.0f;
+}
+
+/* (actor_combat.c) Firefight's enemies' aim error, of their tags'
+(game.firefight_enemy_aim_error, percent); 1 for anyone else's */
+real firefight_enemy_aim_error_scale(
+	short team_index)
+{
+	if (!firefight_active() || team_index == NONE || !firefight_team_is_hostile(team_index))
+		return 1.0f;
+	return (real)PIN(config_integer("game.firefight_enemy_aim_error"), 100, 300) / 100.0f;
 }
 
 boolean firefight_active(
@@ -658,7 +703,8 @@ static void firefight_give_player_weapon(
 	if (unit_index == NONE || !weapon_tag_path)
 		return;
 	weap_def = tag_loaded(WEAPON_DEFINITION_TAG, weapon_tag_path);
-	if (weap_def == NONE)
+	/* (a flag or a ball, whatever its name: none in a loadout) */
+	if (weap_def == NONE || firefight_weapon_is_objective(weap_def, weapon_tag_path))
 		return;
 	object_placement_data_new(&placement, weap_def, NONE);
 	object_get_origin(unit_index, &placement.position);
@@ -695,12 +741,18 @@ static char const *firefight_resolve_loadout_weapon_path(byte weapon_choice, sho
 	{
 		static unsigned long s_fiesta_rng = 0x9E3779B9UL;
 		char const *pool[NUMBEROF(s_ff_loadout_weapon_paths)];
+		char const *map_weapon = firefight_map_loadout_weapon(other);
 		short count = 0;
 		short index;
 
+		/* (MAP CONTENT's weapons: ONLY MAP's in the game's place) */
+		if (map_weapon)
+			return map_weapon;
 		for (index = 0; index < (short)NUMBEROF(s_ff_loadout_weapon_paths); index++)
 		{
-			if (tag_loaded(WEAPON_DEFINITION_TAG, s_ff_loadout_weapon_paths[index]) != NONE &&
+			long tag = tag_loaded(WEAPON_DEFINITION_TAG, s_ff_loadout_weapon_paths[index]);
+
+			if (tag != NONE && !firefight_weapon_is_objective(tag, s_ff_loadout_weapon_paths[index]) &&
 				(!other || strcmp(other, s_ff_loadout_weapon_paths[index]) != 0))
 			{
 				pool[count++] = s_ff_loadout_weapon_paths[index];
@@ -769,6 +821,23 @@ void firefight_apply_player_spawn_traits(
 		}
 	}
 	player->speed_multiplier = speed_mult;
+	/* (MAP CONTENT's SHIELDS, the host's for this map: OFF none at all; ON
+	the stock player's on a map whose player has none, a shield given as
+	Tilt's are, damage.c's object_shield_given) */
+	switch (firefight_health_rule(_firefight_health_rule_shields))
+	{
+	case _firefight_health_rule_off:
+		unit->object.maximum_shield_vitality = 0.0f;
+		shield_mult = 0.0f;
+		break;
+	case _firefight_health_rule_on:
+		if (unit->object.maximum_shield_vitality <= 0.0f)
+		{
+			unit->object.maximum_shield_vitality = FIREFIGHT_GIVEN_SHIELD_VITALITY;
+			unit->object.shield_vitality = 1.0f;
+		}
+		break;
+	}
 	if (shield_mult <= 0.0f)
 		unit->object.shield_vitality = 0.0f;
 	else if (shield_mult > 1.0f)
@@ -849,6 +918,18 @@ void firefight_apply_player_spawn_traits(
 		default:
 			break;
 		}
+	}
+
+	/* (MAP CONTENT's PLAYER LOADOUT, the host's for this map: the map's
+	weapons in the slots it sets; a slot not set keeps the game's) */
+	{
+		char const *map_primary = firefight_map_loadout_override(0);
+		char const *map_secondary = firefight_map_loadout_override(1);
+
+		if (map_primary)
+			pri_weap = map_primary;
+		if (map_secondary)
+			sec_weap = map_secondary;
 	}
 
 	unit_delete_all_weapons(unit_index);
@@ -998,10 +1079,9 @@ static long firefight_prep_countdown_ticks(
 	short round_num)
 {
 	struct game_variant_options const *opts = game_variant_options_get();
-	boolean has_vehicles = opts &&
-		((round_num == 1 && opts->firefight_early_vehicle != _firefight_early_vehicle_none) ||
-			(round_num == 2 && opts->firefight_round2_vehicle != _firefight_early_vehicle_none) ||
-			(round_num == 3 && opts->firefight_late_vehicle != _firefight_late_vehicle_none));
+	/* (the players' vehicles there from the start, ALL AT SPAWN's: the first
+	round's countdown is the one they're found in) */
+	boolean has_vehicles = round_num == 1 && firefight_player_vehicles_at_start();
 	byte mode = opts ? opts->firefight_prep_countdown : _firefight_prep_15s;
 
 	/* Round 1 Wave 1 starts briskly unless vehicles are deployed right away */
@@ -1141,10 +1221,11 @@ static void firefight_begin_pre_round(
 	ff_state.phase_timer_ticks = firefight_prep_countdown_ticks(round_num);
 	firefight_update_round_and_set_skulls();
 
-	/* Deploy the new round's vehicle, ordnance, and friendly AI (the rounds' vehicles stay till the set's end) */
+	/* The players' vehicles made again where any went (they're there from the
+	start, and stay the whole game), the round's ordnance, and friendly AI */
 	if (!network_game_distributed_client())
 	{
-		firefight_spawn_scheduled_round_vehicles(round_num, FALSE);
+		firefight_spawn_player_vehicles();
 		if (ff->ordnance_drops == _firefight_ordnance_per_round ||
 			ff->ordnance_drops == _firefight_ordnance_frequent ||
 			(ff->ordnance_drops == _firefight_ordnance_per_set && round_num == 1))
@@ -1164,6 +1245,8 @@ static void firefight_begin_pre_round(
 		round_num == 1 ? _ff_banner_set_start : _ff_banner_round_start,
 		round_num == 1 ? ff_state.current_set : round_num,
 		4 * TICKS_PER_SECOND);
+	/* (the round's objective: firefight_objectives.c) */
+	firefight_objectives_round_starting(round_num);
 }
 
 static void firefight_begin_wave(
@@ -1190,6 +1273,8 @@ static void firefight_begin_wave(
 		wave_num == FIREFIGHT_WAVES_PER_ROUND ? _ff_banner_boss_wave : _ff_banner_wave_start,
 		wave_num,
 		3 * TICKS_PER_SECOND);
+	/* (the wave's objective, and the round's at its wave: firefight_objectives.c) */
+	firefight_objectives_wave_starting(wave_num);
 }
 
 /* ---------- kill & melee notifications */
@@ -1257,6 +1342,8 @@ void firefight_notify_actor_or_unit_killed(
 	}
 
 	firefight_prune_dead_tracked_enemies();
+	firefight_objectives_enemy_killed(actor_index, dead_unit_index, killer_player_index, headshot, melee, explosion,
+		splatter);
 	ff_state.team_score = campaign_score_team_points();
 	while (ff_state.next_bonus_life_score > 0 && ff_state.team_score >= ff_state.next_bonus_life_score)
 	{
@@ -1447,18 +1534,18 @@ void firefight_variant_options_default(
 	options->firefight_unit_toggles = FIREFIGHT_UNIT_MASK_ALL;
 	options->firefight_set_escalation = _firefight_escalation_medium;
 	options->firefight_dropship_mode = _firefight_dropship_auto;
-	options->firefight_next_wave_mode = _firefight_next_wave_reach_default;
+	options->firefight_next_wave_mode = _firefight_next_wave_timer_60s;
 	options->firefight_player_faction_mode = _firefight_player_faction_spartan;
-	options->firefight_early_vehicle = _firefight_early_vehicle_warthog;
-	options->firefight_round2_vehicle = _firefight_early_vehicle_none;
-	options->firefight_late_vehicle = _firefight_late_vehicle_scorpion;
+	options->firefight_vehicle_spawns = _firefight_vehicle_spawns_all;
+	options->firefight_plasma_flinch = FIREFIGHT_PLASMA_FLINCH_SET | 0;
+	options->firefight_unused_vehicle = 0;
 	options->firefight_prep_countdown = _firefight_prep_30s;
 	options->firefight_skull_progression_mode = _firefight_skull_prog_standard;
 	options->firefight_player_shields = _firefight_shields_normal;
 	options->firefight_player_speed = _firefight_speed_100;
 	options->firefight_player_gravity = _firefight_gravity_100;
 	options->firefight_infinite_ammo = _firefight_ammo_normal;
-	options->firefight_last_man_boost = TRUE;
+	options->firefight_map_content = _firefight_map_content_vanilla;
 	options->firefight_wave_size_scale = _firefight_wave_size_100;
 	options->firefight_boss_wave_mode = _firefight_boss_wave_5_only;
 	options->firefight_enemy_loadout = _firefight_enemy_loadout_default;
@@ -1504,13 +1591,6 @@ void firefight_builtin_variant_options(
 			options->firefight_wave_size_scale = p->wave_size;
 		if (p->enemy_loadout)
 			options->firefight_enemy_loadout = p->enemy_loadout;
-		/* (a variant with no vehicles has none for its players either) */
-		if (!p->vehicle_drops_enabled)
-		{
-			options->firefight_early_vehicle = _firefight_early_vehicle_none;
-			options->firefight_round2_vehicle = _firefight_early_vehicle_none;
-			options->firefight_late_vehicle = _firefight_late_vehicle_none;
-		}
 		return;
 	}
 }
@@ -1530,6 +1610,7 @@ static boolean firefight_initialize_for_new_map(
 	short i;
 
 	csmemset(&ff_state, 0, sizeof(ff_state));
+	firefight_drops_reset();
 	if (opts && opts->firefight_unit_toggles == 0)
 	{
 		struct game_variant_options fixed = *opts;
@@ -1551,8 +1632,11 @@ static boolean firefight_initialize_for_new_map(
 		ff_state.tracked_enemy_units[i] = NONE;
 	for (i = 0; i < FIREFIGHT_MAX_SET_VEHICLES; i++)
 		ff_state.deployed_set_vehicles[i] = NONE;
+	ff_state.deployed_set_vehicle_count = 0;
+	firefight_player_vehicles_reset();
 	for (i = 0; i < FIREFIGHT_MAX_GENERATORS; i++)
 		ff_state.generators[i].object_index = NONE;
+	firefight_ordnance_pod_reset();
 
 	/* Synchronize global campaign difficulty with Firefight variant difficulty */
 	game_difficulty_level_set((short)PIN(ff->difficulty, 0, NUMBER_OF_GAME_DIFFICULTY_LEVELS - 1));
@@ -1565,6 +1649,7 @@ static boolean firefight_initialize_for_new_map(
 			opts->firefight_generator_health : 2000;
 		firefight_generators_initialize(ff->generator_count, max_hp);
 	}
+	firefight_objectives_initialize_for_new_map();
 
 	firefight_begin_pre_round(1);
 	return TRUE;
@@ -1580,6 +1665,7 @@ static void firefight_dispose_from_old_map(
 		firefight_stats_record_match_end(tag_get_name(global_scenario_index));
 		ff_state.session_elapsed_ticks = 0;
 	}
+	firefight_objectives_dispose();
 	firefight_spawner_dispose_map();
 }
 
@@ -1637,6 +1723,8 @@ static void firefight_pregame_post_rasterize(
 static void firefight_post_rasterize_objects(
 	void)
 {
+	/* (Data Link's hill: firefight_objectives.c) */
+	firefight_objectives_render();
 	firefight_hud_post_rasterize();
 }
 
@@ -1668,6 +1756,7 @@ static void firefight_player_killed_player(
 
 	if (ff_state.shared_lives_remaining > 0)
 		ff_state.shared_lives_remaining--;
+	firefight_objectives_player_died(dead_player_index);
 
 	living_players = firefight_count_living_players(&total_players);
 	if (ff_state.shared_lives_remaining == 0 && living_players == 1 && !ff_state.last_man_standing_announced)
@@ -1675,6 +1764,63 @@ static void firefight_player_killed_player(
 		ff_state.last_man_standing_announced = TRUE;
 		firefight_announce_banner(_ff_banner_last_man_standing, 0, 4 * TICKS_PER_SECOND);
 	}
+}
+
+/* MAP CONTENT's SHIELD REGEN for a Firefight player's unit (damage.c's
+recharge): -1 the engine's own, 0 none, 1 Halo's own (at the stock rate
+where the map's player has none). A shield SHIELDS gave recharges unless
+SHIELD REGEN is OFF */
+short firefight_player_shield_regen(long object_index)
+{
+	struct unit_datum *unit;
+	struct object_definition *definition;
+	byte rule;
+
+	if (!firefight_active() || object_index == NONE)
+		return -1;
+	unit = (struct unit_datum *)object_try_and_get_and_verify_type(object_index, _object_mask_unit);
+	if (!unit || unit->unit.player_index == NONE)
+		return -1;
+	rule = firefight_health_rule(_firefight_health_rule_shield_regen);
+	if (rule == _firefight_health_rule_off)
+		return 0;
+	if (rule == _firefight_health_rule_on)
+		return 1;
+	definition = object_definition_get(unit->definition_index);
+	if (unit->object.maximum_shield_vitality > 0.0f && definition &&
+		definition->object.collision_model.index != NONE &&
+		collision_model_definition_get(definition->object.collision_model.index)->resistance.maximum_shield_vitality <= 0.0f)
+	{
+		return 1;
+	}
+	return -1;
+}
+
+/* MAP CONTENT's HEALTH REGEN (the host's): a player's health coming back
+as a shield does, after FIREFIGHT_HEALTH_REGEN_DELAY seconds unhurt, full
+in FIREFIGHT_HEALTH_REGEN_SECONDS */
+#define FIREFIGHT_HEALTH_REGEN_DELAY 5
+#define FIREFIGHT_HEALTH_REGEN_SECONDS 5
+static void firefight_health_regen_update(long player_absolute, struct unit_datum *unit)
+{
+	static real last_body[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
+	static short quiet_ticks[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
+
+	if (player_absolute < 0 || player_absolute >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
+		return;
+	if (TEST_FLAG(unit->object.damage_flags, _object_dead_bit) ||
+		unit->object.body_vitality < last_body[player_absolute] - 0.0001f)
+	{
+		quiet_ticks[player_absolute] = 0;
+	}
+	else if (quiet_ticks[player_absolute] < FIREFIGHT_HEALTH_REGEN_DELAY * TICKS_PER_SECOND)
+		quiet_ticks[player_absolute]++;
+	else if (unit->object.body_vitality < 1.0f && unit->object.body_vitality > 0.0f)
+	{
+		unit->object.body_vitality = MIN(1.0f,
+			unit->object.body_vitality + 1.0f / (real)(FIREFIGHT_HEALTH_REGEN_SECONDS * TICKS_PER_SECOND));
+	}
+	last_body[player_absolute] = unit->object.body_vitality;
 }
 
 static void firefight_apply_tick_player_traits(
@@ -1705,6 +1851,8 @@ static void firefight_apply_tick_player_traits(
 			continue;
 		if (unit->object.owner_team_index != _game_team_player)
 			unit->object.owner_team_index = _game_team_player;
+		if (firefight_health_rule(_firefight_health_rule_health_regen) == _firefight_health_rule_on)
+			firefight_health_regen_update((short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iter.datum_index), unit);
 
 		if (ammo_mode != _firefight_ammo_normal && (game_time_get() % 15) == 0)
 		{
@@ -1770,6 +1918,12 @@ static void firefight_update(
 		ff_state.banner_timer_ticks--;
 	if (ff_state.ordnance_navpoint_ticks > 0)
 		ff_state.ordnance_navpoint_ticks--;
+	/* (every machine's: the pod is each one's own scenery) */
+	firefight_ordnance_pod_update();
+	/* (and the Flood's drop, Keyes' Flood form out of the floor) */
+	firefight_flood_drop_update();
+	/* (the objectives: the host's decided, a client's shown) */
+	firefight_objectives_update();
 
 	if (network_game_distributed_client())
 		return;
@@ -1778,15 +1932,11 @@ static void firefight_update(
 	if (ff_state.session_elapsed_ticks <= 2)
 	{
 		firefight_cleanup_natural_multiplayer_sandbox(ff_state.session_elapsed_ticks == 1);
-		if (ff_state.session_elapsed_ticks == 2 &&
-			ff_state.current_set == 1 &&
-			ff_state.current_round == 1 &&
-			ff_state.deployed_set_vehicle_count == 0)
-		{
-			firefight_spawn_scheduled_round_vehicles(1, FALSE);
-		}
+		if (ff_state.session_elapsed_ticks == 2)
+			firefight_spawn_player_vehicles();
 	}
-	if (ff_state.session_elapsed_ticks == 5 &&
+	/* (the game's first drop a few seconds in, 5 to 10: firefight_ordnance_pod_reset) */
+	if (ff_state.session_elapsed_ticks == MAX(5, ff_state.first_ordnance_tick) &&
 		(ff->ordnance_drops == _firefight_ordnance_per_round ||
 			ff->ordnance_drops == _firefight_ordnance_frequent ||
 			ff->ordnance_drops == _firefight_ordnance_per_set))
@@ -1796,6 +1946,11 @@ static void firefight_update(
 	firefight_update_dropships_and_vehicles();
 	firefight_generators_update();
 	firefight_prune_dead_tracked_enemies();
+	/* (stuck or far-off wave enemies brought to the players) */
+	if (ff_state.phase_state == _ff_phase_wave_active)
+		firefight_relocate_idle_enemies();
+	/* (enemies that chose to drop over an edge after the players, landed) */
+	firefight_drops_update();
 	ff_state.team_score = campaign_score_team_points();
 
 	/* Check wipe / defeat condition */
@@ -1843,6 +1998,7 @@ static void firefight_update(
 
 			ff_state.enemies_total_in_wave = spawned;
 			ff_state.phase_state = _ff_phase_wave_active;
+			firefight_objectives_wave_spawned(ff_state.current_wave);
 		}
 		break;
 
@@ -1889,6 +2045,11 @@ static void firefight_update(
 	case _ff_phase_wave_clear:
 		if (ff_state.phase_timer_ticks <= 0)
 		{
+			/* (the wave cleared: its objective decided; the round's
+			waves: the round's ended) */
+			firefight_objectives_wave_ended();
+			if (ff_state.current_wave >= FIREFIGHT_WAVES_PER_ROUND)
+				firefight_objectives_round_ended();
 			if (ff_state.current_wave < FIREFIGHT_WAVES_PER_ROUND)
 			{
 				firefight_begin_wave((short)(ff_state.current_wave + 1));
@@ -1900,8 +2061,7 @@ static void firefight_update(
 			}
 			else if (ff->bonus_round_enabled && !ff_state.in_bonus_round)
 			{
-				/* Enter 60-second Bonus Round (despawn Round 5 vehicle first, ejecting passengers) */
-				firefight_despawn_round_vehicles();
+				/* Enter 60-second Bonus Round (the players keep their vehicles) */
 				ff_state.in_bonus_round = TRUE;
 				ff_state.phase_state = _ff_phase_bonus_round;
 				{
@@ -1919,9 +2079,8 @@ static void firefight_update(
 				ff_state.in_bonus_round = FALSE;
 				ff_state.phase_state = _ff_phase_set_complete;
 				ff_state.phase_timer_ticks = 5 * TICKS_PER_SECOND;
-				firefight_despawn_round_vehicles();
-				firefight_despawn_set_vehicles();
 				firefight_add_shared_lives(ff->bonus_lives_per_set);
+				firefight_objectives_round_ended();
 				skulls_unlock_next_by_milestone("Firefight set completed");
 				firefight_announce_banner(_ff_banner_set_complete, ff_state.current_set, 4 * TICKS_PER_SECOND);
 			}
@@ -1934,11 +2093,13 @@ static void firefight_update(
 		if (ff_state.phase_timer_ticks <= 0)
 		{
 			ff_state.in_bonus_round = FALSE;
+			/* (its enemies left: teleported out, not killed) */
+			firefight_teleport_out_tracked_enemies();
 			firefight_recalculate_skulls_and_multiplier();
 			ff_state.phase_state = _ff_phase_set_complete;
 			ff_state.phase_timer_ticks = 5 * TICKS_PER_SECOND;
-			firefight_despawn_set_vehicles();
 			firefight_add_shared_lives(ff->bonus_lives_per_set);
+			firefight_objectives_round_ended();
 			skulls_unlock_next_by_milestone("Firefight set completed");
 			firefight_announce_banner(_ff_banner_set_complete, ff_state.current_set, 4 * TICKS_PER_SECOND);
 		}
@@ -2012,8 +2173,8 @@ static boolean firefight_allow_pick_up(
 	long weapon_index)
 {
 	(void)unit_index;
-	(void)weapon_index;
-	return TRUE;
+	/* (an objective's skulls and planted bomb: firefight_objectives.c) */
+	return !firefight_objectives_pickup_blocked(weapon_index);
 }
 
 static void firefight_player_damaged_player(
